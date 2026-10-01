@@ -1,0 +1,12 @@
+{
+  "name": "ViralHub - Social Video & Live Streaming Platform",
+  "description": "ViralHub is a high-energy social video sharing and live streaming platform featuring interactive video feeds, live host broadcasting studio, audio library, direct messaging, and community reporting.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
