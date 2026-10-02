@@ -60,8 +60,28 @@ export const toUuid = (input?: string | null): string => {
 // Configuration & Client Initialization
 // =========================================================================
 export const getSupabaseConfig = (): SupabaseConfig => {
-  const envUrl = ((import.meta as any).env?.VITE_SUPABASE_URL || '').trim();
-  const envAnonKey = ((import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '').trim();
+  const metaEnv = ((import.meta as any).env) || {};
+  const procEnv = (typeof process !== 'undefined' && process.env) ? process.env : {};
+
+  const envUrl = (
+    metaEnv.VITE_SUPABASE_URL ||
+    metaEnv.SUPABASE_URL ||
+    procEnv.VITE_SUPABASE_URL ||
+    procEnv.SUPABASE_URL ||
+    metaEnv.NEXT_PUBLIC_SUPABASE_URL ||
+    procEnv.NEXT_PUBLIC_SUPABASE_URL ||
+    ''
+  ).trim();
+
+  const envAnonKey = (
+    metaEnv.VITE_SUPABASE_ANON_KEY ||
+    metaEnv.SUPABASE_ANON_KEY ||
+    procEnv.VITE_SUPABASE_ANON_KEY ||
+    procEnv.SUPABASE_ANON_KEY ||
+    metaEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    procEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    ''
+  ).trim();
 
   const customUrl = (localStorage.getItem('viralhub_supabase_url') || '').trim();
   const customKey = (localStorage.getItem('viralhub_supabase_anon_key') || '').trim();
@@ -300,28 +320,44 @@ export const supabaseDb = {
     if (!client) return null;
 
     try {
-      const { data, error } = await client
+      let data: any[] | null = null;
+      let error: any = null;
+
+      const res1 = await client
         .from('User')
         .select('*')
         .order('RegistrationDate', { ascending: false });
 
-      if (error) {
-        console.warn('Supabase fetchUsers error:', error.message);
+      if (!res1.error && res1.data) {
+        data = res1.data;
+      } else {
+        const res2 = await client
+          .from('users')
+          .select('*');
+        if (!res2.error && res2.data) {
+          data = res2.data;
+        } else {
+          error = res1.error || res2.error;
+        }
+      }
+
+      if (error && !data) {
+        console.warn('Supabase fetchUsers warning:', error.message);
         return null;
       }
 
       return (data || []).map((row: any) => ({
-        id: row.UserID,
-        username: row.Username || `user_${row.UserID?.slice(0, 6)}`,
-        displayName: row.DisplayName || row.Username || 'User',
-        email: row.Email || '',
-        avatar: row.ProfilePictureURL || '',
-        bio: row.Bio || '',
+        id: row.UserID || row.id || row.user_id,
+        username: row.Username || row.username || `user_${(row.UserID || row.id || '').slice(0, 6)}`,
+        displayName: row.DisplayName || row.display_name || row.full_name || row.Username || row.username || 'User',
+        email: row.Email || row.email || '',
+        avatar: row.ProfilePictureURL || row.avatar_url || row.avatar || '',
+        bio: row.Bio || row.bio || '',
         followingCount: 0,
         followersCount: 0,
         likesCount: '0',
-        isPrivate: false,
-        role: 'creator',
+        isPrivate: row.IsPublic !== undefined ? !row.IsPublic : (row.is_public !== undefined ? !row.is_public : Boolean(row.isPrivate || row.is_private)),
+        role: (row.Role || row.role || 'creator') as any,
       }));
     } catch (e) {
       console.warn('Supabase fetchUsers fallback:', e);
@@ -329,38 +365,67 @@ export const supabaseDb = {
     }
   },
 
-  async upsertUser(user: User, password?: string): Promise<boolean> {
+  async upsertUser(user: User, password?: string): Promise<{ success: boolean; error?: string }> {
     const client = getSupabaseClient();
-    if (!client) return false;
+    if (!client) return { success: false, error: 'Supabase client not initialized' };
 
     try {
       const userId = toUuid(user.id);
       const cleanUsername = (user.username || `user_${userId.slice(0, 6)}`)
         .replace(/[^a-zA-Z0-9._]/g, '')
         .toLowerCase();
+      const isPublic = user.isPrivate !== undefined ? !user.isPrivate : true;
 
-      const { error } = await client.from('User').upsert(
-        {
-          UserID: userId,
-          Username: cleanUsername,
-          Email: user.email || `${cleanUsername}@viralhub.app`,
-          Password: password || 'user_encrypted_secret',
-          RegistrationDate: new Date().toISOString(),
-          DisplayName: user.displayName || user.username || 'User',
-          Bio: user.bio || '',
-          ProfilePictureURL: user.avatar || '',
-        },
-        { onConflict: 'UserID' }
-      );
+      // 1. Try PascalCase table 'User' with IsPublic column (satisfies not-null constraint)
+      const payloadPascal: Record<string, any> = {
+        UserID: userId,
+        Username: cleanUsername,
+        Email: user.email || `${cleanUsername}@viralhub.app`,
+        Password: password || 'user_encrypted_secret',
+        RegistrationDate: new Date().toISOString(),
+        DisplayName: user.displayName || user.username || 'User',
+        Bio: user.bio || '',
+        ProfilePictureURL: user.avatar || '',
+        IsPublic: isPublic,
+      };
+
+      let { error } = await client.from('User').upsert(payloadPascal, { onConflict: 'UserID' });
+
+      // If 'IsPublic' column does not exist (code 42703), retry without IsPublic
+      if (error && (error.code === '42703' || error.message?.includes('IsPublic') || error.message?.includes('column'))) {
+        const { IsPublic: _, ...withoutIsPublic } = payloadPascal;
+        const retryPascal = await client.from('User').upsert(withoutIsPublic, { onConflict: 'UserID' });
+        error = retryPascal.error;
+      }
+
+      // If 'User' table doesn't exist, try 'users' table (snake_case)
+      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        const payloadSnake: Record<string, any> = {
+          id: userId,
+          username: cleanUsername,
+          email: user.email || `${cleanUsername}@viralhub.app`,
+          display_name: user.displayName || user.username || 'User',
+          bio: user.bio || '',
+          avatar_url: user.avatar || '',
+          is_public: isPublic,
+          created_at: new Date().toISOString(),
+        };
+        let resSnake = await client.from('users').upsert(payloadSnake, { onConflict: 'id' });
+        if (resSnake.error && (resSnake.error.code === '42703' || resSnake.error.message?.includes('is_public') || resSnake.error.message?.includes('column'))) {
+          const { is_public: _, ...payloadSnakeWithoutPublic } = payloadSnake;
+          resSnake = await client.from('users').upsert(payloadSnakeWithoutPublic, { onConflict: 'id' });
+        }
+        error = resSnake.error;
+      }
 
       if (error) {
-        console.warn('Supabase upsertUser error:', error.message);
-        return false;
+        console.error('Supabase upsertUser error:', error.message || error);
+        return { success: false, error: error.message };
       }
-      return true;
-    } catch (e) {
-      console.warn('Supabase upsertUser fallback:', e);
-      return false;
+      return { success: true };
+    } catch (e: any) {
+      console.error('Supabase upsertUser exception:', e);
+      return { success: false, error: e?.message || 'Database write failed' };
     }
   },
 
@@ -590,6 +655,50 @@ export const supabaseDb = {
     }
   },
 
+  async uploadVideoFile(file: File): Promise<{ url: string | null; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { url: null, error: 'Supabase client is not connected' };
+
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'mp4';
+      const cleanFileName = `video_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
+      const filePath = `uploads/${cleanFileName}`;
+
+      // Try primary bucket 'videos'
+      let targetBucket = 'videos';
+      let uploadRes = await client.storage.from(targetBucket).upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: true,
+      });
+
+      // Fallback bucket options if 'videos' bucket does not exist yet
+      if (uploadRes.error && (uploadRes.error.message?.includes('not found') || uploadRes.error.message?.includes('Bucket') || (uploadRes.error as any).statusCode === '404')) {
+        targetBucket = 'media';
+        const retry1 = await client.storage.from(targetBucket).upload(filePath, file, { cacheControl: '3600', upsert: true });
+        if (!retry1.error) {
+          uploadRes = retry1;
+        } else {
+          targetBucket = 'public';
+          const retry2 = await client.storage.from(targetBucket).upload(filePath, file, { cacheControl: '3600', upsert: true });
+          if (!retry2.error) {
+            uploadRes = retry2;
+          }
+        }
+      }
+
+      if (uploadRes.error) {
+        console.warn('Supabase storage upload error:', uploadRes.error.message);
+        return { url: null, error: uploadRes.error.message };
+      }
+
+      const { data } = client.storage.from(targetBucket).getPublicUrl(filePath);
+      return { url: data?.publicUrl || null };
+    } catch (e: any) {
+      console.warn('Supabase uploadVideoFile exception:', e);
+      return { url: null, error: e?.message || 'Storage upload failed' };
+    }
+  },
+
   async deleteVideo(videoId: string): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;
@@ -633,16 +742,44 @@ export const supabaseDb = {
       }
 
       // Update VideoStats counter if table exists
-      const { count } = await client
-        .from('Like')
-        .select('*', { count: 'exact', head: true })
-        .eq('VideoID', vUuid);
+      try {
+        const { count } = await client
+          .from('Like')
+          .select('*', { count: 'exact', head: true })
+          .eq('VideoID', vUuid);
 
-      if (typeof count === 'number') {
-        await client.from('VideoStats').upsert({ VideoID: vUuid, LikeCount: count });
+        if (typeof count === 'number') {
+          await client.from('VideoStats').upsert({ VideoID: vUuid, LikeCount: count });
+        }
+      } catch {
+        // ignore
       }
     } catch (e) {
       console.warn('Supabase toggleVideoLike fallback:', e);
+    }
+  },
+
+  async fetchUserLikes(userId: string): Promise<string[]> {
+    const client = getSupabaseClient();
+    if (!client || !userId) return [];
+
+    try {
+      const uUuid = toUuid(userId);
+      // Try PascalCase table 'Like'
+      const { data, error } = await client.from('Like').select('VideoID').eq('UserID', uUuid);
+      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        const retry = await client.from('likes').select('video_id').eq('user_id', uUuid);
+        if (retry.data) {
+          return retry.data.map((r: any) => r.video_id).filter(Boolean);
+        }
+      }
+      if (data) {
+        return data.map((r: any) => r.VideoID || r.video_id).filter(Boolean);
+      }
+      return [];
+    } catch (e) {
+      console.warn('Supabase fetchUserLikes fallback:', e);
+      return [];
     }
   },
 
@@ -1125,6 +1262,54 @@ export const supabaseDb = {
     }
   },
 
+  async checkIsAdmin(user?: User | null): Promise<boolean> {
+    if (!user) return false;
+    if (user.role === 'admin') return true;
+
+    const client = getSupabaseClient();
+    if (!client) return false;
+
+    try {
+      const userUuid = toUuid(user.id);
+      // Query Admin table
+      const { data, error } = await client
+        .from('Admin')
+        .select('*')
+        .or(`UserID.eq.${userUuid},Email.ilike.${user.email || 'none'},Username.ilike.${user.username || 'none'}`)
+        .limit(1);
+
+      if (!error && data && data.length > 0) {
+        return true;
+      }
+
+      // Also try lowercase table 'admins'
+      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        const retry = await client
+          .from('admins')
+          .select('*')
+          .or(`user_id.eq.${userUuid},email.ilike.${user.email || 'none'},username.ilike.${user.username || 'none'}`)
+          .limit(1);
+        if (retry.data && retry.data.length > 0) {
+          return true;
+        }
+      }
+
+      // Also check if User table has Role = 'admin'
+      const { data: userRow } = await client
+        .from('User')
+        .select('Role, role')
+        .eq('UserID', userUuid)
+        .maybeSingle();
+
+      if (userRow && (userRow.Role?.toLowerCase() === 'admin' || userRow.role?.toLowerCase() === 'admin')) {
+        return true;
+      }
+    } catch (e) {
+      console.warn('Check admin query fallback:', e);
+    }
+    return false;
+  },
+
   // -----------------------------------------------------------------------
   // 12. System Stats & Direct Table Inspector (Live counts from Supabase)
   // -----------------------------------------------------------------------
@@ -1251,7 +1436,9 @@ CREATE TABLE IF NOT EXISTS public."Admin" (
   "LastLogin" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
 
--- 2. VIDEO MODERATION SUPPORT (Ensures Status & RejectionReason columns exist on Video)
+-- 2. USER & VIDEO SCHEMA COMPATIBILITY (Ensures IsPublic on User and Status on Video)
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "IsPublic" BOOLEAN DEFAULT true;
+ALTER TABLE IF EXISTS public."User" ALTER COLUMN "IsPublic" SET DEFAULT true;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "Status" TEXT DEFAULT 'pending';
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "RejectionReason" TEXT;
 
@@ -1344,5 +1531,18 @@ BEGIN
   -- Admin
   DROP POLICY IF EXISTS "Public all access on Admin" ON public."Admin";
   CREATE POLICY "Public all access on Admin" ON public."Admin" FOR ALL USING (true) WITH CHECK (true);
+END $$;
+
+-- 5. STORAGE BUCKET FOR VIDEOS (Public access so videos stream on any device)
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('videos', 'videos', true)
+ON CONFLICT (id) DO NOTHING;
+
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'storage' AND tablename = 'objects') THEN
+    DROP POLICY IF EXISTS "Public Videos Access" ON storage.objects;
+    CREATE POLICY "Public Videos Access" ON storage.objects FOR ALL USING (bucket_id = 'videos') WITH CHECK (bucket_id = 'videos');
+  END IF;
 END $$;
 `;

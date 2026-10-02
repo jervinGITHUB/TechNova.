@@ -33,6 +33,7 @@ import {
   Sliders,
   Sparkles,
   Clock,
+  LogOut,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -52,6 +53,7 @@ export const AdminDashboardView: React.FC = () => {
     syncAllToSupabase,
     setSupabaseModalOpen,
     navigateToUserProfile,
+    logout,
   } = useApp();
 
   const [activeAdminTab, setActiveAdminTab] = useState<
@@ -292,6 +294,16 @@ export const AdminDashboardView: React.FC = () => {
           >
             {copiedSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
             <span>{copiedSql ? 'Copied SQL!' : 'Copy SQL Schema'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={logout}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-semibold transition-colors cursor-pointer"
+            title="Log out of Administrator Session"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Log Out</span>
           </button>
         </div>
       </div>

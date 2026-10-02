@@ -18,8 +18,8 @@ import { ReportModals } from './components/modals/ReportModals';
 import { ReportHistoryView } from './components/modals/ReportHistoryView';
 import { AudioLibraryModal } from './components/modals/AudioLibraryModal';
 import { SupabaseVercelModal } from './components/modals/SupabaseVercelModal';
+import { SwitchAccountModal } from './components/modals/SwitchAccountModal';
 import { AdminDashboardView } from './components/admin/AdminDashboardView';
-import { AdminLoginGate } from './components/admin/AdminLoginGate';
 import { X } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -30,12 +30,34 @@ const AppContent: React.FC = () => {
     setSupabaseModalOpen,
     syncWithSupabase,
     isAdmin,
+    switchAccountModalOpen,
+    setSwitchAccountModalOpen,
   } = useApp();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  // If user is not authenticated, show Auth Page first (matching user requirement)
+  // If user is not authenticated, show Auth Page first
   if (!currentUser) {
     return <AuthPage />;
+  }
+
+  // If logged-in user is an administrator (queried from Supabase), they ONLY have the Admin Dashboard
+  if (isAdmin) {
+    return (
+      <div className="h-screen w-screen overflow-hidden bg-[#0c0c10] text-white flex flex-col antialiased selection:bg-[#ff007a] selection:text-white">
+        <div className="flex-1 h-full overflow-y-auto">
+          <AdminDashboardView />
+        </div>
+        <SupabaseVercelModal
+          isOpen={supabaseModalOpen}
+          onClose={() => setSupabaseModalOpen(false)}
+          onConnected={syncWithSupabase}
+        />
+        <SwitchAccountModal
+          isOpen={switchAccountModalOpen}
+          onClose={() => setSwitchAccountModalOpen(false)}
+        />
+      </div>
+    );
   }
 
   const renderActiveTabContent = () => {
@@ -96,15 +118,6 @@ const AppContent: React.FC = () => {
             <ReportHistoryView />
           </div>
         );
-      case 'admin':
-        if (!isAdmin) {
-          return <AdminLoginGate />;
-        }
-        return (
-          <div className="flex-1 h-full overflow-y-auto">
-            <AdminDashboardView />
-          </div>
-        );
       default:
         return <HomeFeed />;
     }
@@ -151,6 +164,10 @@ const AppContent: React.FC = () => {
       <CommentsDrawer />
       <ReportModals />
       <AudioLibraryModal />
+      <SwitchAccountModal
+        isOpen={switchAccountModalOpen}
+        onClose={() => setSwitchAccountModalOpen(false)}
+      />
       <SupabaseVercelModal
         isOpen={supabaseModalOpen}
         onClose={() => setSupabaseModalOpen(false)}

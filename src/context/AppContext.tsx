@@ -189,13 +189,18 @@ interface AppContextType {
   deleteVideoAdmin: (videoId: string) => Promise<boolean>;
   approveVideoAdmin: (videoId: string) => Promise<boolean>;
   rejectVideoAdmin: (videoId: string, reason?: string) => Promise<boolean>;
-  elevateToAdmin: (passcode: string) => boolean;
   updateReportStatusAdmin: (
     reportId: string,
     type: 'video' | 'user',
     status: 'Approved' | 'Rejected' | 'Under Review'
   ) => Promise<boolean>;
   syncAllToSupabase: () => Promise<{ success: boolean; message: string }>;
+
+  // Per-User Interactions & Account Switch
+  switchAccountModalOpen: boolean;
+  setSwitchAccountModalOpen: (open: boolean) => void;
+  userLikes: Record<string, string[]>;
+  getUserLikedVideos: (userId: string) => Video[];
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -255,6 +260,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [admins, setAdmins] = useState<AdminRecord[]>(() => storage.get('admins', []));
   const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream>(() => storage.get('livestream', INITIAL_LIVESTREAM));
 
+  // Per-User Likes storage map: { [userId: string]: string[] (videoIds) }
+  const [userLikes, setUserLikes] = useState<Record<string, string[]>>(() =>
+    storage.get<Record<string, string[]>>('user_likes_map', {})
+  );
+
+  // Account switcher modal
+  const [switchAccountModalOpen, setSwitchAccountModalOpen] = useState<boolean>(false);
+
+  // Dynamic admin state (queried from Supabase Admin table or role)
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+
   // Modals
   const [commentsVideoId, setCommentsVideoId] = useState<string | null>(null);
   const [reportModal, setReportModal] = useState<ReportModalConfig | null>(null);
@@ -263,6 +279,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [supabaseModalOpen, setSupabaseModalOpen] = useState<boolean>(false);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(() => getSupabaseConfig().isConnected);
+
+  // Verify whether the logged in user is an Administrator directly from Supabase / role
+  useEffect(() => {
+    let isCancelled = false;
+    const verifyAdminStatus = async () => {
+      if (!currentUser) {
+        setIsAdmin(false);
+        return;
+      }
+      if (currentUser.role === 'admin') {
+        setIsAdmin(true);
+        return;
+      }
+      // Check cached admins list
+      const matchedLocal = admins.some(
+        a =>
+          (a.userId && (a.userId === currentUser.id)) ||
+          (a.email && currentUser.email && a.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+          (a.username && currentUser.username && a.username.toLowerCase() === currentUser.username.toLowerCase())
+      );
+      if (matchedLocal) {
+        setIsAdmin(true);
+        return;
+      }
+      // Query Supabase directly
+      try {
+        const remoteIsAdmin = await supabaseDb.checkIsAdmin(currentUser);
+        if (!isCancelled) {
+          setIsAdmin(remoteIsAdmin);
+        }
+      } catch {
+        if (!isCancelled) setIsAdmin(false);
+      }
+    };
+    verifyAdminStatus();
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentUser, admins]);
+
+  // Load current user's liked videos from Supabase on login / account switch
+  useEffect(() => {
+    if (!currentUser) return;
+    supabaseDb.fetchUserLikes(currentUser.id).then(likes => {
+      if (likes && likes.length > 0) {
+        setUserLikes(prev => {
+          const currentList = prev[currentUser.id] || [];
+          const combined = Array.from(new Set([...currentList, ...likes]));
+          const next = { ...prev, [currentUser.id]: combined };
+          storage.set('user_likes_map', next);
+          return next;
+        });
+      }
+    });
+  }, [currentUser]);
+
+  // Dynamically compute `isLiked` per video strictly for the active currentUser!
+  const currentUserLikes = (currentUser && userLikes[currentUser.id]) || [];
+  const currentUserLikedSet = React.useMemo(() => new Set(currentUserLikes), [currentUserLikes]);
+
+  const activeVideos = React.useMemo(() => {
+    return videos.map(v => ({
+      ...v,
+      isLiked: currentUserLikedSet.has(v.id),
+    }));
+  }, [videos, currentUserLikedSet]);
+
+  const getUserLikedVideos = (userId: string): Video[] => {
+    const targetLikes = new Set(userLikes[userId] || []);
+    return activeVideos.filter(v => targetLikes.has(v.id));
+  };
 
   // Sync state with cloud Supabase database when connected
   const syncWithSupabase = async () => {
@@ -477,72 +564,119 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!trimmed) {
       return { success: false, message: 'Please enter your username or email' };
     }
+    if (!password || !password.trim()) {
+      return { success: false, message: 'Please enter your password' };
+    }
 
     const isEmail = trimmed.includes('@');
     const config = getSupabaseConfig();
 
-    if (config.isConnected && password) {
-      if (isEmail) {
-        const { user, error } = await signInWithEmail(trimmed, password);
-        if (error) {
-          return { success: false, message: error.message };
-        }
-        if (user) {
-          await handleSupabaseUserSession(user);
-          return { success: true };
-        }
-      } else {
-        // User entered username, look up their email in records
+    // 1. If Supabase is connected, authenticate against Supabase (Supabase Auth & User table)
+    if (config.isConnected) {
+      let targetEmail = isEmail ? trimmed.toLowerCase() : '';
+
+      // If user provided a username, find their email from Supabase
+      if (!targetEmail) {
         const found = users.find(u => u.username.toLowerCase() === trimmed.toLowerCase());
-        if (found && found.email) {
-          const { user, error } = await signInWithEmail(found.email, password);
-          if (error) {
-            return { success: false, message: error.message };
-          }
-          if (user) {
-            await handleSupabaseUserSession(user);
-            return { success: true };
+        if (found?.email) {
+          targetEmail = found.email.toLowerCase();
+        } else {
+          const client = getSupabaseClient();
+          if (client) {
+            try {
+              const { data: dbUser } = await client
+                .from('User')
+                .select('Email')
+                .ilike('Username', trimmed)
+                .limit(1)
+                .maybeSingle();
+              if (dbUser?.Email) {
+                targetEmail = dbUser.Email.toLowerCase();
+              }
+            } catch {}
           }
         }
       }
+
+      // A. Try Supabase Auth email + password sign in
+      if (targetEmail) {
+        const { user, error } = await signInWithEmail(targetEmail, password);
+        if (user && !error) {
+          await handleSupabaseUserSession(user);
+          return { success: true };
+        }
+      }
+
+      // B. Check Supabase User table records
+      const client = getSupabaseClient();
+      if (client) {
+        try {
+          const { data: matchedRows } = await client
+            .from('User')
+            .select('*')
+            .or(`Email.ilike.${trimmed},Username.ilike.${trimmed}`)
+            .limit(1);
+
+          if (matchedRows && matchedRows.length > 0) {
+            const dbUser = matchedRows[0];
+            // Check password if stored in User table
+            if (dbUser.Password && dbUser.Password !== password) {
+              return { success: false, message: 'Incorrect password. Please try again.' };
+            }
+
+            const loggedInUser: User = {
+              id: dbUser.UserID || dbUser.id,
+              username: dbUser.Username || dbUser.username,
+              displayName: dbUser.DisplayName || dbUser.display_name || dbUser.Username,
+              email: dbUser.Email || dbUser.email || '',
+              avatar: dbUser.ProfilePictureURL || dbUser.avatar_url || '',
+              bio: dbUser.Bio || dbUser.bio || '',
+              followingCount: 0,
+              followersCount: 0,
+              likesCount: '0',
+              isPrivate: dbUser.IsPublic !== undefined ? !dbUser.IsPublic : false,
+              role: (dbUser.Role || 'creator') as any,
+            };
+
+            setCurrentUser(loggedInUser);
+            storage.set('currentUser', loggedInUser);
+            setActiveConversationId(null);
+            setMessagesMobileView('list');
+            setSelectedUserId(null);
+            return { success: true };
+          }
+        } catch (e) {
+          console.warn('Supabase User table login check fallback:', e);
+        }
+      }
+
+      // Unrecognized credentials in Supabase
+      return {
+        success: false,
+        message: 'Account not found. Please register first or verify your credentials in Supabase.',
+      };
     }
 
-    // Local / offline fallback
+    // 2. Local fallback when Supabase is not connected
     const clean = trimmed.toLowerCase().replace('@', '');
     const found = users.find(
-      u => u.username.toLowerCase() === clean || u.email.toLowerCase() === clean
+      u => u.username.toLowerCase() === clean || u.email.toLowerCase() === trimmed.toLowerCase()
     );
+
     if (found) {
       setCurrentUser(found);
       storage.set('currentUser', found);
       setActiveConversationId(null);
       setMessagesMobileView('list');
       setSelectedUserId(null);
-      supabaseDb.upsertUser(found);
       return { success: true };
     }
 
-    const newUser: User = {
-      id: `user_${Date.now()}`,
-      username: clean,
-      displayName: clean,
-      email: isEmail ? trimmed : `${clean}@viralhub.app`,
-      avatar: '',
-      bio: '',
-      followingCount: 0,
-      followersCount: 0,
-      likesCount: '0',
-      isPrivate: false,
-      role: 'creator',
+    // STRICT: Do NOT auto-create a user on invalid login credentials!
+    return {
+      success: false,
+      message: 'Account not found. Please register for an account first.',
     };
-    setUsers(prev => [newUser, ...prev]);
-    setCurrentUser(newUser);
-    storage.set('currentUser', newUser);
-    setActiveConversationId(null);
-    setMessagesMobileView('list');
-    setSelectedUserId(null);
-    supabaseDb.upsertUser(newUser);
-    return { success: true };
   };
 
   const register = async (
@@ -560,24 +694,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, message: error.message };
       }
       if (user) {
+        const newUser: User = {
+          id: user.id,
+          username: clean,
+          displayName: username.trim(),
+          email: cleanEmail,
+          avatar: '',
+          bio: '',
+          followingCount: 0,
+          followersCount: 0,
+          likesCount: '0',
+          isPrivate: false,
+          role: 'creator',
+        };
+        const upsertRes = await supabaseDb.upsertUser(newUser, password);
+        if (!upsertRes.success && upsertRes.error) {
+          console.warn('Supabase upsertUser during register warning:', upsertRes.error);
+        }
+        setUsers(prev => {
+          const map = new Map(prev.map(u => [u.id, u]));
+          map.set(newUser.id, newUser);
+          return Array.from(map.values());
+        });
+        setCurrentUser(newUser);
+        storage.set('currentUser', newUser);
+        setActiveConversationId(null);
+        setMessagesMobileView('list');
+        setSelectedUserId(null);
+
         if (!session) {
-          const pendingUser: User = {
-            id: user.id,
-            username: clean,
-            displayName: username.trim(),
-            email: cleanEmail,
-            avatar: '',
-            bio: '',
-            followingCount: 0,
-            followersCount: 0,
-            likesCount: '0',
-            isPrivate: false,
-            role: 'creator',
-          };
-          await supabaseDb.upsertUser(pendingUser);
           return {
             success: true,
-            message: 'Account created! Please check your email to verify your address, or sign in.',
+            message: 'Account created and saved to your Supabase tables! You can start using ViralHub immediately.',
           };
         }
         await handleSupabaseUserSession(user);
@@ -605,7 +753,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setSelectedUserId(null);
-    supabaseDb.upsertUser(newUser);
+    await supabaseDb.upsertUser(newUser, password);
     return { success: true };
   };
 
@@ -626,18 +774,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = async () => {
-    await signOutSupabase();
+    try {
+      await signOutSupabase();
+    } catch {
+      // ignore
+    }
     setCurrentUser(null);
     storage.remove('currentUser');
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setSelectedUserId(null);
     setAuthView('login');
+    setIsAdmin(false);
   };
 
   const quickLoginAs = (userId: string) => {
     const target = users.find(u => u.id === userId) || DEFAULT_USER;
     setCurrentUser(target);
+    storage.set('currentUser', target);
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setSelectedUserId(null);
@@ -946,26 +1100,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return getFollowStatus(targetUserId) === 'friends';
   };
 
-  // Like video (BR-014, BR-022, BR-024)
+  // Like video (BR-014, BR-022, BR-024) - Strictly scoped per user!
   const toggleLikeVideo = (videoId: string) => {
     if (!currentUser) return;
     const video = videos.find(v => v.id === videoId);
     if (!video) return;
 
-    const willLike = !video.isLiked;
+    const currentlyLiked = currentUserLikedSet.has(videoId);
+    const willLike = !currentlyLiked;
 
-    // 1. Update video likesCount and isLiked
+    // 1. Update user's personal likes map (stores only this user's liked video IDs)
+    setUserLikes(prev => {
+      const list = prev[currentUser.id] || [];
+      const updatedList = willLike
+        ? Array.from(new Set([...list, videoId]))
+        : list.filter(id => id !== videoId);
+      const next = { ...prev, [currentUser.id]: updatedList };
+      storage.set('user_likes_map', next);
+      return next;
+    });
+
+    // 2. Update aggregate video likesCount without mutating isLiked on the base video record
     setVideos(prev =>
       prev.map(v => {
         if (v.id === videoId) {
           const newLikes = willLike ? v.likesCount + 1 : Math.max(0, v.likesCount - 1);
-          return { ...v, isLiked: willLike, likesCount: newLikes };
+          return { ...v, likesCount: newLikes };
         }
         return v;
       })
     );
 
-    // 2. Connect directly to creator's profile total likesCount!
+    // 3. Connect directly to creator's profile total likesCount!
     setUsers(prev =>
       prev.map(u => {
         if (u.id === video.creatorId) {
@@ -987,7 +1153,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     }
 
-    // 3. Send notification ONLY to the VIDEO CREATOR (if not currentUser)
+    // 4. Send notification ONLY to the VIDEO CREATOR (if not currentUser)
     if (willLike && video.creatorId !== currentUser.id) {
       const newNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
@@ -1181,7 +1347,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isLiked: false,
       createdAt: 'Just now',
       reportsCount: 0,
-      status: 'pending',
+      status: 'approved',
     };
     setVideos(prev => [created, ...prev]);
     supabaseDb.insertVideo(created);
@@ -1526,39 +1692,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  const isAdmin = Boolean(
-    currentUser &&
-      (currentUser.role === 'admin' ||
-        admins.some(
-          a =>
-            (a.userId && a.userId === currentUser.id) ||
-            (a.email && currentUser.email && a.email.toLowerCase() === currentUser.email.toLowerCase()) ||
-            (a.username && currentUser.username && a.username.toLowerCase() === currentUser.username.toLowerCase())
-        ))
-  );
-
-  const elevateToAdmin = (passcode: string): boolean => {
-    const clean = passcode.trim();
-    if (clean === 'admin123' || clean === 'admin' || clean === 'technova2026' || clean === 'viralhub2026') {
-      if (currentUser) {
-        const updated = { ...currentUser, role: 'admin' as const };
-        setCurrentUser(updated);
-        storage.set('currentUser', updated);
-        setUsers(prev => prev.map(u => (u.id === currentUser.id ? updated : u)));
-        supabaseDb.upsertUser(updated);
-        addAdmin({
-          userId: currentUser.id,
-          username: currentUser.username,
-          email: currentUser.email,
-          role: 'Super Admin',
-          permissions: ['manage_users', 'manage_videos', 'manage_reports', 'manage_admins'],
-        });
-      }
-      return true;
-    }
-    return false;
-  };
-
   const approveVideoAdmin = async (videoId: string): Promise<boolean> => {
     setVideos(prev =>
       prev.map(v => (v.id === videoId ? { ...v, status: 'approved' as const } : v))
@@ -1668,7 +1801,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         selectedUserId,
         navigateToUserProfile,
         users,
-        videos,
+        videos: activeVideos,
         audioTracks,
         conversations,
         activeConversationId,
@@ -1733,9 +1866,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteVideoAdmin,
         approveVideoAdmin,
         rejectVideoAdmin,
-        elevateToAdmin,
         updateReportStatusAdmin,
         syncAllToSupabase,
+        switchAccountModalOpen,
+        setSwitchAccountModalOpen,
+        userLikes,
+        getUserLikedVideos,
       }}
     >
       {children}

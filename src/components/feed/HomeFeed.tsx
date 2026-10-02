@@ -45,11 +45,54 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   } = useApp();
 
   const [isPlaying, setIsPlaying] = useState(true);
+  const [showFeedbackIcon, setShowFeedbackIcon] = useState(false);
+  const [videoSrc, setVideoSrc] = useState(video.mediaUrl);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    setVideoSrc(video.mediaUrl);
+  }, [video.mediaUrl]);
+
+  const isVideoUrl = Boolean(
+    videoSrc && (
+      videoSrc.includes('.mp4') ||
+      videoSrc.includes('.webm') ||
+      videoSrc.includes('.mov') ||
+      videoSrc.includes('/videos/') ||
+      videoSrc.includes('/storage/v1/object/public/') ||
+      videoSrc.startsWith('blob:') ||
+      videoSrc.startsWith('data:video/') ||
+      videoSrc.startsWith('http')
+    )
+  );
 
   // Automatically count view when video card mounts in home feed
   useEffect(() => {
     recordVideoView(video.id);
   }, [video.id]);
+
+  // Sync isPlaying state with the actual video DOM element
+  useEffect(() => {
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.play().catch(() => {});
+      } else {
+        videoRef.current.pause();
+      }
+    }
+  }, [isPlaying]);
+
+  const togglePlayPause = (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    setIsPlaying(prev => {
+      const nextState = !prev;
+      setShowFeedbackIcon(true);
+      setTimeout(() => setShowFeedbackIcon(false), 900);
+      return nextState;
+    });
+  };
 
   const formatCount = (count: number) => {
     if (count >= 1000000) return (count / 1000000).toFixed(1) + 'M';
@@ -58,21 +101,30 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   };
 
   return (
-    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100vh-6rem)] bg-[#101017] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative group select-none shrink-0 mb-6 flex flex-col justify-between">
+    <div
+      onClick={() => togglePlayPause()}
+      className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100vh-6rem)] bg-[#101017] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative group select-none shrink-0 mb-6 flex flex-col justify-between cursor-pointer"
+    >
       {/* Background Video Media / Canvas */}
-      {video.mediaUrl ? (
-        video.mediaUrl.endsWith('.mp4') || video.mediaUrl.endsWith('.webm') || video.mediaUrl.startsWith('blob:') ? (
+      {videoSrc ? (
+        isVideoUrl ? (
           <video
-            src={video.mediaUrl}
-            autoPlay={isPlaying}
+            ref={videoRef}
+            src={videoSrc}
+            autoPlay
             loop
             muted={isMuted}
             playsInline
+            onError={() => {
+              if (videoSrc !== 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4') {
+                setVideoSrc('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
+              }
+            }}
             className="w-full h-full object-cover"
           />
         ) : (
           <img
-            src={video.mediaUrl}
+            src={videoSrc}
             alt={video.caption}
             className="w-full h-full object-cover transition-transform duration-500"
           />
@@ -87,6 +139,19 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       {/* Dark Overlay Scrim for text readability */}
       <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/85 pointer-events-none" />
 
+      {/* Large Center Play / Pause Indicator */}
+      {(!isPlaying || showFeedbackIcon) && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 transition-all duration-300">
+          <div className="w-16 h-16 rounded-full bg-black/60 backdrop-blur-md border border-white/20 flex items-center justify-center text-white shadow-2xl animate-in zoom-in-75 duration-200">
+            {isPlaying ? (
+              <Play className="w-8 h-8 fill-white translate-x-0.5 text-white" />
+            ) : (
+              <Pause className="w-8 h-8 fill-white text-white" />
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Pending Moderation Banner for Creator's POV */}
       {video.status === 'pending' && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-extrabold shadow-lg backdrop-blur-md animate-pulse whitespace-nowrap">
@@ -96,7 +161,10 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       )}
 
       {/* Top Header: Flag / Report Icon at top-right */}
-      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+      <div
+        className="absolute top-4 right-4 z-20 flex items-center gap-2"
+        onClick={e => e.stopPropagation()}
+      >
         <button
           onClick={() =>
             openReportModal({
@@ -115,7 +183,10 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       </div>
 
       {/* Top Left: Sound and Play/Pause Controls */}
-      <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
+      <div
+        className="absolute top-4 left-4 z-20 flex items-center gap-2"
+        onClick={e => e.stopPropagation()}
+      >
         <button
           onClick={onToggleMute}
           className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 transition-all cursor-pointer"
@@ -124,16 +195,19 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
         <button
-          onClick={() => setIsPlaying(!isPlaying)}
+          onClick={e => togglePlayPause(e)}
           className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 transition-all cursor-pointer"
-          title={isPlaying ? 'Pause' : 'Play'}
+          title={isPlaying ? 'Pause' : 'Resume Playback'}
         >
           {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
         </button>
       </div>
 
       {/* Right Action Rail (Avatar, Like, Comment, Share, Report) */}
-      <div className="absolute right-3 bottom-20 z-20 flex flex-col items-center gap-5">
+      <div
+        className="absolute right-3 bottom-20 z-20 flex flex-col items-center gap-5"
+        onClick={e => e.stopPropagation()}
+      >
         {/* Creator Avatar with click to navigate */}
         <div
           onClick={() => navigateToUserProfile(video.creator.id)}

@@ -22,7 +22,9 @@ import {
   ChevronRight,
   Heart,
   MessageCircle,
-  Share2
+  Share2,
+  ArrowRightLeft,
+  LogOut,
 } from 'lucide-react';
 
 export const ProfileView: React.FC = () => {
@@ -48,6 +50,9 @@ export const ProfileView: React.FC = () => {
     recordVideoView,
     toggleLikeVideo,
     setCommentsVideoId,
+    getUserLikedVideos,
+    setSwitchAccountModalOpen,
+    logout,
   } = useApp();
 
   const [activeTabSub, setActiveTabSub] = useState<'videos' | 'liked'>('videos');
@@ -81,7 +86,8 @@ export const ProfileView: React.FC = () => {
     if (!isSelf && (v.status === 'pending' || v.status === 'rejected')) return false;
     return true;
   });
-  const likedVideos = videos.filter(v => v.isLiked);
+  // User's liked videos are strictly isolated to targetUser!
+  const likedVideos = getUserLikedVideos(targetUser.id);
 
   // Dynamic likes count for user's profile
   const totalVideoLikes = userVideos.reduce((sum, v) => sum + (v.likesCount || 0), 0);
@@ -212,13 +218,33 @@ export const ProfileView: React.FC = () => {
 
             {/* Action Buttons */}
             {isSelf ? (
-              <button
-                onClick={() => setActiveTab('edit_profile')}
-                className="py-1.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 border border-neutral-600 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-              >
-                <Sliders className="w-3.5 h-3.5" />
-                <span>Edit Profile</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                <button
+                  onClick={() => setActiveTab('edit_profile')}
+                  className="py-1.5 px-3.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 border border-neutral-600 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Sliders className="w-3.5 h-3.5" />
+                  <span>Edit Profile</span>
+                </button>
+
+                <button
+                  onClick={() => setSwitchAccountModalOpen(true)}
+                  className="py-1.5 px-3.5 rounded-xl bg-[#1d1d2b] hover:bg-[#252538] border border-neutral-700 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Switch User Account"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5 text-[#ff007a]" />
+                  <span>Switch Account</span>
+                </button>
+
+                <button
+                  onClick={() => logout()}
+                  className="py-1.5 px-3.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 font-semibold text-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                  title="Log out of account"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Log Out</span>
+                </button>
+              </div>
             ) : (
               <div className="flex flex-wrap items-center gap-2 relative self-start sm:self-auto">
                 {/* Incoming Request Actions (if targetUser requested to follow currentUser) */}
