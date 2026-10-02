@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
+import { User } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { ViralHubLogo } from '../common/ViralHubLogo';
 import {
@@ -25,12 +26,76 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
   const {
     currentUser,
     users,
+    savedAccounts,
+    admins,
     quickLoginAs,
     logout,
     setAuthView,
   } = useApp();
 
   if (!isOpen) return null;
+
+  // Build unified list of switchable accounts, guaranteeing admin accounts are always present!
+  const displayAccounts: User[] = (() => {
+    const map = new Map<string, User>();
+    const emailToId = new Map<string, string>();
+
+    // 1. Saved accounts on this device
+    for (const a of savedAccounts) {
+      const emailKey = a.email ? a.email.trim().toLowerCase() : null;
+      map.set(a.id, a);
+      if (emailKey) emailToId.set(emailKey, a.id);
+    }
+
+    // 2. Administrators from Admin table (guarantee admin account is selectable)
+    for (const admin of admins) {
+      const emailKey = admin.email ? admin.email.trim().toLowerCase() : null;
+      let matchedUserId = admin.userId || admin.adminId;
+      if (emailKey && emailToId.has(emailKey)) {
+        matchedUserId = emailToId.get(emailKey)!;
+      }
+
+      if (map.has(matchedUserId)) {
+        const existing = map.get(matchedUserId)!;
+        map.set(matchedUserId, { ...existing, role: 'admin' });
+      } else {
+        const adminUser: User = {
+          id: matchedUserId,
+          username: admin.username || 'admin',
+          displayName: admin.username || 'Administrator',
+          email: admin.email || '',
+          avatar: '',
+          bio: `Platform ${admin.role || 'Admin'}`,
+          followingCount: 0,
+          followersCount: 0,
+          likesCount: '0',
+          isPrivate: false,
+          role: 'admin',
+        };
+        map.set(matchedUserId, adminUser);
+        if (emailKey) emailToId.set(emailKey, matchedUserId);
+      }
+    }
+
+    // 3. Known users from users list
+    for (const u of users) {
+      const emailKey = u.email ? u.email.trim().toLowerCase() : null;
+      if (emailKey && emailToId.has(emailKey)) {
+        const existingId = emailToId.get(emailKey)!;
+        const existing = map.get(existingId);
+        if (existing && u.role === 'admin') {
+          existing.role = 'admin';
+        }
+        continue;
+      }
+      if (!map.has(u.id)) {
+        map.set(u.id, u);
+        if (emailKey) emailToId.set(emailKey, u.id);
+      }
+    }
+
+    return Array.from(map.values());
+  })();
 
   const handleSwitchTo = (userId: string) => {
     quickLoginAs(userId);
@@ -99,11 +164,14 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
         {/* Available Accounts to Switch to */}
         <div className="space-y-2">
           <label className="text-[11px] font-bold uppercase tracking-wider text-neutral-400 block px-1">
-            Available Accounts ({users.length})
+            Available Accounts ({displayAccounts.length})
           </label>
           <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
-            {users.map(u => {
+            {displayAccounts.map(u => {
               const isCurrent = currentUser?.id === u.id;
+              const roleLower = String(u.role || '').toLowerCase();
+              const isAdminAccount = roleLower === 'admin' || roleLower === 'super admin' || roleLower === 'administrator';
+
               return (
                 <button
                   key={u.id}
@@ -122,11 +190,18 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                       size="sm"
                     />
                     <div className="min-w-0">
-                      <div className="text-xs font-bold text-white truncate">
-                        {u.displayName || u.username}
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-white truncate">
+                          {u.displayName || u.username}
+                        </span>
+                        {isAdminAccount && (
+                          <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-extrabold uppercase tracking-wider shrink-0">
+                            Admin
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] text-neutral-400 truncate">
-                        @{u.username}
+                        @{u.username} {u.email ? `· ${u.email}` : ''}
                       </div>
                     </div>
                   </div>

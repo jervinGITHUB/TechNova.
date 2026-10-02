@@ -16,7 +16,6 @@ import {
   Plus,
   Video as VideoIcon,
   Clock,
-  RotateCw,
 } from 'lucide-react';
 
 interface VideoFeedCardProps {
@@ -233,28 +232,6 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           <span>Awaiting Admin Approval (Only you see this)</span>
         </div>
       )}
-
-      {/* Top Header: Flag / Report Icon at top-right */}
-      <div
-        className="absolute top-4 right-4 z-20 flex items-center gap-2"
-        onClick={e => e.stopPropagation()}
-      >
-        <button
-          onClick={() =>
-            openReportModal({
-              type: 'video',
-              targetId: video.id,
-              targetName: `${video.creator.displayName || 'Creator'}'s video`,
-              targetSubtitle: video.caption.slice(0, 30),
-              targetThumbnail: video.thumbnailUrl,
-            })
-          }
-          className="p-2 rounded-full bg-black/40 backdrop-blur-md text-neutral-300 hover:text-red-400 hover:bg-black/60 transition-all cursor-pointer"
-          title="Report Video"
-        >
-          <Flag className="w-4 h-4" />
-        </button>
-      </div>
 
       {/* Right Action Rail (Avatar, Like, Comment, Share, Report) */}
       <div
@@ -504,11 +481,22 @@ export const HomeFeed: React.FC = () => {
     openLiveStreamAsViewer,
     currentLiveStream,
     syncWithSupabase,
+    feedRefreshKey,
   } = useApp();
 
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
   const [activeVideoId, setActiveVideoId] = useState<string>('');
   const [shuffleSeed, setShuffleSeed] = useState(0);
+
+  // Automatically refresh and re-shuffle feed whenever Home is clicked or feedRefreshKey increments
+  useEffect(() => {
+    if (feedRefreshKey > 0) {
+      setShuffleSeed(prev => prev + 1);
+      if (videoFeedRef.current) {
+        videoFeedRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }
+  }, [feedRefreshKey]);
 
   // Filter: Public feed only shows approved videos (or pending videos to their creator)
   const visibleApprovedVideos = useMemo(() => {
@@ -582,17 +570,68 @@ export const HomeFeed: React.FC = () => {
     };
   }, [feedVideos]);
 
+  // Dynamic trending hashtags calculation based on all videos currently in state
+  const trendingHashtags = useMemo(() => {
+    const counts = new Map<string, number>();
+
+    videos.forEach(v => {
+      // Tags from hashtags array
+      (v.hashtags || []).forEach(tag => {
+        let cleaned = tag.trim();
+        if (!cleaned) return;
+        if (!cleaned.startsWith('#')) cleaned = `#${cleaned}`;
+        cleaned = cleaned.toLowerCase();
+        counts.set(cleaned, (counts.get(cleaned) || 0) + 1);
+      });
+
+      // Parse hashtags from caption
+      const captionMatches = (v.caption || '').match(/#[a-zA-Z0-9_]+/g);
+      if (captionMatches) {
+        captionMatches.forEach(tag => {
+          const cleaned = tag.trim().toLowerCase();
+          const already = (v.hashtags || []).some(
+            t => (t.startsWith('#') ? t : `#${t}`).toLowerCase() === cleaned
+          );
+          if (!already) {
+            counts.set(cleaned, (counts.get(cleaned) || 0) + 1);
+          }
+        });
+      }
+    });
+
+    const sorted = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag, count], index) => {
+        const icons = ['🔥', '✨', '⚡', '🎙️', '🚀', '💥'];
+        return {
+          tag,
+          count: `${count} ${count === 1 ? 'video' : 'videos'}`,
+          rawCount: count,
+          icon: icons[index % icons.length],
+        };
+      });
+
+    // Provide friendly fallback if few tags exist
+    if (sorted.length < 4) {
+      const fallbacks = ['#viral', '#trending', '#fyp', '#explore'];
+      fallbacks.forEach((fb, idx) => {
+        if (!sorted.some(s => s.tag === fb)) {
+          const c = counts.get(fb) || 0;
+          sorted.push({
+            tag: fb,
+            count: `${c} ${c === 1 ? 'video' : 'videos'}`,
+            rawCount: c,
+            icon: ['🔥', '✨', '⚡', '🚀'][idx % 4],
+          });
+        }
+      });
+    }
+
+    return sorted.slice(0, 5);
+  }, [videos]);
+
   const handleShare = (video: Video) => {
     setShareModalVideo(video);
-  };
-
-  // Re-shuffle feed on demand and refresh remote data
-  const handleRefreshFeed = () => {
-    setShuffleSeed(prev => prev + 1);
-    syncWithSupabase();
-    if (videoFeedRef.current) {
-      videoFeedRef.current.scrollTo({ top: 0, behavior: 'smooth' });
-    }
   };
 
   // Scroll handler for wheel events
@@ -651,15 +690,6 @@ export const HomeFeed: React.FC = () => {
       {/* RIGHT SIDE: COMPLETELY STATIC & FIXED (Live now & Trending do NOT scroll)  */}
       {/* ========================================================================= */}
       <div className="hidden lg:flex flex-col w-80 shrink-0 space-y-6 pt-1 overflow-hidden pointer-events-auto">
-        {/* Fresh Feed Shuffle / Refresh Button */}
-        <button
-          onClick={handleRefreshFeed}
-          className="w-full py-2.5 px-4 rounded-2xl bg-[#14141e] hover:bg-[#1a1a28] border border-neutral-800 text-xs font-semibold text-neutral-300 hover:text-white flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md group"
-        >
-          <RotateCw className="w-3.5 h-3.5 text-[#ff007a] group-hover:rotate-180 transition-transform duration-500" />
-          <span>Shuffle & Refresh Feed</span>
-        </button>
-
         {/* "Live now" Widget */}
         <div className="bg-[#13131a] border border-neutral-800/80 rounded-3xl p-5 shadow-xl text-left">
           <div className="flex items-center justify-between mb-4">
@@ -720,7 +750,7 @@ export const HomeFeed: React.FC = () => {
           )}
         </div>
 
-        {/* "Trending" Widget */}
+        {/* "Trending" Widget (Automatic from videos) */}
         <div className="bg-[#13131a] border border-neutral-800/80 rounded-3xl p-5 shadow-xl text-left">
           <div className="flex items-center gap-2 mb-4">
             <Flame className="w-4 h-4 text-orange-400" />
@@ -730,12 +760,7 @@ export const HomeFeed: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            {[
-              { tag: '#Trending', count: '0 videos', icon: '🔥' },
-              { tag: '#Viral', count: '0 videos', icon: '✨' },
-              { tag: '#Live', count: '0 videos', icon: '🎙️' },
-              { tag: '#Community', count: '0 videos', icon: '⚡' },
-            ].map(({ tag, count, icon }) => (
+            {trendingHashtags.map(({ tag, count, icon }) => (
               <button
                 key={tag}
                 onClick={() => {

@@ -123,7 +123,7 @@ export interface NotificationItem {
   isUnread: boolean;
   videoId?: string;
   requestId?: string;
-  status?: 'pending' | 'accepted' | 'declined';
+  status?: 'pending' | 'accepted' | 'declined' | 'confirmed';
 }
 
 export interface ReportItem {

@@ -131,6 +131,11 @@ export const NotificationsView: React.FC = () => {
                           <Users className="w-3.5 h-3.5 text-emerald-400" />
                           <span>You are now friends!</span>
                         </div>
+                      ) : item.status === 'confirmed' ? (
+                        <div className="flex items-center gap-1.5 mt-2 py-1 px-3 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-bold text-xs w-fit">
+                          <UserCheck className="w-3.5 h-3.5 text-emerald-400" />
+                          <span>Follow request accepted</span>
+                        </div>
                       ) : item.status === 'declined' ? (
                         <div className="mt-2 text-xs text-neutral-500 font-medium italic">
                           <span>Request declined</span>
@@ -141,7 +146,7 @@ export const NotificationsView: React.FC = () => {
                             type="button"
                             onClick={e => {
                               e.stopPropagation();
-                              acceptFollowRequest(item.requestId!, true);
+                              acceptFollowRequest(item.requestId!, false);
                             }}
                             className="py-1 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs transition-colors cursor-pointer"
                           >

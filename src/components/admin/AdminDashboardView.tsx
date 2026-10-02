@@ -33,6 +33,7 @@ import {
   Sparkles,
   Clock,
   LogOut,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -53,6 +54,7 @@ export const AdminDashboardView: React.FC = () => {
     syncWithSupabase,
     setSupabaseModalOpen,
     navigateToUserProfile,
+    setSwitchAccountModalOpen,
     logout,
   } = useApp();
 
@@ -296,6 +298,16 @@ export const AdminDashboardView: React.FC = () => {
           >
             <Activity className={`w-3.5 h-3.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
             <span>{isSyncingAll ? 'Syncing to Cloud...' : 'Sync All to Supabase'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setSwitchAccountModalOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#1d1d2b] hover:bg-[#252538] text-white border border-neutral-700/80 text-xs font-semibold transition-colors cursor-pointer"
+            title="Switch between Administrator and Client accounts"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5 text-[#ff007a]" />
+            <span>Switch Account</span>
           </button>
 
           <button

@@ -20,6 +20,7 @@ export const Sidebar: React.FC = () => {
   const {
     currentUser,
     users,
+    savedAccounts,
     quickLoginAs,
     activeTab,
     setActiveTab,
@@ -28,6 +29,7 @@ export const Sidebar: React.FC = () => {
     logout,
     navigateToUserProfile,
     setSwitchAccountModalOpen,
+    refreshFeed,
   } = useApp();
 
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -66,7 +68,10 @@ export const Sidebar: React.FC = () => {
       {/* Top Brand Logo */}
       <div>
         <div
-          onClick={() => setActiveTab('home')}
+          onClick={() => {
+            setActiveTab('home');
+            refreshFeed();
+          }}
           className="cursor-pointer py-1 px-2 mb-8 hover:opacity-90 transition-opacity"
         >
           <ViralHubLogo size="md" />
@@ -85,6 +90,9 @@ export const Sidebar: React.FC = () => {
                 onClick={() => {
                   if (item.tab === 'messages') {
                     setMessagesMobileView('list');
+                  }
+                  if (item.tab === 'home') {
+                    refreshFeed();
                   }
                   setActiveTab(item.tab);
                 }}
@@ -183,39 +191,48 @@ export const Sidebar: React.FC = () => {
                   <div className="h-px bg-neutral-800 my-1" />
 
                   {/* Switch Account Quick List */}
-                  {users.length > 0 && (
-                    <div className="space-y-0.5">
-                      {users.slice(0, 4).map(u => {
-                        const isCurrent = currentUser.id === u.id;
-                        return (
-                          <button
-                            key={u.id}
-                            onClick={() => {
-                              setProfileMenuOpen(false);
-                              quickLoginAs(u.id);
-                            }}
-                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs transition-colors cursor-pointer ${
-                              isCurrent
-                                ? 'bg-[#ff007a]/20 text-[#ff007a] font-bold'
-                                : 'text-neutral-300 hover:bg-[#252535] hover:text-white'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2 min-w-0">
-                              <Avatar
-                                src={u.avatar}
-                                alt={u.displayName || 'User'}
-                                size="xs"
-                              />
-                              <span className="truncate">{u.displayName || u.username || 'User'}</span>
-                            </div>
-                            {isCurrent && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#ff007a] shrink-0" />
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
+                  {(() => {
+                    const accountsToShow = savedAccounts.length > 0 ? savedAccounts : users.slice(0, 4);
+                    return accountsToShow.length > 0 ? (
+                      <div className="space-y-0.5">
+                        {accountsToShow.slice(0, 4).map(u => {
+                          const isCurrent = currentUser.id === u.id;
+                          const isAdminAccount = String(u.role || '').toLowerCase() === 'admin' || String(u.role || '').toLowerCase() === 'super admin';
+                          return (
+                            <button
+                              key={u.id}
+                              onClick={() => {
+                                setProfileMenuOpen(false);
+                                quickLoginAs(u.id);
+                              }}
+                              className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs transition-colors cursor-pointer ${
+                                isCurrent
+                                  ? 'bg-[#ff007a]/20 text-[#ff007a] font-bold'
+                                  : 'text-neutral-300 hover:bg-[#252535] hover:text-white'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <Avatar
+                                  src={u.avatar}
+                                  alt={u.displayName || 'User'}
+                                  size="xs"
+                                />
+                                <span className="truncate">{u.displayName || u.username || 'User'}</span>
+                                {isAdminAccount && (
+                                  <span className="text-[9px] uppercase px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold shrink-0">
+                                    Admin
+                                  </span>
+                                )}
+                              </div>
+                              {isCurrent && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-[#ff007a] shrink-0" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null;
+                  })()}
 
                   <div className="h-px bg-neutral-800 my-1" />
 

@@ -379,7 +379,9 @@ export const supabaseDb = {
         const uId = row.UserID || row.id || row.user_id;
         const uEmail = (row.Email || row.email || '').trim();
         const emailKey = uEmail ? uEmail.toLowerCase() : null;
-        const role = (row.Role || row.role || 'creator') as any;
+        const rawRole = String(row.Role || row.role || 'creator').toLowerCase();
+        const isAdminUser = rawRole === 'admin' || rawRole === 'super admin' || rawRole === 'administrator' || rawRole === 'content moderator';
+        const role = isAdminUser ? 'admin' : 'creator';
 
         // Check if an entry for this email already exists
         if (emailKey && emailMap.has(emailKey)) {
@@ -387,7 +389,7 @@ export const supabaseDb = {
           const existing = userMap.get(existingId);
           if (existing) {
             // Keep admin role if either record was admin
-            if (role === 'admin' || role === 'Super Admin') {
+            if (isAdminUser) {
               existing.role = 'admin';
             }
             if (row.ProfilePictureURL && !existing.avatar) {
@@ -411,7 +413,7 @@ export const supabaseDb = {
           followersCount: 0,
           likesCount: '0',
           isPrivate: row.IsPublic !== undefined ? !row.IsPublic : (row.is_public !== undefined ? !row.is_public : Boolean(row.isPrivate || row.is_private)),
-          role: (role === 'admin' || role === 'Super Admin') ? 'admin' : 'creator',
+          role: isAdminUser ? 'admin' : 'creator',
         };
 
         userMap.set(uId, newUser);
@@ -1495,45 +1497,62 @@ export const supabaseDb = {
 
   async checkIsAdmin(user?: Partial<User> | null): Promise<boolean> {
     if (!user) return false;
-    if (user.role === 'admin') return true;
+    const currentRole = String(user.role || '').toLowerCase();
+    if (currentRole === 'admin' || currentRole === 'super admin' || currentRole === 'administrator') return true;
 
     const client = getSupabaseClient();
     if (!client) return false;
 
     try {
-      const userUuid = toUuid(user.id);
-      // Query Admin table
-      const { data, error } = await client
-        .from('Admin')
-        .select('*')
-        .or(`UserID.eq.${userUuid},Email.ilike.${user.email || 'none'},Username.ilike.${user.username || 'none'}`)
-        .limit(1);
+      const email = (user.email || '').trim().toLowerCase();
+      const username = (user.username || '').trim().toLowerCase();
+      const userUuid = user.id ? toUuid(user.id) : null;
 
-      if (!error && data && data.length > 0) {
-        return true;
-      }
+      // 1. Query PascalCase Admin table
+      if (email || username || userUuid) {
+        const clauses: string[] = [];
+        if (email) clauses.push(`Email.ilike.${email}`);
+        if (username) clauses.push(`Username.ilike.${username}`);
+        if (userUuid) clauses.push(`UserID.eq.${userUuid}`);
 
-      // Also try lowercase table 'admins'
-      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
-        const retry = await client
+        const { data: adminData } = await client
+          .from('Admin')
+          .select('*')
+          .or(clauses.join(','))
+          .limit(1);
+
+        if (adminData && adminData.length > 0) {
+          return true;
+        }
+
+        // Retry lowercase admins table
+        const { data: lowerAdminData } = await client
           .from('admins')
           .select('*')
-          .or(`user_id.eq.${userUuid},email.ilike.${user.email || 'none'},username.ilike.${user.username || 'none'}`)
+          .or(clauses.map(c => c.toLowerCase()).join(','))
           .limit(1);
-        if (retry.data && retry.data.length > 0) {
+
+        if (lowerAdminData && lowerAdminData.length > 0) {
           return true;
         }
       }
 
-      // Also check if User table has Role = 'admin'
-      const { data: userRow } = await client
-        .from('User')
-        .select('Role, role')
-        .eq('UserID', userUuid)
-        .maybeSingle();
+      // 2. Also check if User table has Role = 'admin' / 'Super Admin'
+      if (email || userUuid) {
+        let userQuery = client.from('User').select('Role, role');
+        if (email) {
+          userQuery = userQuery.ilike('Email', email);
+        } else if (userUuid) {
+          userQuery = userQuery.eq('UserID', userUuid);
+        }
+        const { data: userRow } = await userQuery.limit(1).maybeSingle();
 
-      if (userRow && (userRow.Role?.toLowerCase() === 'admin' || userRow.role?.toLowerCase() === 'admin')) {
-        return true;
+        if (userRow) {
+          const r = String(userRow.Role || userRow.role || '').toLowerCase();
+          if (r === 'admin' || r === 'super admin' || r === 'administrator' || r === 'content moderator') {
+            return true;
+          }
+        }
       }
     } catch (e) {
       console.warn('Check admin query fallback:', e);

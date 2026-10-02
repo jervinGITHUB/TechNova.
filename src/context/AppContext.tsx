@@ -203,8 +203,13 @@ interface AppContextType {
   // Per-User Interactions & Account Switch
   switchAccountModalOpen: boolean;
   setSwitchAccountModalOpen: (open: boolean) => void;
+  savedAccounts: User[];
   userLikes: Record<string, string[]>;
   getUserLikedVideos: (userId: string) => Video[];
+
+  // Feed refresh & shuffle trigger
+  feedRefreshKey: number;
+  refreshFeed: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -272,8 +277,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Account switcher modal
   const [switchAccountModalOpen, setSwitchAccountModalOpen] = useState<boolean>(false);
 
+  // Saved accounts list for switching accounts on this device
+  const [savedAccounts, setSavedAccounts] = useState<User[]>(() => {
+    const saved = storage.get<User[]>('saved_accounts_v2', []);
+    const current = storage.get<User | null>('currentUser', null);
+    if (current && current.id && (current.username || current.displayName)) {
+      const exists = saved.some(
+        s => s.id === current.id || (s.email && current.email && s.email.toLowerCase() === current.email.toLowerCase())
+      );
+      if (!exists) {
+        const init = [current, ...saved];
+        storage.set('saved_accounts_v2', init);
+        return init;
+      }
+    }
+    return saved;
+  });
+
+  const recordSavedAccount = (acc: User) => {
+    setSavedAccounts(prev => {
+      const filtered = prev.filter(
+        a => a.id !== acc.id && (!acc.email || !a.email || a.email.toLowerCase() !== acc.email.toLowerCase())
+      );
+      const next = [acc, ...filtered];
+      storage.set('saved_accounts_v2', next);
+      return next;
+    });
+  };
+
+  // Feed refresh trigger counter: incrementing this forces feed re-shuffle and reload
+  const [feedRefreshKey, setFeedRefreshKey] = useState<number>(0);
+  const refreshFeed = () => {
+    setFeedRefreshKey(k => k + 1);
+    syncWithSupabase();
+  };
+
   // Dynamic admin state (queried from Supabase Admin table or role)
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    const saved = storage.get<User | null>('currentUser', null);
+    if (!saved) return false;
+    const r = String(saved.role || '').toLowerCase();
+    return r === 'admin' || r === 'super admin' || r === 'administrator';
+  });
 
   // Modals
   const [commentsVideoId, setCommentsVideoId] = useState<string | null>(null);
@@ -292,7 +337,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setIsAdmin(false);
         return;
       }
-      if (currentUser.role === 'admin') {
+      const rawRole = String(currentUser.role || '').toLowerCase();
+      if (rawRole === 'admin' || rawRole === 'super admin' || rawRole === 'administrator') {
         setIsAdmin(true);
         return;
       }
@@ -312,6 +358,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const remoteIsAdmin = await supabaseDb.checkIsAdmin(currentUser);
         if (!isCancelled) {
           setIsAdmin(remoteIsAdmin);
+          if (remoteIsAdmin) {
+            setCurrentUser(prev => (prev ? { ...prev, role: 'admin' } : prev));
+          }
         }
       } catch {
         if (!isCancelled) setIsAdmin(false);
@@ -491,6 +540,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setCurrentUser(finalUser);
     storage.set('currentUser', finalUser);
+    recordSavedAccount(finalUser);
 
     setUsers(prev => {
       // Filter out any duplicates with same id or email
@@ -509,22 +559,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const client = getSupabaseClient();
     if (!client) return;
 
-    // Check existing session on load (handles page reload & OAuth redirect callback)
+    // Check existing session on load only if no account is currently active in storage
     client.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
+      const activeStored = storage.get<User | null>('currentUser', null);
+      if (!activeStored && session?.user) {
         handleSupabaseUserSession(session.user);
       }
     });
 
     // Listen to live auth state changes
     const { data: authSubscription } = client.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') {
+      if (event === 'SIGNED_IN') {
         if (session?.user) {
           await handleSupabaseUserSession(session.user);
         }
+      } else if (event === 'INITIAL_SESSION') {
+        const activeStored = storage.get<User | null>('currentUser', null);
+        if (!activeStored && session?.user) {
+          await handleSupabaseUserSession(session.user);
+        }
       } else if (event === 'SIGNED_OUT') {
-        setCurrentUser(null);
-        storage.remove('currentUser');
+        // Do not force wipe if user is just switching local accounts
       }
     });
 
@@ -692,6 +747,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               return { success: false, message: 'Incorrect password. Please try again.' };
             }
 
+            const rawRole = String(dbUser.Role || dbUser.role || '').toLowerCase();
+            const isAdminRecord = rawRole === 'admin' || rawRole === 'super admin' || rawRole === 'administrator' || rawRole === 'content moderator';
             const loggedInUser: User = {
               id: dbUser.UserID || dbUser.id,
               username: dbUser.Username || dbUser.username,
@@ -703,11 +760,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               followersCount: 0,
               likesCount: '0',
               isPrivate: dbUser.IsPublic !== undefined ? !dbUser.IsPublic : false,
-              role: (dbUser.Role || 'creator') as any,
+              role: isAdminRecord ? 'admin' : ((dbUser.Role || 'creator') as any),
             };
 
             setCurrentUser(loggedInUser);
             storage.set('currentUser', loggedInUser);
+            if (isAdminRecord) setIsAdmin(true);
+            recordSavedAccount(loggedInUser);
             setActiveConversationId(null);
             setMessagesMobileView('list');
             setSelectedUserId(null);
@@ -734,6 +793,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (found) {
       setCurrentUser(found);
       storage.set('currentUser', found);
+      recordSavedAccount(found);
+      if (found.role === 'admin') setIsAdmin(true);
       setActiveConversationId(null);
       setMessagesMobileView('list');
       setSelectedUserId(null);
@@ -861,6 +922,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = async () => {
+    if (currentUser) {
+      setSavedAccounts(prev => {
+        const next = prev.filter(
+          a =>
+            a.id !== currentUser.id &&
+            (!currentUser.email || !a.email || a.email.toLowerCase() !== currentUser.email.toLowerCase())
+        );
+        storage.set('saved_accounts_v2', next);
+        return next;
+      });
+    }
+
     try {
       await signOutSupabase();
     } catch {
@@ -876,12 +949,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const quickLoginAs = (userId: string) => {
-    const target = users.find(u => u.id === userId) || DEFAULT_USER;
-    setCurrentUser(target);
-    storage.set('currentUser', target);
+    let target =
+      users.find(u => u.id === userId) ||
+      savedAccounts.find(u => u.id === userId);
+
+    if (!target) {
+      const matchedAdmin = admins.find(
+        a => a.adminId === userId || a.userId === userId || (a.email && a.email.toLowerCase() === userId.toLowerCase())
+      );
+      if (matchedAdmin) {
+        target = {
+          id: matchedAdmin.userId || matchedAdmin.adminId,
+          username: matchedAdmin.username || 'admin',
+          displayName: matchedAdmin.username || 'Administrator',
+          email: matchedAdmin.email || '',
+          avatar: '',
+          bio: `Platform ${matchedAdmin.role || 'Admin'}`,
+          followingCount: 0,
+          followersCount: 0,
+          likesCount: '0',
+          isPrivate: false,
+          role: 'admin',
+        };
+      }
+    }
+
+    if (!target) {
+      target = DEFAULT_USER;
+    }
+
+    const rawRole = String(target.role || '').toLowerCase();
+    const isTargetAdmin =
+      rawRole === 'admin' ||
+      rawRole === 'super admin' ||
+      rawRole === 'administrator' ||
+      rawRole === 'content moderator' ||
+      admins.some(a =>
+        (a.userId && a.userId === target.id) ||
+        (a.adminId && a.adminId === target.id) ||
+        (a.email && target.email && a.email.toLowerCase() === target.email.toLowerCase()) ||
+        (a.username && target.username && a.username.toLowerCase() === target.username.toLowerCase())
+      );
+
+    const updatedTarget: User = {
+      ...target,
+      role: isTargetAdmin ? 'admin' : (target.role || 'creator'),
+    };
+
+    setCurrentUser(updatedTarget);
+    storage.set('currentUser', updatedTarget);
+    setIsAdmin(isTargetAdmin);
+    recordSavedAccount(updatedTarget);
+
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setSelectedUserId(null);
+
+    // Refresh feed and shuffle
+    refreshFeed();
+
+    // Also verify remote admin asynchronously in case not cached
+    if (!isTargetAdmin && updatedTarget.email) {
+      supabaseDb.checkIsAdmin(updatedTarget).then(remoteAdmin => {
+        if (remoteAdmin) {
+          setIsAdmin(true);
+          setCurrentUser(prev => (prev?.id === updatedTarget.id ? { ...prev, role: 'admin' } : prev));
+        }
+      }).catch(() => {});
+    }
   };
 
   const navigateToUserProfile = (userId: string) => {
@@ -1084,55 +1219,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const req = followRequests.find(r => r.id === requestId);
     const requesterId = req?.fromUserId;
 
-    // Both become mutual follows (friends)
     if (requesterId) {
-      setFollowRelations(prev => {
-        const next = [...prev];
-        if (!next.some(f => f.followerId === requesterId && f.followingId === currentUser.id)) {
-          next.push({ followerId: requesterId, followingId: currentUser.id });
-        }
-        if (!next.some(f => f.followerId === currentUser.id && f.followingId === requesterId)) {
-          next.push({ followerId: currentUser.id, followingId: requesterId });
-        }
-        return next;
-      });
+      if (andFollowBack) {
+        // Mutual follows (Friends): Requester follows currentUser AND currentUser follows requester back
+        setFollowRelations(prev => {
+          const next = [...prev];
+          if (!next.some(f => f.followerId === requesterId && f.followingId === currentUser.id)) {
+            next.push({ followerId: requesterId, followingId: currentUser.id });
+          }
+          if (!next.some(f => f.followerId === currentUser.id && f.followingId === requesterId)) {
+            next.push({ followerId: currentUser.id, followingId: requesterId });
+          }
+          return next;
+        });
 
-      // Send confirmation notification to requester
-      const replyNotif: NotificationItem = {
-        id: `notif_${Date.now()}`,
-        recipientId: requesterId,
-        type: 'follow',
-        actor: {
-          id: currentUser.id,
-          username: currentUser.username,
-          displayName: currentUser.displayName,
-          avatar: currentUser.avatar,
-        },
-        targetText: 'accepted your follow request. You are now friends!',
-        timestamp: 'Just now',
-        isUnread: true,
-        status: 'accepted',
-      };
-      setNotifications(prev => [replyNotif, ...prev]);
+        // Send confirmation notification to requester
+        const replyNotif: NotificationItem = {
+          id: `notif_${Date.now()}`,
+          recipientId: requesterId,
+          type: 'follow',
+          actor: {
+            id: currentUser.id,
+            username: currentUser.username,
+            displayName: currentUser.displayName,
+            avatar: currentUser.avatar,
+          },
+          targetText: 'accepted your follow request. You are now friends!',
+          timestamp: 'Just now',
+          isUnread: true,
+          status: 'accepted',
+        };
+        setNotifications(prev => [replyNotif, ...prev]);
 
-      // Record in Supabase database
-      supabaseDb.toggleFollow(requesterId, currentUser.id, true);
-      supabaseDb.toggleFollow(currentUser.id, requesterId, true);
-      supabaseDb.insertNotification(replyNotif, requesterId);
+        supabaseDb.toggleFollow(requesterId, currentUser.id, true);
+        supabaseDb.toggleFollow(currentUser.id, requesterId, true);
+        supabaseDb.insertNotification(replyNotif, requesterId);
+      } else {
+        // Confirm only: Requester follows currentUser, but currentUser does NOT follow them back!
+        setFollowRelations(prev => {
+          const next = [...prev];
+          if (!next.some(f => f.followerId === requesterId && f.followingId === currentUser.id)) {
+            next.push({ followerId: requesterId, followingId: currentUser.id });
+          }
+          return next;
+        });
+
+        const replyNotif: NotificationItem = {
+          id: `notif_${Date.now()}`,
+          recipientId: requesterId,
+          type: 'follow',
+          actor: {
+            id: currentUser.id,
+            username: currentUser.username,
+            displayName: currentUser.displayName,
+            avatar: currentUser.avatar,
+          },
+          targetText: 'accepted your follow request.',
+          timestamp: 'Just now',
+          isUnread: true,
+          status: 'accepted',
+        };
+        setNotifications(prev => [replyNotif, ...prev]);
+
+        supabaseDb.toggleFollow(requesterId, currentUser.id, true);
+        supabaseDb.insertNotification(replyNotif, requesterId);
+      }
     }
 
     // Remove request from pending follow requests
     setFollowRequests(prev => prev.filter(r => r.id !== requestId));
 
-    // Update currentUser notification: It becomes "You are now friends!" only on my notification
+    // Update currentUser notification in inbox
     setNotifications(prev =>
       prev.map(n => {
-        if (n.requestId === requestId || (requesterId && n.recipientId === currentUser.id && n.actor.id === requesterId && n.type === 'follow_request')) {
+        if (
+          n.requestId === requestId ||
+          (requesterId && n.recipientId === currentUser.id && n.actor.id === requesterId && n.type === 'follow_request')
+        ) {
           return {
             ...n,
             isUnread: false,
-            status: 'accepted',
-            targetText: 'You are now friends!',
+            status: andFollowBack ? 'accepted' : 'confirmed',
+            targetText: andFollowBack ? 'You are now friends!' : 'is now following you.',
           };
         }
         return n;
@@ -1958,8 +2126,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncAllToSupabase,
         switchAccountModalOpen,
         setSwitchAccountModalOpen,
+        savedAccounts,
         userLikes,
         getUserLikedVideos,
+        feedRefreshKey,
+        refreshFeed,
       }}
     >
       {children}

@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
-import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft, ArrowRightLeft } from 'lucide-react';
+import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft } from 'lucide-react';
 
 interface HeaderProps {
   onToggleMobileNav?: () => void;
@@ -17,7 +17,6 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     users,
     videos,
     navigateToUserProfile,
-    setSwitchAccountModalOpen,
   } = useApp();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -393,17 +392,8 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             )}
           </div>
 
-          {/* Right Controls: Switch Account + Notification Bell + "+ Upload" Button */}
+          {/* Right Controls: Notification Bell + "+ Upload" Button */}
           <div className="flex items-center gap-2 sm:gap-3.5 shrink-0">
-            {/* Switch Account Quick Button */}
-            <button
-              onClick={() => setSwitchAccountModalOpen(true)}
-              className="p-2 sm:p-2.5 rounded-full text-neutral-300 hover:text-white hover:bg-[#181822] transition-colors cursor-pointer"
-              title="Switch Account"
-            >
-              <ArrowRightLeft className="w-5 h-5 text-[#ff007a]" />
-            </button>
-
             {/* Notification Bell */}
             <button
               onClick={() => setActiveTab('notifications')}

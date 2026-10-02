@@ -135,18 +135,9 @@ export const AuthPage: React.FC = () => {
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-[#ff007a]/15 rounded-full blur-3xl pointer-events-none -translate-x-1/2 -translate-y-1/2" />
       <div className="absolute bottom-10 right-10 w-80 h-80 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
 
-      {/* Top bar with Brand Logo & Supabase Connection helper */}
+      {/* Top bar with Brand Logo */}
       <div className="w-full flex items-center justify-between z-10">
         <ViralHubLogo size="md" />
-        <button
-          type="button"
-          onClick={() => setSupabaseModalOpen(true)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#181824] hover:bg-[#222232] border border-neutral-700/80 text-xs font-semibold text-neutral-300 hover:text-white transition-all cursor-pointer"
-          title="Configure Supabase Database"
-        >
-          <span className={`w-2 h-2 rounded-full ${isSupabaseConnected ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-amber-400'}`} />
-          <span>{isSupabaseConnected ? 'Supabase Connected' : 'Connect Supabase'}</span>
-        </button>
       </div>
 
       {/* Main Form Center Card */}

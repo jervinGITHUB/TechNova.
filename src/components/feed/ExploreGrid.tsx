@@ -2,17 +2,14 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import {
-  Heart,
-  MessageCircle,
-  Share2,
   Play,
-  Flag,
   User as UserIcon,
   Users,
   Check,
   Clock,
   UserPlus,
-  ArrowRight
+  ArrowRight,
+  Eye,
 } from 'lucide-react';
 
 export const ExploreGrid: React.FC = () => {
@@ -300,60 +297,6 @@ export const ExploreGrid: React.FC = () => {
                     <Play className="w-5 h-5 ml-0.5 fill-white" />
                   </button>
 
-                  {/* Action buttons on the right side of the card */}
-                  <div className="absolute right-3 bottom-14 flex flex-col items-center gap-3 z-10">
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        toggleLikeVideo(video.id);
-                      }}
-                      className={`p-2 rounded-full backdrop-blur-md transition-colors cursor-pointer ${
-                        video.isLiked
-                          ? 'bg-pink-500/20 text-[#ff007a]'
-                          : 'bg-black/40 text-white hover:text-[#ff007a]'
-                      }`}
-                    >
-                      <Heart
-                        className={`w-4 h-4 ${video.isLiked ? 'fill-[#ff007a]' : ''}`}
-                      />
-                    </button>
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        setCommentsVideoId(video.id);
-                      }}
-                      className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:text-cyan-400 transition-colors cursor-pointer"
-                    >
-                      <MessageCircle className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        shareVideo(video.id);
-                      }}
-                      className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:text-emerald-400 transition-colors cursor-pointer"
-                      title="Share"
-                    >
-                      <Share2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={e => {
-                        e.stopPropagation();
-                        openReportModal({
-                          type: 'video',
-                          targetId: video.id,
-                          targetName: `${video.creator.displayName}'s video`,
-                          targetSubtitle: video.caption.slice(0, 35),
-                          targetThumbnail: video.thumbnailUrl || video.mediaUrl,
-                        });
-                      }}
-                      className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:text-red-400 transition-colors cursor-pointer"
-                      title="Report Video"
-                    >
-                      <Flag className="w-4 h-4" />
-                    </button>
-                  </div>
-
                   {/* Creator handle above caption */}
                   <div
                     onClick={() => navigateToUserProfile(video.creator.id)}
@@ -370,7 +313,7 @@ export const ExploreGrid: React.FC = () => {
                   </div>
 
                   {/* Bottom Caption and Hashtags */}
-                  <div className="absolute bottom-3 left-3 right-12 z-10 text-left">
+                  <div className="absolute bottom-3 left-3 right-20 z-10 text-left">
                     <p className="text-xs font-semibold text-white line-clamp-2 leading-tight">
                       {video.caption}
                     </p>
@@ -384,6 +327,12 @@ export const ExploreGrid: React.FC = () => {
                         </span>
                       ))}
                     </div>
+                  </div>
+
+                  {/* View icon & view count on the below right corner of thumbnail */}
+                  <div className="absolute right-3 bottom-3 z-10 flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-black/75 backdrop-blur-md border border-white/10 text-white text-xs font-bold shadow-lg">
+                    <Eye className="w-3.5 h-3.5 text-white/90" />
+                    <span>{video.viewsCount || 0}</span>
                   </div>
                 </div>
               </div>
