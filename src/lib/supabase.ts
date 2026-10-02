@@ -854,15 +854,16 @@ export const supabaseDb = {
       const cleanFileName = `video_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
       const mimeType = file.type || (ext === 'webm' ? 'video/webm' : ext === 'mov' ? 'video/quicktime' : 'video/mp4');
 
-      // 1. Inspect existing buckets or attempt to create 'videos' bucket
-      let availableBuckets: string[] = ['videos', 'media', 'public'];
+      // 1. Inspect existing buckets or default to common video buckets
+      let candidateBuckets: string[] = ['videos', 'video', 'media', 'uploads', 'public', 'files', 'posts', 'storage'];
       try {
-        const { data: bucketList } = await client.storage.listBuckets();
-        if (bucketList && bucketList.length > 0) {
-          const names = bucketList.map(b => b.name || b.id).filter(Boolean);
-          availableBuckets = Array.from(new Set([...names, 'videos', 'media', 'public']));
+        const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
+        if (!bucketError && bucketList && bucketList.length > 0) {
+          const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
+          // Prioritize buckets that actually exist in the project
+          candidateBuckets = Array.from(new Set([...discovered, ...candidateBuckets]));
         } else {
-          // Attempt to auto-create 'videos' public bucket if not present
+          // Attempt to auto-create 'videos' public bucket if possible
           await client.storage.createBucket('videos', { public: true }).catch(() => {});
         }
       } catch {
@@ -871,26 +872,49 @@ export const supabaseDb = {
 
       let lastError: any = null;
 
-      // 2. Try uploading to available buckets using root path and uploads/ path
-      for (const bucket of availableBuckets) {
-        // Try root filename first (cleanest and least policy-restricted)
+      // 2. Try candidate buckets
+      for (const bucket of candidateBuckets) {
+        // Try root filename first, then uploads/ subdirectory
         const tryPaths = [cleanFileName, `uploads/${cleanFileName}`];
 
         for (const targetPath of tryPaths) {
+          // Try 1: with standard INSERT (upsert: false) - most compatible with Supabase RLS
           try {
-            const uploadRes = await client.storage.from(bucket).upload(targetPath, file, {
+            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
+              contentType: mimeType,
+              cacheControl: '3600',
+              upsert: false,
+            });
+
+            if (!error && data?.path) {
+              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
+              if (pubData?.publicUrl) {
+                return { url: pubData.publicUrl };
+              }
+            }
+            if (error) {
+              lastError = error;
+            }
+          } catch (err: any) {
+            lastError = err;
+          }
+
+          // Try 2: with upsert: true in case of object collision
+          try {
+            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
               contentType: mimeType,
               cacheControl: '3600',
               upsert: true,
             });
 
-            if (!uploadRes.error) {
-              const { data } = client.storage.from(bucket).getPublicUrl(targetPath);
-              if (data?.publicUrl) {
-                return { url: data.publicUrl };
+            if (!error && data?.path) {
+              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
+              if (pubData?.publicUrl) {
+                return { url: pubData.publicUrl };
               }
-            } else {
-              lastError = uploadRes.error;
+            }
+            if (error) {
+              lastError = error;
             }
           } catch (err: any) {
             lastError = err;

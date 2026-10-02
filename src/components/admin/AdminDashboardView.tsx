@@ -5,7 +5,6 @@ import {
   supabaseDb,
   getSupabaseConfig,
   testSupabaseConnection,
-  SUPABASE_SQL_SCHEMA,
 } from '../../lib/supabase';
 import { AdminRecord, SystemStats } from '../../types';
 import {
@@ -58,11 +57,28 @@ export const AdminDashboardView: React.FC = () => {
   } = useApp();
 
   const [activeAdminTab, setActiveAdminTab] = useState<
-    'overview' | 'users' | 'videos' | 'reports' | 'admins' | 'database'
+    'overview' | 'users' | 'videos' | 'reports' | 'admins'
   >('overview');
 
+  // Deduplicate users so that even if database had duplicate rows for an email, each unique user account displays once!
+  const uniqueUsers = React.useMemo(() => {
+    const map = new Map<string, typeof users[0]>();
+    for (const u of users) {
+      const emailKey = u.email ? u.email.trim().toLowerCase() : u.id;
+      if (map.has(emailKey)) {
+        const existing = map.get(emailKey)!;
+        if (u.role === 'admin' && existing.role !== 'admin') {
+          existing.role = 'admin';
+        }
+        continue;
+      }
+      map.set(emailKey, u);
+    }
+    return Array.from(map.values());
+  }, [users]);
+
   const [stats, setStats] = useState<SystemStats>({
-    totalUsers: users.length,
+    totalUsers: uniqueUsers.length,
     totalVideos: videos.length,
     totalLikes: videos.reduce((acc, v) => acc + (v.likesCount || 0), 0),
     totalComments: videos.reduce((acc, v) => acc + (v.commentsCount || 0), 0),
@@ -97,23 +113,6 @@ export const AdminDashboardView: React.FC = () => {
 
   const supabaseConfig = getSupabaseConfig();
 
-  // Deduplicate users so that even if database had duplicate rows for an email, each unique user account displays once!
-  const uniqueUsers = React.useMemo(() => {
-    const map = new Map<string, typeof users[0]>();
-    for (const u of users) {
-      const emailKey = u.email ? u.email.trim().toLowerCase() : u.id;
-      if (map.has(emailKey)) {
-        const existing = map.get(emailKey)!;
-        if (u.role === 'admin' && existing.role !== 'admin') {
-          existing.role = 'admin';
-        }
-        continue;
-      }
-      map.set(emailKey, u);
-    }
-    return Array.from(map.values());
-  }, [users]);
-
   // Filtered lists
   const filteredUsers = uniqueUsers.filter(
     u =>
@@ -137,7 +136,7 @@ export const AdminDashboardView: React.FC = () => {
       }
 
       setStats({
-        totalUsers: remoteStats.totalUsers || users.length,
+        totalUsers: uniqueUsers.length,
         totalVideos: remoteStats.totalVideos || videos.length,
         totalLikes: remoteStats.totalLikes || videos.reduce((acc, v) => acc + (v.likesCount || 0), 0),
         totalComments: remoteStats.totalComments || videos.reduce((acc, v) => acc + (v.commentsCount || 0), 0),
@@ -428,7 +427,7 @@ export const AdminDashboardView: React.FC = () => {
       <div className="flex items-center gap-1.5 border-b border-neutral-800 pb-2 overflow-x-auto no-scrollbar">
         {[
           { id: 'overview', label: 'Overview & Health', icon: <Activity className="w-4 h-4" /> },
-          { id: 'users', label: `Users (${users.length})`, icon: <Users className="w-4 h-4" /> },
+          { id: 'users', label: `Users (${uniqueUsers.length})`, icon: <Users className="w-4 h-4" /> },
           {
             id: 'videos',
             label: pendingVideosCount > 0 ? `Videos (${videos.length}) · ${pendingVideosCount} Pending` : `Videos (${videos.length})`,
@@ -442,7 +441,6 @@ export const AdminDashboardView: React.FC = () => {
             highlight: pendingReportsCount > 0,
           },
           { id: 'admins', label: `Admin Team (${admins.length || 1})`, icon: <Shield className="w-4 h-4" /> },
-          { id: 'database', label: 'Supabase Tables & SQL', icon: <Database className="w-4 h-4" /> },
         ].map(tab => (
           <button
             key={tab.id}
@@ -1266,63 +1264,7 @@ export const AdminDashboardView: React.FC = () => {
         </div>
       )}
 
-      {/* =================================================================== */}
-      {/* TAB 6: SUPABASE TABLES & ROW COUNTS */}
-      {/* =================================================================== */}
-      {activeAdminTab === 'database' && (
-        <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
-            <div>
-              <h3 className="text-base font-bold text-white font-brand">Live Supabase Database Tables</h3>
-              <p className="text-xs text-neutral-400">
-                Direct row count inspector matching all 19 tables in your Supabase project
-              </p>
-            </div>
-            <button
-              onClick={loadData}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold transition-colors cursor-pointer"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#ff007a]' : ''}`} />
-              <span>Refresh Counts</span>
-            </button>
-          </div>
 
-          {/* Table Count Grid */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-            {[
-              { name: 'User', desc: 'Accounts & Profiles' },
-              { name: 'Video', desc: 'Video Posts' },
-              { name: 'VideoHashtag', desc: 'Hashtag index' },
-              { name: 'VideoStats', desc: 'High-speed counts' },
-              { name: 'Like', desc: 'Video likes' },
-              { name: 'Comment', desc: 'Video comments' },
-              { name: 'Share', desc: 'Video shares' },
-              { name: 'Follower', desc: 'Follower relations' },
-              { name: 'Following', desc: 'Following relations' },
-              { name: 'Conversation', desc: 'Chat threads' },
-              { name: 'Message', desc: 'Direct messages' },
-              { name: 'Notification', desc: 'User notifications' },
-              { name: 'ReportVideo', desc: 'Flagged videos' },
-              { name: 'ReportUser', desc: 'Flagged users' },
-              { name: 'Livestream', desc: 'Host broadcasts' },
-              { name: 'LiveComment', desc: 'Stream chat messages' },
-              { name: 'LivestreamViewer', desc: 'Active viewers' },
-              { name: 'AudioLibrary', desc: 'Background audio tracks' },
-              { name: 'Admin', desc: 'System administrators' },
-            ].map(t => (
-              <div key={t.name} className="p-3.5 rounded-2xl bg-[#181824] border border-neutral-800 space-y-1">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs font-bold text-white">"{t.name}"</span>
-                  <span className="px-2 py-0.5 rounded-md bg-neutral-900 text-xs font-bold text-[#ff007a]">
-                    {typeof tableCounts[t.name] === 'number' ? tableCounts[t.name] : '—'}
-                  </span>
-                </div>
-                <div className="text-[10px] text-neutral-400">{t.desc}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Add Admin Modal */}
       {showAddAdminModal && (

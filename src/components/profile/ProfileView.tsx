@@ -497,47 +497,81 @@ export const ProfileView: React.FC = () => {
       ) : (
         /* Public Video Grid matching Screenshot 5 */
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-          {(activeTabSub === 'videos' ? (userVideos.length > 0 ? userVideos : videos) : likedVideos).map(
-            (video, idx) => (
-              <div
-                key={`${video.id}_${idx}`}
-                onClick={() => handleOpenVideo(video)}
-                className="group relative aspect-[9/13] bg-[#181824] rounded-2xl overflow-hidden cursor-pointer border border-neutral-800 hover:border-[#ff007a]/60 transition-all shadow-md flex items-center justify-center"
-              >
-                {video.thumbnailUrl || video.mediaUrl ? (
-                  <img
-                    src={video.thumbnailUrl || video.mediaUrl}
-                    alt={video.caption}
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    onError={e => {
-                      (e.currentTarget as HTMLImageElement).style.display = 'none';
-                    }}
-                  />
-                ) : (
-                  <Play className="w-8 h-8 text-neutral-600" />
-                )}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
-
-                {/* Status Badges for Creator's POV */}
-                {video.status === 'pending' && (
-                  <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/90 text-black text-[10px] font-extrabold shadow backdrop-blur-sm animate-pulse">
-                    <Clock className="w-2.5 h-2.5" />
-                    <span>In Review</span>
-                  </div>
-                )}
-                {video.status === 'rejected' && (
-                  <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded-md bg-red-600/90 text-white text-[10px] font-extrabold shadow backdrop-blur-sm">
-                    Declined
-                  </div>
-                )}
-
-                {/* View count at bottom-left */}
-                <div className="absolute bottom-2 left-2 flex items-center gap-1 text-[11px] font-bold text-white drop-shadow">
-                  <Play className="w-3 h-3 fill-white" />
-                  <span>{video.viewsCount || '0'}</span>
-                </div>
+          {(activeTabSub === 'videos' ? userVideos : likedVideos).length === 0 ? (
+            <div className="col-span-full py-16 text-center space-y-3">
+              <div className="w-14 h-14 rounded-3xl bg-[#181824] border border-neutral-800 text-neutral-500 flex items-center justify-center mx-auto">
+                <Play className="w-6 h-6 text-[#ff007a]" />
               </div>
-            )
+              <p className="text-xs text-neutral-400">
+                {activeTabSub === 'videos'
+                  ? 'No videos uploaded yet.'
+                  : 'No liked videos yet.'}
+              </p>
+              {isSelf && activeTabSub === 'videos' && (
+                <button
+                  onClick={() => setActiveTab('upload')}
+                  className="py-2 px-5 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all cursor-pointer shadow-md"
+                >
+                  Upload Your First Video
+                </button>
+              )}
+            </div>
+          ) : (
+            (activeTabSub === 'videos' ? userVideos : likedVideos).map((video, idx) => {
+              const isImageThumbnail =
+                video.thumbnailUrl &&
+                (video.thumbnailUrl.startsWith('data:image/') ||
+                  video.thumbnailUrl.endsWith('.jpg') ||
+                  video.thumbnailUrl.endsWith('.jpeg') ||
+                  video.thumbnailUrl.endsWith('.png') ||
+                  video.thumbnailUrl.endsWith('.webp'));
+
+              return (
+                <div
+                  key={`${video.id}_${idx}`}
+                  onClick={() => handleOpenVideo(video)}
+                  className="group relative aspect-[9/13] bg-[#181824] rounded-2xl overflow-hidden cursor-pointer border border-neutral-800 hover:border-[#ff007a]/60 transition-all shadow-md flex items-center justify-center"
+                >
+                  {isImageThumbnail ? (
+                    <img
+                      src={video.thumbnailUrl}
+                      alt={video.caption}
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    />
+                  ) : video.mediaUrl ? (
+                    <video
+                      src={video.mediaUrl}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      className="w-full h-full object-cover pointer-events-none group-hover:scale-105 transition-transform duration-300"
+                    />
+                  ) : (
+                    <Play className="w-8 h-8 text-neutral-600" />
+                  )}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
+
+                  {/* Status Badges for Creator's POV */}
+                  {video.status === 'pending' && (
+                    <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/90 text-black text-[10px] font-extrabold shadow backdrop-blur-sm animate-pulse">
+                      <Clock className="w-2.5 h-2.5" />
+                      <span>In Review</span>
+                    </div>
+                  )}
+                  {video.status === 'rejected' && (
+                    <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded-md bg-red-600/90 text-white text-[10px] font-extrabold shadow backdrop-blur-sm">
+                      Declined
+                    </div>
+                  )}
+
+                  {/* View count at bottom-left */}
+                  <div className="absolute bottom-2 left-2 flex items-center gap-1 text-[11px] font-bold text-white drop-shadow">
+                    <Play className="w-3 h-3 fill-white" />
+                    <span>{video.viewsCount || '0'}</span>
+                  </div>
+                </div>
+              );
+            })
           )}
         </div>
       )}
@@ -770,15 +804,21 @@ export const ProfileView: React.FC = () => {
               </button>
             </div>
 
-            {/* Media Image */}
-            {selectedVideoModal.mediaUrl || selectedVideoModal.thumbnailUrl ? (
+            {/* Video Player */}
+            {selectedVideoModal.mediaUrl ? (
+              <video
+                src={selectedVideoModal.mediaUrl}
+                autoPlay
+                loop
+                playsInline
+                controls
+                className="w-full h-full object-cover"
+              />
+            ) : selectedVideoModal.thumbnailUrl ? (
               <img
-                src={selectedVideoModal.mediaUrl || selectedVideoModal.thumbnailUrl}
+                src={selectedVideoModal.thumbnailUrl}
                 alt={selectedVideoModal.caption}
                 className="w-full h-full object-cover"
-                onError={e => {
-                  (e.currentTarget as HTMLImageElement).style.display = 'none';
-                }}
               />
             ) : (
               <div className="w-full h-full bg-[#181824] flex items-center justify-center">

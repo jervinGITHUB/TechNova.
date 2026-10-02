@@ -9,18 +9,15 @@ import {
   CheckCircle2,
   RotateCcw,
   AlertCircle,
-  Link as LinkIcon,
   UploadCloud,
-  Sparkles,
+  Loader2,
 } from 'lucide-react';
 
 export const UploadView: React.FC = () => {
   const { uploadVideo, openAudioLibrary, setActiveTab } = useApp();
 
-  const [uploadMode, setUploadMode] = useState<'file' | 'url'>('file');
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
-  const [directUrlInput, setDirectUrlInput] = useState<string>('');
   const [videoFileName, setVideoFileName] = useState<string>('');
   const [videoFileSize, setVideoFileSize] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
@@ -72,20 +69,6 @@ export const UploadView: React.FC = () => {
     }
   };
 
-  const handleApplyDirectUrl = (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const trimmed = directUrlInput.trim();
-    if (!trimmed) {
-      setErrorMessage('Please enter a valid video URL.');
-      return;
-    }
-    setErrorMessage('');
-    setVideoPreviewUrl(trimmed);
-    setVideoFile(null);
-    setVideoFileName('External Web Video');
-    setVideoFileSize('Cloud Stream');
-  };
-
   const handleRemoveVideo = () => {
     if (videoPreviewUrl && videoPreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(videoPreviewUrl);
@@ -94,44 +77,83 @@ export const UploadView: React.FC = () => {
     setVideoPreviewUrl(null);
     setVideoFileName('');
     setVideoFileSize('');
-    setDirectUrlInput('');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  const sampleVideos = [
-    {
-      name: 'Cyberpunk Drone Race',
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    },
-    {
-      name: 'Forest Nature Walk',
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-    },
-    {
-      name: 'Urban Street Skate',
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyBlazes.mp4',
-    },
-  ];
+  // Extract a real snapshot thumbnail from the video first frame via canvas
+  const captureThumbnail = (): Promise<string> => {
+    return new Promise(resolve => {
+      try {
+        if (videoRef.current && videoRef.current.videoWidth > 0) {
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.min(videoRef.current.videoWidth, 480);
+          canvas.height = Math.round(canvas.width * (videoRef.current.videoHeight / videoRef.current.videoWidth)) || 720;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            if (dataUrl && dataUrl.length > 50) {
+              resolve(dataUrl);
+              return;
+            }
+          }
+        }
 
-  const handleLoadSampleVideo = (url: string, name: string) => {
-    setVideoPreviewUrl(url);
-    setVideoFile(null);
-    setVideoFileName(name);
-    setVideoFileSize('4.8 MB (High-Speed CDN)');
-    setErrorMessage('');
+        if (videoFile) {
+          const tempVideo = document.createElement('video');
+          tempVideo.preload = 'metadata';
+          tempVideo.muted = true;
+          tempVideo.playsInline = true;
+          const tempUrl = URL.createObjectURL(videoFile);
+          tempVideo.src = tempUrl;
+          tempVideo.onloadeddata = () => {
+            tempVideo.currentTime = 0.5;
+          };
+          tempVideo.onseeked = () => {
+            try {
+              const canvas = document.createElement('canvas');
+              canvas.width = 360;
+              canvas.height = 640;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                URL.revokeObjectURL(tempUrl);
+                resolve(dataUrl);
+                return;
+              }
+            } catch {}
+            URL.revokeObjectURL(tempUrl);
+            resolve('');
+          };
+          tempVideo.onerror = () => {
+            URL.revokeObjectURL(tempUrl);
+            resolve('');
+          };
+          setTimeout(() => {
+            URL.revokeObjectURL(tempUrl);
+            resolve('');
+          }, 3000);
+          return;
+        }
+      } catch {
+        resolve('');
+      }
+      resolve('');
+    });
   };
 
   const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!videoPreviewUrl) {
-      setErrorMessage('Please choose or enter a video first.');
+    if (!videoPreviewUrl || !videoFile) {
+      setErrorMessage('Please choose a video file first.');
       return;
     }
 
     setIsPublishing(true);
-    setStorageStatusMessage('');
+    setStorageStatusMessage('Uploading video, please wait...');
 
     // Extract hashtags from hashtags input and caption
     const combined = `${caption} ${hashtags}`;
@@ -152,49 +174,38 @@ export const UploadView: React.FC = () => {
     }
 
     let finalMediaUrl = videoPreviewUrl;
-    let uploadErrorMessage = '';
 
-    // If uploading a local file and Supabase is connected, upload to Supabase Storage
-    // so any device on the internet can stream it!
-    if (videoFile && getSupabaseConfig().isConnected) {
-      setStorageStatusMessage('Uploading video to Supabase Storage bucket ("videos")...');
+    // Capture visual image thumbnail for Profile and Explore grids
+    const generatedThumbnail = await captureThumbnail();
+
+    // Upload video file directly to the cloud storage bucket
+    if (getSupabaseConfig().isConnected) {
       try {
         const uploadRes = await supabaseDb.uploadVideoFile(videoFile);
         if (uploadRes.url) {
           finalMediaUrl = uploadRes.url;
-          setStorageStatusMessage('Uploaded successfully to Supabase Storage!');
         } else {
-          uploadErrorMessage = uploadRes.error || 'Storage upload failed';
           console.warn('Storage upload note:', uploadRes.error);
         }
       } catch (err: any) {
-        uploadErrorMessage = err?.message || 'Storage upload error';
-        console.warn('Failed to upload file to storage:', err);
+        console.warn('Storage upload exception:', err);
       }
     }
 
-    // If storage upload failed or returned blob URL, encode files up to 15MB as universal Data URL
-    // so the video actually plays and displays across all other devices!
-    if (videoFile && (!finalMediaUrl || finalMediaUrl.startsWith('blob:'))) {
-      if (videoFile.size <= 15 * 1024 * 1024) {
-        setStorageStatusMessage('Encoding video stream for universal multi-device playback...');
-        try {
-          const dataUrl = await new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(videoFile);
-          });
-          if (dataUrl) {
-            finalMediaUrl = dataUrl;
-          }
-        } catch {
-          // fallback
+    // If storage URL is still a local blob URL, encode file so it streams everywhere
+    if (finalMediaUrl.startsWith('blob:') && videoFile.size <= 15 * 1024 * 1024) {
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(videoFile);
+        });
+        if (dataUrl) {
+          finalMediaUrl = dataUrl;
         }
-      } else if (uploadErrorMessage) {
-        setErrorMessage(`Cloud Storage upload failed: ${uploadErrorMessage}. Please ensure a public bucket named "videos" exists in your Supabase project under Storage -> New Bucket.`);
-        setIsPublishing(false);
-        return;
+      } catch {
+        // fallback
       }
     }
 
@@ -203,7 +214,7 @@ export const UploadView: React.FC = () => {
       hashtags: extractedTags.length > 0 ? extractedTags : ['#viral', '#fyp'],
       audioTrack: selectedAudio || undefined,
       mediaUrl: finalMediaUrl,
-      thumbnailUrl: finalMediaUrl,
+      thumbnailUrl: generatedThumbnail || finalMediaUrl,
     });
 
     setIsPublishing(false);
@@ -225,7 +236,7 @@ export const UploadView: React.FC = () => {
       <div className="text-left mb-6">
         <h2 className="text-2xl font-bold font-brand text-white">Upload Video</h2>
         <p className="text-xs text-neutral-400 mt-1">
-          Share high-definition videos with viral sounds and trending hashtags across all devices
+          Share high-definition videos with viral sounds and trending hashtags
         </p>
       </div>
 
@@ -235,9 +246,9 @@ export const UploadView: React.FC = () => {
             <CheckCircle2 className="w-8 h-8 text-emerald-400" />
           </div>
           <div>
-            <h3 className="text-xl font-bold text-white font-brand">Video Published Successfully!</h3>
+            <h3 className="text-xl font-bold text-white font-brand">Video Uploaded Successfully!</h3>
             <p className="text-xs text-neutral-300 max-w-sm mx-auto mt-2 leading-relaxed">
-              Your video is now <strong>live on ViralHub</strong> and synchronized to Supabase. Other users on any phone, laptop, or tablet can view it right now on the Home Feed and Explore!
+              Your video has been published and is now live on the platform.
             </p>
             <div className="inline-block mt-3 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-semibold">
               Status: Live & Streaming
@@ -246,22 +257,16 @@ export const UploadView: React.FC = () => {
 
           <div className="flex items-center justify-center gap-3 pt-2">
             <button
-              onClick={() => setActiveTab('home')}
-              className="py-2.5 px-6 rounded-2xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer"
-            >
-              Watch on Home Feed
-            </button>
-            <button
               onClick={() => setActiveTab('profile')}
-              className="py-2.5 px-5 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-white font-semibold text-xs transition-colors cursor-pointer"
+              className="py-2.5 px-6 rounded-2xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer"
             >
               View on My Profile
             </button>
             <button
               onClick={handleResetForm}
-              className="py-2.5 px-4 rounded-2xl bg-neutral-900 hover:bg-neutral-800 text-neutral-400 hover:text-white font-medium text-xs transition-colors cursor-pointer"
+              className="py-2.5 px-5 rounded-2xl bg-neutral-800 hover:bg-neutral-700 text-white font-semibold text-xs transition-colors cursor-pointer"
             >
-              Upload Another
+              Upload Another Video
             </button>
           </div>
         </div>
@@ -278,140 +283,42 @@ export const UploadView: React.FC = () => {
             </div>
           )}
 
-          {/* Mode Switcher when no video selected */}
-          {!videoPreviewUrl && (
-            <div className="flex items-center gap-2 p-1 bg-[#181824] rounded-2xl border border-neutral-800">
-              <button
-                type="button"
-                onClick={() => setUploadMode('file')}
-                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  uploadMode === 'file'
-                    ? 'bg-[#ff007a] text-white shadow-md'
-                    : 'text-neutral-400 hover:text-white'
-                }`}
-              >
-                <UploadCloud className="w-3.5 h-3.5" />
-                <span>Upload Video File</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setUploadMode('url')}
-                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
-                  uploadMode === 'url'
-                    ? 'bg-[#ff007a] text-white shadow-md'
-                    : 'text-neutral-400 hover:text-white'
-                }`}
-              >
-                <LinkIcon className="w-3.5 h-3.5" />
-                <span>Direct Video URL</span>
-              </button>
-            </div>
-          )}
-
           {/* ================================================================= */}
-          {/* STEP 1: Video Input Zone                                          */}
+          {/* STEP 1: Video File Input Drop Zone                                */}
           {/* ================================================================= */}
           {!videoPreviewUrl ? (
-            uploadMode === 'file' ? (
-              <div
-                onDragOver={e => e.preventDefault()}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-neutral-700 hover:border-[#ff007a] rounded-3xl p-8 sm:p-10 text-center cursor-pointer transition-all bg-[#181824]/40 hover:bg-[#181824]/80 group"
+            <div
+              onDragOver={e => e.preventDefault()}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className="border-2 border-dashed border-neutral-700 hover:border-[#ff007a] rounded-3xl p-10 sm:p-14 text-center cursor-pointer transition-all bg-[#181824]/40 hover:bg-[#181824]/80 group"
+            >
+              <input
+                type="file"
+                ref={fileInputRef}
+                onChange={handleFileChange}
+                accept="video/mp4,video/webm,video/ogg,video/quicktime,video/*"
+                className="hidden"
+              />
+
+              <div className="w-16 h-16 mx-auto rounded-2xl bg-neutral-800 group-hover:bg-[#ff007a]/20 flex items-center justify-center text-neutral-300 group-hover:text-[#ff007a] transition-all mb-4 shadow-lg group-hover:scale-105">
+                <Film className="w-8 h-8" />
+              </div>
+
+              <h4 className="text-sm font-bold text-white mb-1">
+                Drag and drop your video file here
+              </h4>
+              <p className="text-xs text-neutral-400 max-w-xs mx-auto mb-4">
+                MP4, WebM, or MOV video files supported
+              </p>
+
+              <button
+                type="button"
+                className="py-2.5 px-6 rounded-full bg-neutral-800 group-hover:bg-[#ff007a] text-white text-xs font-bold border border-neutral-600 group-hover:border-[#ff007a] transition-all pointer-events-none shadow-md"
               >
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileChange}
-                  accept="video/mp4,video/webm,video/ogg,video/quicktime,video/*"
-                  className="hidden"
-                />
-
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-neutral-800 group-hover:bg-[#ff007a]/20 flex items-center justify-center text-neutral-300 group-hover:text-[#ff007a] transition-all mb-4 shadow-lg group-hover:scale-105">
-                  <Film className="w-7 h-7" />
-                </div>
-
-                <h4 className="text-sm font-bold text-white mb-1">
-                  Drag and drop your video file here
-                </h4>
-                <p className="text-xs text-neutral-400 max-w-xs mx-auto mb-4">
-                  Only MP4, WebM, or MOV video files supported
-                </p>
-
-                <button
-                  type="button"
-                  className="py-2 px-6 rounded-full bg-neutral-800 group-hover:bg-[#ff007a] text-white text-xs font-bold border border-neutral-600 group-hover:border-[#ff007a] transition-all pointer-events-none shadow-md"
-                >
-                  Browse Video Files
-                </button>
-
-                {/* Sample video helper */}
-                <div className="mt-5 pt-4 border-t border-neutral-800/80">
-                  <span className="text-[11px] text-neutral-400 block mb-2 font-medium">
-                    Or pick a test sample video with 1 click:
-                  </span>
-                  <div className="flex flex-wrap items-center justify-center gap-2">
-                    {sampleVideos.map((s, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={e => {
-                          e.stopPropagation();
-                          handleLoadSampleVideo(s.url, s.name);
-                        }}
-                        className="py-1 px-3 rounded-full bg-neutral-800 hover:bg-[#ff007a]/20 hover:text-[#ff007a] border border-neutral-700 text-neutral-300 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1"
-                      >
-                        <Sparkles className="w-3 h-3 text-[#ff007a]" />
-                        <span>{s.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="p-5 sm:p-6 rounded-3xl bg-[#181824]/60 border border-neutral-800 space-y-4">
-                <div>
-                  <label className="text-xs font-semibold text-neutral-300 block mb-1.5">
-                    Direct Public Video URL (.mp4, .webm, or CDN link)
-                  </label>
-                  <div className="flex gap-2">
-                    <input
-                      type="url"
-                      placeholder="https://example.com/videos/trending_clip.mp4"
-                      value={directUrlInput}
-                      onChange={e => setDirectUrlInput(e.target.value)}
-                      className="flex-1 bg-[#0d0d12] text-xs text-white placeholder-neutral-500 px-3.5 py-2.5 rounded-xl border border-neutral-700 focus:border-[#ff007a] outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleApplyDirectUrl()}
-                      className="py-2 px-4 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all cursor-pointer"
-                    >
-                      Load Video
-                    </button>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-neutral-800">
-                  <span className="text-[11px] text-neutral-400 block mb-2 font-medium">
-                    Or select a fast CDN video sample:
-                  </span>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {sampleVideos.map((s, idx) => (
-                      <button
-                        key={idx}
-                        type="button"
-                        onClick={() => handleLoadSampleVideo(s.url, s.name)}
-                        className="py-1 px-3 rounded-full bg-neutral-800 hover:bg-[#ff007a]/20 hover:text-[#ff007a] border border-neutral-700 text-neutral-300 text-[11px] font-semibold transition-all cursor-pointer flex items-center gap-1"
-                      >
-                        <Sparkles className="w-3 h-3 text-[#ff007a]" />
-                        <span>{s.name}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )
+                Browse Video Files
+              </button>
+            </div>
           ) : (
             /* ================================================================= */
             /* STEP 2: Video Popped Up with Live Preview & File Info             */
@@ -462,10 +369,10 @@ export const UploadView: React.FC = () => {
             </div>
           )}
 
-          {/* Storage uploading progress notice */}
+          {/* Upload progress banner */}
           {storageStatusMessage && (
             <div className="p-3 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-xs text-cyan-300 flex items-center gap-2">
-              <UploadCloud className="w-4 h-4 animate-bounce" />
+              <Loader2 className="w-4 h-4 animate-spin shrink-0" />
               <span>{storageStatusMessage}</span>
             </div>
           )}
@@ -543,14 +450,15 @@ export const UploadView: React.FC = () => {
                 </div>
               )}
 
-              {/* Bottom Right "Publish" Button */}
+              {/* Publish Button */}
               <div className="flex justify-end pt-3">
                 <button
                   type="submit"
                   disabled={isPublishing}
-                  className="py-3 px-8 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-extrabold text-sm shadow-[0_0_20px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95 disabled:opacity-50"
+                  className="py-3 px-8 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-extrabold text-sm shadow-[0_0_20px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95 disabled:opacity-50 flex items-center gap-2"
                 >
-                  {isPublishing ? 'Publishing...' : 'Publish Video'}
+                  {isPublishing && <Loader2 className="w-4 h-4 animate-spin" />}
+                  <span>{isPublishing ? 'Uploading...' : 'Publish Video'}</span>
                 </button>
               </div>
             </div>

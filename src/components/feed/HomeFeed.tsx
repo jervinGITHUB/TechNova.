@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Video } from '../../types';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
@@ -8,30 +8,26 @@ import {
   MessageCircle,
   Share2,
   Flag,
-  Volume2,
-  VolumeX,
   Play,
   Pause,
   Music,
   Radio,
   Flame,
-  Sparkles,
   Plus,
   Video as VideoIcon,
-  Clock
+  Clock,
+  RotateCw,
 } from 'lucide-react';
 
 interface VideoFeedCardProps {
   video: Video;
-  isMuted: boolean;
-  onToggleMute: () => void;
+  isActive: boolean;
   onShare: (video: Video) => void;
 }
 
 const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   video,
-  isMuted,
-  onToggleMute,
+  isActive,
   onShare,
 }) => {
   const {
@@ -47,6 +43,9 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   const [isPlaying, setIsPlaying] = useState(true);
   const [showFeedbackIcon, setShowFeedbackIcon] = useState(false);
   const [videoSrc, setVideoSrc] = useState(video.mediaUrl);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -71,38 +70,90 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     recordVideoView(video.id);
   }, [video.id]);
 
-  // Sync isPlaying state with the actual video DOM element
+  // Audio & Playback management strictly tied to isActive state:
+  // ONLY the active visible video plays with sound! Other videos are paused.
   useEffect(() => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        const playPromise = videoRef.current.play();
-        if (playPromise !== undefined) {
-          playPromise.catch(() => {
-            // If browser policy blocks sound autoplay, mute and resume
-            if (videoRef.current) {
-              videoRef.current.muted = true;
-              videoRef.current.play().catch(() => {
-                setIsPlaying(false);
-              });
-            }
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    if (isActive) {
+      videoEl.currentTime = 0;
+      setIsPlaying(true);
+      // Attempt unmuted playback with full audio
+      videoEl.muted = false;
+      const playPromise = videoEl.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          // If browser restricts unmuted autoplay before gesture, start muted
+          // and unmute on first window click/touch
+          videoEl.muted = true;
+          videoEl.play().catch(() => {
+            setIsPlaying(false);
           });
-        }
-      } else {
-        videoRef.current.pause();
+        });
       }
+    } else {
+      videoEl.pause();
+      videoEl.muted = true;
+      videoEl.currentTime = 0;
+      setIsPlaying(false);
+      setCurrentTime(0);
     }
-  }, [isPlaying, isMuted, videoSrc]);
+  }, [isActive, videoSrc]);
+
+  // Window-level interaction handler to ensure audio is unmuted on gesture
+  useEffect(() => {
+    const handleGesture = () => {
+      if (isActive && videoRef.current && videoRef.current.muted) {
+        videoRef.current.muted = false;
+      }
+    };
+    window.addEventListener('click', handleGesture, { once: true });
+    window.addEventListener('touchstart', handleGesture, { once: true });
+    return () => {
+      window.removeEventListener('click', handleGesture);
+      window.removeEventListener('touchstart', handleGesture);
+    };
+  }, [isActive]);
 
   const togglePlayPause = (e?: React.MouseEvent) => {
     if (e) {
       e.stopPropagation();
     }
-    setIsPlaying(prev => {
-      const nextState = !prev;
+    const videoEl = videoRef.current;
+    if (!videoEl) return;
+
+    if (isPlaying) {
+      videoEl.pause();
+      setIsPlaying(false);
       setShowFeedbackIcon(true);
-      setTimeout(() => setShowFeedbackIcon(false), 900);
-      return nextState;
-    });
+    } else {
+      videoEl.muted = false;
+      videoEl.play().catch(() => {});
+      setIsPlaying(true);
+      setShowFeedbackIcon(true);
+      setTimeout(() => setShowFeedbackIcon(false), 800);
+    }
+  };
+
+  const handleScrubberClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const videoEl = videoRef.current;
+    if (!videoEl || !duration) return;
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, clickX / rect.width));
+    const newTime = ratio * duration;
+    videoEl.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  const formatTime = (secs: number) => {
+    if (isNaN(secs) || secs < 0) return '00:00';
+    const m = Math.floor(secs / 60);
+    const s = Math.floor(secs % 60);
+    return `${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
   const formatCount = (count: number) => {
@@ -110,6 +161,8 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     if (count >= 1000) return (count / 1000).toFixed(1) + 'K';
     return count.toString();
   };
+
+  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div
@@ -122,22 +175,20 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           <video
             ref={videoRef}
             src={videoSrc}
-            autoPlay
             loop
-            muted={isMuted}
             playsInline
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onLoadedData={() => {
-              if (isPlaying && videoRef.current) {
-                videoRef.current.play().catch(() => {
-                  if (videoRef.current) {
-                    videoRef.current.muted = true;
-                    videoRef.current.play().catch(() => {});
-                  }
-                });
+            onTimeUpdate={() => {
+              if (videoRef.current) {
+                setCurrentTime(videoRef.current.currentTime);
               }
             }}
+            onLoadedMetadata={() => {
+              if (videoRef.current) {
+                setDuration(videoRef.current.duration || 0);
+              }
+            }}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
             onError={() => {
               if (videoSrc !== 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4') {
                 setVideoSrc('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
@@ -160,9 +211,9 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       )}
 
       {/* Dark Overlay Scrim for text readability */}
-      <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/85 pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/85 pointer-events-none" />
 
-      {/* Large Center Play / Pause Indicator */}
+      {/* Center Play / Pause Indicator (Shown when video is paused or briefly when resuming) */}
       {(!isPlaying || showFeedbackIcon) && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 transition-all duration-300">
           <div className="w-16 h-16 rounded-full bg-black/60 backdrop-blur-md border border-white/20 flex items-center justify-center text-white shadow-2xl animate-in zoom-in-75 duration-200">
@@ -205,30 +256,9 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         </button>
       </div>
 
-      {/* Top Left: Sound and Play/Pause Controls */}
-      <div
-        className="absolute top-4 left-4 z-20 flex items-center gap-2"
-        onClick={e => e.stopPropagation()}
-      >
-        <button
-          onClick={onToggleMute}
-          className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 transition-all cursor-pointer"
-          title={isMuted ? 'Unmute' : 'Mute'}
-        >
-          {isMuted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-        </button>
-        <button
-          onClick={e => togglePlayPause(e)}
-          className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 transition-all cursor-pointer"
-          title={isPlaying ? 'Pause' : 'Resume Playback'}
-        >
-          {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
-        </button>
-      </div>
-
       {/* Right Action Rail (Avatar, Like, Comment, Share, Report) */}
       <div
-        className="absolute right-3 bottom-20 z-20 flex flex-col items-center gap-5"
+        className="absolute right-3 bottom-24 z-20 flex flex-col items-center gap-5"
         onClick={e => e.stopPropagation()}
       >
         {/* Creator Avatar with click to navigate */}
@@ -248,15 +278,17 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         <div className="flex flex-col items-center">
           <button
             onClick={() => toggleLikeVideo(video.id)}
-            className={`p-2.5 rounded-full transition-all cursor-pointer transform active:scale-125 ${
+            className={`p-2.5 rounded-full backdrop-blur-md transition-all cursor-pointer transform active:scale-125 ${
               video.isLiked
-                ? 'text-[#ff007a] bg-pink-500/20'
-                : 'text-white hover:text-[#ff007a] bg-black/40 backdrop-blur-md hover:bg-black/60'
+                ? 'bg-pink-500/20 text-[#ff007a]'
+                : 'bg-black/40 text-white hover:text-[#ff007a] hover:bg-black/60'
             }`}
             title="Like"
           >
             <Heart
-              className={`w-6 h-6 ${video.isLiked ? 'fill-[#ff007a]' : ''}`}
+              className={`w-6 h-6 transition-transform ${
+                video.isLiked ? 'fill-[#ff007a] scale-110' : ''
+              }`}
             />
           </button>
           <span className="text-[11px] font-semibold text-white mt-1 drop-shadow">
@@ -313,7 +345,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       </div>
 
       {/* Bottom Details Overlay: Creator, Caption, Hashtags, Audio */}
-      <div className="absolute bottom-4 left-4 right-16 z-20 text-left">
+      <div className="absolute bottom-12 left-4 right-16 z-20 text-left">
         {/* Creator Handle */}
         <button
           onClick={() => navigateToUserProfile(video.creator.id)}
@@ -363,9 +395,29 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         )}
       </div>
 
-      {/* Animated Playing Progress Bar */}
-      <div className="absolute bottom-0 left-0 right-0 h-1 bg-neutral-800">
-        <div className="h-full bg-[#ff007a] w-3/4 animate-pulse" />
+      {/* Interactive Video Scrubber & Playback Progress Line with Time Stamp (e.g. 00:05 - 00:12) */}
+      <div
+        className="absolute bottom-0 left-0 right-0 z-30 px-3 pb-2 pt-3 bg-gradient-to-t from-black/90 to-transparent group/scrubber cursor-pointer"
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between text-[11px] font-mono text-neutral-300 mb-1 px-1 drop-shadow">
+          <span className="font-semibold text-white">
+            {formatTime(currentTime)} - {formatTime(duration || 15)}
+          </span>
+          <span className="text-[10px] text-neutral-400 font-sans tracking-wide">
+            {isPlaying ? 'Playing' : 'Paused'}
+          </span>
+        </div>
+
+        <div
+          onClick={handleScrubberClick}
+          className="relative h-1.5 hover:h-2.5 bg-white/20 hover:bg-white/30 rounded-full overflow-hidden transition-all"
+        >
+          <div
+            className="h-full bg-gradient-to-r from-[#ff007a] to-pink-500 rounded-full transition-[width] duration-100"
+            style={{ width: `${progressPercent}%` }}
+          />
+        </div>
       </div>
     </div>
   );
@@ -384,7 +436,7 @@ const EmptyFeedLayoutCard: React.FC = () => {
         </div>
         <h3 className="text-base font-bold text-white font-brand mb-1">Video Player Feed</h3>
         <p className="text-xs text-neutral-400 max-w-xs mb-5 leading-relaxed">
-          Upload MP4 videos with custom captions, audio tracks, and hashtags to display them here in full 9:16 layout.
+          Upload videos with custom captions, audio tracks, and hashtags to display them here in full 9:16 layout.
         </p>
         <button
           onClick={() => setActiveTab('upload')}
@@ -395,16 +447,6 @@ const EmptyFeedLayoutCard: React.FC = () => {
         </button>
       </div>
 
-      {/* Top Left: Sound and Play/Pause Controls */}
-      <div className="absolute top-4 left-4 z-20 flex items-center gap-2">
-        <div className="p-2 rounded-full bg-black/40 backdrop-blur-md text-neutral-400">
-          <Volume2 className="w-4 h-4" />
-        </div>
-        <div className="p-2 rounded-full bg-black/40 backdrop-blur-md text-neutral-400">
-          <Play className="w-4 h-4" />
-        </div>
-      </div>
-
       {/* Top Right: Flag */}
       <div className="absolute top-4 right-4 z-20">
         <div className="p-2 rounded-full bg-black/40 backdrop-blur-md text-neutral-500">
@@ -413,7 +455,7 @@ const EmptyFeedLayoutCard: React.FC = () => {
       </div>
 
       {/* Right Action Rail Placeholder */}
-      <div className="absolute right-3 bottom-20 z-20 flex flex-col items-center gap-5">
+      <div className="absolute right-3 bottom-24 z-20 flex flex-col items-center gap-5">
         <Avatar size="md" className="border-2 border-neutral-700" />
         <div className="flex flex-col items-center">
           <div className="p-2.5 rounded-full bg-black/40 backdrop-blur-md text-neutral-400">
@@ -436,7 +478,7 @@ const EmptyFeedLayoutCard: React.FC = () => {
       </div>
 
       {/* Bottom Details Placeholder */}
-      <div className="absolute bottom-4 left-4 right-16 z-20 text-left">
+      <div className="absolute bottom-12 left-4 right-16 z-20 text-left">
         <div className="text-sm font-bold text-neutral-300">@creator</div>
         <p className="text-xs text-neutral-500 mt-1">Your video caption will appear here</p>
         <div className="flex items-center gap-2 text-[11px] text-neutral-500 mt-2">
@@ -457,33 +499,103 @@ export const HomeFeed: React.FC = () => {
   const {
     currentUser,
     videos,
-    shareVideo,
     setActiveTab,
     setSearchQuery,
     openLiveStreamAsViewer,
     currentLiveStream,
+    syncWithSupabase,
   } = useApp();
 
-  const [isMuted, setIsMuted] = useState(true);
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
+  const [activeVideoId, setActiveVideoId] = useState<string>('');
+  const [shuffleSeed, setShuffleSeed] = useState(0);
 
   // Filter: Public feed only shows approved videos (or pending videos to their creator)
-  const visibleVideos = videos.filter(v => {
-    if (v.status === 'rejected') return false;
-    if (v.status === 'pending') {
-      return currentUser && v.creatorId === currentUser.id;
+  const visibleApprovedVideos = useMemo(() => {
+    return videos.filter(v => {
+      if (v.status === 'rejected') return false;
+      if (v.status === 'pending') {
+        return currentUser && v.creatorId === currentUser.id;
+      }
+      return true;
+    });
+  }, [videos, currentUser]);
+
+  // Feed ordering rule:
+  // "every user when logging in on the app will see their feed randomly videos , but the recently uploaded must be on the first feed, also when refreshing home the video will be random again/shuffle."
+  const feedVideos = useMemo(() => {
+    if (visibleApprovedVideos.length <= 1) return visibleApprovedVideos;
+
+    // 1. Sort by upload date to find the most recent upload
+    const sortedByRecent = [...visibleApprovedVideos].sort((a, b) => {
+      const timeA = new Date(a.createdAt || 0).getTime() || 0;
+      const timeB = new Date(b.createdAt || 0).getTime() || 0;
+      return timeB - timeA;
+    });
+
+    const newestVideo = sortedByRecent[0];
+    const otherVideos = sortedByRecent.slice(1);
+
+    // 2. Shuffle remaining videos randomly based on shuffleSeed
+    const shuffledOthers = [...otherVideos].sort(() => Math.random() - 0.5);
+
+    // 3. Newest is strictly first, rest are shuffled
+    return [newestVideo, ...shuffledOthers];
+  }, [visibleApprovedVideos, shuffleSeed]);
+
+  // Set initial active video
+  useEffect(() => {
+    if (feedVideos.length > 0 && (!activeVideoId || !feedVideos.some(v => v.id === activeVideoId))) {
+      setActiveVideoId(feedVideos[0].id);
     }
-    return true;
-  });
+  }, [feedVideos, activeVideoId]);
 
   // Reference to the middle scrollable video container
   const videoFeedRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  // IntersectionObserver to detect which video is currently visible in feed
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      entries => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
+            const vidId = entry.target.getAttribute('data-video-id');
+            if (vidId) {
+              setActiveVideoId(vidId);
+            }
+          }
+        });
+      },
+      {
+        root: videoFeedRef.current,
+        threshold: [0.5, 0.75],
+      }
+    );
+
+    itemRefs.current.forEach(el => {
+      if (el) observer.observe(el);
+    });
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [feedVideos]);
 
   const handleShare = (video: Video) => {
     setShareModalVideo(video);
   };
 
-  // If user scrolls anywhere in the home feed area, ensure the video feed scrolls smoothly
+  // Re-shuffle feed on demand and refresh remote data
+  const handleRefreshFeed = () => {
+    setShuffleSeed(prev => prev + 1);
+    syncWithSupabase();
+    if (videoFeedRef.current) {
+      videoFeedRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  // Scroll handler for wheel events
   const handleContainerWheel = (e: React.WheelEvent) => {
     if (videoFeedRef.current && e.target !== videoFeedRef.current && !videoFeedRef.current.contains(e.target as Node)) {
       videoFeedRef.current.scrollBy({
@@ -510,19 +622,27 @@ export const HomeFeed: React.FC = () => {
       {/* ========================================================================= */}
       <div
         ref={videoFeedRef}
-        className="flex-1 max-w-[430px] h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar pt-1 pb-16"
+        className="flex-1 max-w-[430px] h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar pt-1 pb-16 relative"
       >
-        {visibleVideos.length === 0 ? (
+        {feedVideos.length === 0 ? (
           <EmptyFeedLayoutCard />
         ) : (
-          visibleVideos.map(video => (
-            <VideoFeedCard
+          feedVideos.map(video => (
+            <div
               key={video.id}
-              video={video}
-              isMuted={isMuted}
-              onToggleMute={() => setIsMuted(!isMuted)}
-              onShare={handleShare}
-            />
+              data-video-id={video.id}
+              ref={el => {
+                if (el) itemRefs.current.set(video.id, el);
+                else itemRefs.current.delete(video.id);
+              }}
+              className="snap-start snap-always w-full flex justify-center"
+            >
+              <VideoFeedCard
+                video={video}
+                isActive={activeVideoId === video.id}
+                onShare={handleShare}
+              />
+            </div>
           ))
         )}
       </div>
@@ -531,6 +651,15 @@ export const HomeFeed: React.FC = () => {
       {/* RIGHT SIDE: COMPLETELY STATIC & FIXED (Live now & Trending do NOT scroll)  */}
       {/* ========================================================================= */}
       <div className="hidden lg:flex flex-col w-80 shrink-0 space-y-6 pt-1 overflow-hidden pointer-events-auto">
+        {/* Fresh Feed Shuffle / Refresh Button */}
+        <button
+          onClick={handleRefreshFeed}
+          className="w-full py-2.5 px-4 rounded-2xl bg-[#14141e] hover:bg-[#1a1a28] border border-neutral-800 text-xs font-semibold text-neutral-300 hover:text-white flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md group"
+        >
+          <RotateCw className="w-3.5 h-3.5 text-[#ff007a] group-hover:rotate-180 transition-transform duration-500" />
+          <span>Shuffle & Refresh Feed</span>
+        </button>
+
         {/* "Live now" Widget */}
         <div className="bg-[#13131a] border border-neutral-800/80 rounded-3xl p-5 shadow-xl text-left">
           <div className="flex items-center justify-between mb-4">

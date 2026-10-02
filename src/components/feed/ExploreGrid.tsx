@@ -266,11 +266,24 @@ export const ExploreGrid: React.FC = () => {
               >
                 {/* Thumbnail with overlay gradient */}
                 <div className="relative w-full h-full overflow-hidden bg-gradient-to-b from-[#191926] to-[#0f0f16]">
-                  {video.thumbnailUrl || video.mediaUrl ? (
+                  {video.thumbnailUrl &&
+                  (video.thumbnailUrl.startsWith('data:image/') ||
+                    video.thumbnailUrl.endsWith('.jpg') ||
+                    video.thumbnailUrl.endsWith('.jpeg') ||
+                    video.thumbnailUrl.endsWith('.png') ||
+                    video.thumbnailUrl.endsWith('.webp')) ? (
                     <img
-                      src={video.thumbnailUrl || video.mediaUrl}
+                      src={video.thumbnailUrl}
                       alt={video.caption}
                       className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                    />
+                  ) : video.mediaUrl ? (
+                    <video
+                      src={video.mediaUrl}
+                      preload="metadata"
+                      muted
+                      playsInline
+                      className="w-full h-full object-cover pointer-events-none group-hover:scale-105 transition-transform duration-500"
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-neutral-600">
