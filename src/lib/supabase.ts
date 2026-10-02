@@ -1203,13 +1203,53 @@ export const supabaseDb = {
         NotificationType: item.type,
         NotificationMessage: `${item.actor.displayName || 'Someone'} ${item.targetText || ''}`,
         IsRead: !item.isUnread,
-        NotificationDate: new Date().toISOString(),
+        NotificationDate: item.createdAt || new Date().toISOString(),
       });
 
       return !error;
     } catch (e) {
       console.warn('Supabase insertNotification fallback:', e);
       return false;
+    }
+  },
+
+  async fetchNotifications(): Promise<NotificationItem[] | null> {
+    const client = getSupabaseClient();
+    if (!client) return null;
+
+    try {
+      const { data, error } = await client
+        .from('Notification')
+        .select('*')
+        .order('NotificationDate', { ascending: false });
+
+      if (error || !data) return null;
+
+      const items: NotificationItem[] = data.map((r: any) => {
+        const isRevoked = r.NotificationType === 'video_revoked';
+        const isAppeal = r.NotificationType === 'appeal_status';
+        return {
+          id: r.NotificationID,
+          recipientId: r.UserID,
+          type: (r.NotificationType as any) || 'like',
+          actor: {
+            id: isRevoked || isAppeal ? 'viralhub_moderation' : 'system',
+            username: isRevoked || isAppeal ? 'moderation' : 'viralhub',
+            displayName: isRevoked || isAppeal ? 'ViralHub Moderation' : 'ViralHub',
+            avatar: '',
+          },
+          targetText: r.NotificationMessage || '',
+          timestamp: r.NotificationDate || new Date().toISOString(),
+          createdAt: r.NotificationDate || new Date().toISOString(),
+          isUnread: !r.IsRead,
+          videoId: r.VideoID || undefined,
+          appealStatus: isRevoked ? 'none' : undefined,
+        };
+      });
+      return items;
+    } catch (e) {
+      console.warn('Supabase fetchNotifications fallback:', e);
+      return null;
     }
   },
 
@@ -1234,6 +1274,7 @@ export const supabaseDb = {
         vidRes.data.forEach((r: any) => {
           items.push({
             id: r.ReportID,
+            reporterId: r.ReporterUserID || undefined,
             type: 'video',
             targetId: r.VideoID,
             targetName: `Video #${r.VideoID ? String(r.VideoID).slice(0, 8) : 'Unknown'}`,
@@ -1242,6 +1283,7 @@ export const supabaseDb = {
             description: r.Reason || '',
             status: (r.Status as any) || 'Under Review',
             timestamp: r.ReportedDate ? new Date(r.ReportedDate).toLocaleDateString() : 'Recent',
+            createdAt: r.ReportedDate || new Date().toISOString(),
           });
         });
       }
@@ -1250,6 +1292,7 @@ export const supabaseDb = {
         userRes.data.forEach((r: any) => {
           items.push({
             id: r.ReportID,
+            reporterId: r.ReportUserID || undefined,
             type: 'user',
             targetId: r.ReportedUserID,
             targetName: `User #${r.ReportedUserID ? String(r.ReportedUserID).slice(0, 8) : 'Account'}`,
@@ -1258,6 +1301,7 @@ export const supabaseDb = {
             description: r.Reason || '',
             status: (r.Status as any) || 'Under Review',
             timestamp: r.ReportedDate ? new Date(r.ReportedDate).toLocaleDateString() : 'Recent',
+            createdAt: r.ReportedDate || new Date().toISOString(),
           });
         });
       }
@@ -1286,7 +1330,7 @@ export const supabaseDb = {
           VideoID: targetUuid,
           Reason: reasonText,
           Status: report.status || 'Under Review',
-          ReportedDate: new Date().toISOString(),
+          ReportedDate: report.createdAt || new Date().toISOString(),
         });
         return !error;
       } else {
@@ -1296,7 +1340,7 @@ export const supabaseDb = {
           ReportedUserID: targetUuid,
           Reason: reasonText,
           Status: report.status || 'Under Review',
-          ReportedDate: new Date().toISOString(),
+          ReportedDate: report.createdAt || new Date().toISOString(),
         });
         return !error;
       }
@@ -1318,6 +1362,10 @@ export const supabaseDb = {
       const rUuid = toUuid(reportId);
       const table = type === 'video' ? 'ReportVideo' : 'ReportUser';
       const { error } = await client.from(table).update({ Status: status }).eq('ReportID', rUuid);
+      if (error) {
+        const altTable = type === 'video' ? 'ReportUser' : 'ReportVideo';
+        await client.from(altTable).update({ Status: status }).eq('ReportID', rUuid);
+      }
       return !error;
     } catch (e) {
       console.warn('Supabase updateReportStatus error:', e);

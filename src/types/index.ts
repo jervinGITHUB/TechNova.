@@ -114,6 +114,7 @@ export type FollowStatus = 'none' | 'requested' | 'following' | 'friends';
 export interface NotificationItem {
   id: string;
   recipientId?: string;
+  recipientEmail?: string;
   type: 'like' | 'follow' | 'follow_request' | 'comment' | 'share' | 'video_revoked' | 'appeal_status';
   actor: {
     id: string;
@@ -123,6 +124,7 @@ export interface NotificationItem {
   };
   targetText?: string;
   timestamp: string;
+  createdAt?: string;
   isUnread: boolean;
   videoId?: string;
   requestId?: string;
@@ -134,6 +136,7 @@ export interface NotificationItem {
 
 export interface ReportItem {
   id: string;
+  reporterId?: string;
   type: 'video' | 'user';
   targetId: string;
   targetName: string;
@@ -143,6 +146,7 @@ export interface ReportItem {
   description?: string;
   status: 'Under Review' | 'Approved' | 'Rejected';
   timestamp: string;
+  createdAt?: string;
 }
 
 export interface LiveViewer {

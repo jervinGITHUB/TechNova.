@@ -36,6 +36,7 @@ import {
   signInWithEmail,
   signUpWithEmail,
   signOutSupabase,
+  toUuid,
 } from '../lib/supabase';
 
 // Ensure any legacy cached sample data in browser localStorage is wiped on boot
@@ -291,7 +292,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
     const raw = storage.get<NotificationItem[]>('notifications', INITIAL_NOTIFICATIONS);
     // Sanitize any previous simulated reciprocal notifications or old entries where actor is user_andrea
-    return raw.filter(n => !n.targetText?.includes('back!') && n.actor?.id !== 'user_andrea');
+    return raw
+      .filter(n => !n.targetText?.includes('back!') && n.actor?.id !== 'user_andrea')
+      .map(n => {
+        if (!n.createdAt && (!n.timestamp || n.timestamp.toLowerCase() === 'just now')) {
+          const nowIso = new Date().toISOString();
+          return { ...n, timestamp: nowIso, createdAt: nowIso };
+        }
+        return n;
+      });
   });
   const [reports, setReports] = useState<ReportItem[]>(() => storage.get('reports', INITIAL_REPORTS));
   const [admins, setAdmins] = useState<AdminRecord[]>(() => storage.get('admins', []));
@@ -439,11 +448,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!config.isConnected) return;
 
     try {
-      const [remoteUsers, remoteVideos, remoteAdmins, remoteReports] = await Promise.all([
+      const [remoteUsers, remoteVideos, remoteAdmins, remoteReports, remoteNotifications] = await Promise.all([
         supabaseDb.fetchUsers(),
         supabaseDb.fetchVideos(),
         supabaseDb.fetchAdmins(),
         supabaseDb.fetchReports(),
+        supabaseDb.fetchNotifications(),
       ]);
 
       if (remoteUsers && remoteUsers.length > 0) {
@@ -490,9 +500,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (remoteReports && remoteReports.length > 0) {
         setReports(prev => {
-          const map = new Map(prev.map(r => [r.id, r]));
-          remoteReports.forEach(r => map.set(r.id, r));
-          return Array.from(map.values());
+          const map = new Map<string, ReportItem>();
+          prev.forEach(r => map.set(r.id, r));
+          remoteReports.forEach(r => {
+            const existingKey = Array.from(map.keys()).find(
+              k => k === r.id || toUuid(k) === toUuid(r.id)
+            );
+            if (existingKey) {
+              const existing = map.get(existingKey)!;
+              map.set(existingKey, {
+                ...existing,
+                status: r.status,
+                targetName: existing.targetName || r.targetName,
+                targetThumbnail: existing.targetThumbnail || r.targetThumbnail,
+                targetSubtitle: existing.targetSubtitle || r.targetSubtitle,
+              });
+            } else {
+              map.set(r.id, r);
+            }
+          });
+          const merged = Array.from(map.values());
+          storage.set('reports', merged);
+          return merged;
+        });
+      }
+
+      if (remoteNotifications && remoteNotifications.length > 0) {
+        setNotifications(prev => {
+          const map = new Map<string, NotificationItem>();
+          prev.forEach(n => map.set(n.id, n));
+          remoteNotifications.forEach(n => {
+            const existingKey = Array.from(map.keys()).find(
+              k => k === n.id || toUuid(k) === toUuid(n.id)
+            );
+            if (existingKey) {
+              const existing = map.get(existingKey)!;
+              map.set(existingKey, {
+                ...n,
+                ...existing,
+                isUnread: n.isUnread,
+              });
+            } else {
+              map.set(n.id, n);
+            }
+          });
+          const merged = Array.from(map.values());
+          storage.set('notifications', merged);
+          return merged;
         });
       }
     } catch (err) {
@@ -674,16 +728,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return acc + (conv.unreadCount || 0);
   }, 0);
 
-  // User's own notifications inbox: ONLY interactions from other users to currentUser!
-  // "for example someone like,comment,share,follow/followback all the interactions of other user to my own profile , that's the only will be pop up on my notification"
+  // User's own notifications inbox: interactions addressed to currentUser
   const userNotifications = notifications.filter(n => {
     if (!currentUser) return false;
-    // 1. MUST be explicitly addressed to currentUser
-    if (n.recipientId !== currentUser.id) return false;
-    // 2. CRITICAL: NEVER show a notification caused by currentUser themselves!
-    if (n.actor.id === currentUser.id) return false;
-    // 3. Filter out any simulated reciprocal artifacts
+
+    // Check if notification is addressed to currentUser (by direct ID, email, or UUID equivalence)
+    const isRecipient =
+      !n.recipientId ||
+      n.recipientId === currentUser.id ||
+      (currentUser.email && n.recipientId.toLowerCase() === currentUser.email.toLowerCase()) ||
+      (n.recipientEmail && currentUser.email && n.recipientEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+      toUuid(n.recipientId) === toUuid(currentUser.id);
+
+    if (!isRecipient) return false;
+
+    // NEVER drop moderation/system notifications (video_revoked, appeal_status, report updates)
+    if (n.type === 'video_revoked' || n.type === 'appeal_status') {
+      return true;
+    }
+
+    // For social notifications (likes, comments, follows), don't notify user of their own actions
+    if (n.actor?.id && n.actor.id === currentUser.id) {
+      return false;
+    }
+
+    // Filter out any simulated reciprocal artifacts
     if (n.targetText?.includes('back!')) return false;
+
     return true;
   });
 
@@ -1149,11 +1220,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (targetUser.isPrivate) {
       // Private account: send request
       const reqId = `req_${Date.now()}`;
+      const nowIso = new Date().toISOString();
       const newReq: FollowRequest = {
         id: reqId,
         fromUserId: currentUser.id,
         toUserId: targetUser.id,
-        timestamp: 'Just now',
+        timestamp: nowIso,
       };
       setFollowRequests(prev => [...prev, newReq]);
 
@@ -1168,11 +1240,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           avatar: currentUser.avatar,
         },
         targetText: 'sent you a follow request.',
-        timestamp: 'Just now',
+        timestamp: nowIso,
+        createdAt: nowIso,
         isUnread: true,
         requestId: reqId,
       };
-      setNotifications(prev => [reqNotif, ...prev]);
+      setNotifications(prev => {
+        const next = [reqNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
     } else {
       // Public account: Follow immediately
       setFollowRelations(prev => [
@@ -1202,6 +1279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? 'followed you back. You are now friends!'
         : 'started following you.';
 
+      const nowIso = new Date().toISOString();
       const newNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
         recipientId: targetUser.id,
@@ -1213,10 +1291,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           avatar: currentUser.avatar,
         },
         targetText: notifText,
-        timestamp: 'Just now',
+        timestamp: nowIso,
+        createdAt: nowIso,
         isUnread: true,
       };
-      setNotifications(prev => [newNotif, ...prev]);
+      setNotifications(prev => {
+        const next = [newNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
       supabaseDb.toggleFollow(currentUser.id, targetUser.id, true);
       supabaseDb.insertNotification(newNotif, targetUser.id);
     }
@@ -1263,6 +1346,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return next;
         });
 
+        const nowIso = new Date().toISOString();
         // Send confirmation notification to requester
         const replyNotif: NotificationItem = {
           id: `notif_${Date.now()}`,
@@ -1275,11 +1359,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             avatar: currentUser.avatar,
           },
           targetText: 'accepted your follow request. You are now friends!',
-          timestamp: 'Just now',
+          timestamp: nowIso,
+          createdAt: nowIso,
           isUnread: true,
           status: 'accepted',
         };
-        setNotifications(prev => [replyNotif, ...prev]);
+        setNotifications(prev => {
+          const next = [replyNotif, ...prev];
+          storage.set('notifications', next);
+          return next;
+        });
 
         supabaseDb.toggleFollow(requesterId, currentUser.id, true);
         supabaseDb.toggleFollow(currentUser.id, requesterId, true);
@@ -1294,6 +1383,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return next;
         });
 
+        const nowIso = new Date().toISOString();
         const replyNotif: NotificationItem = {
           id: `notif_${Date.now()}`,
           recipientId: requesterId,
@@ -1305,11 +1395,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             avatar: currentUser.avatar,
           },
           targetText: 'accepted your follow request.',
-          timestamp: 'Just now',
+          timestamp: nowIso,
+          createdAt: nowIso,
           isUnread: true,
           status: 'accepted',
         };
-        setNotifications(prev => [replyNotif, ...prev]);
+        setNotifications(prev => {
+          const next = [replyNotif, ...prev];
+          storage.set('notifications', next);
+          return next;
+        });
 
         supabaseDb.toggleFollow(requesterId, currentUser.id, true);
         supabaseDb.insertNotification(replyNotif, requesterId);
@@ -1440,6 +1535,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // 4. Send notification ONLY to the VIDEO CREATOR (if not currentUser)
     if (willLike && video.creatorId !== currentUser.id) {
+      const nowIso = new Date().toISOString();
       const newNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
         recipientId: video.creatorId, // Targeted to video creator!
@@ -1451,11 +1547,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           avatar: currentUser.avatar,
         },
         targetText: `liked your video: "${video.caption.slice(0, 30)}..."`,
-        timestamp: 'Just now',
+        timestamp: nowIso,
+        createdAt: nowIso,
         isUnread: true,
         videoId: video.id,
       };
-      setNotifications(prev => [newNotif, ...prev]);
+      setNotifications(prev => {
+        const next = [newNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
       supabaseDb.insertNotification(newNotif, video.creatorId);
     }
 
@@ -1480,6 +1581,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Trigger notification to the VIDEO CREATOR (NOT currentUser)
     const video = videos.find(v => v.id === videoId);
     if (video && video.creatorId !== currentUser.id) {
+      const nowIso = new Date().toISOString();
       const newNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
         recipientId: video.creatorId, // Recipient is the VIDEO CREATOR!
@@ -1491,11 +1593,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           avatar: currentUser.avatar,
         },
         targetText: `commented to your video: "${text.slice(0, 35)}"`,
-        timestamp: 'Just now',
+        timestamp: nowIso,
+        createdAt: nowIso,
         isUnread: true,
         videoId: video.id,
       };
-      setNotifications(prev => [newNotif, ...prev]);
+      setNotifications(prev => {
+        const next = [newNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
       supabaseDb.insertNotification(newNotif, video.creatorId);
     }
   };
@@ -1518,6 +1625,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Trigger notification to the VIDEO CREATOR (NOT currentUser)
     const video = videos.find(v => v.id === videoId);
     if (video && currentUser && video.creatorId !== currentUser.id) {
+      const nowIso = new Date().toISOString();
       const newNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
         recipientId: video.creatorId, // Recipient is the VIDEO CREATOR!
@@ -1529,11 +1637,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           avatar: currentUser.avatar,
         },
         targetText: `shared your video: "${video.caption.slice(0, 30)}..."`,
-        timestamp: 'Just now',
+        timestamp: nowIso,
+        createdAt: nowIso,
         isUnread: true,
         videoId: video.id,
       };
-      setNotifications(prev => [newNotif, ...prev]);
+      setNotifications(prev => {
+        const next = [newNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
       supabaseDb.insertNotification(newNotif, video.creatorId);
     }
   };
@@ -1643,9 +1756,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Submit report (BR-006, BR-007, BR-017, BR-025)
   const submitReport = (report: Omit<ReportItem, 'id' | 'timestamp' | 'status'>) => {
+    const reportId = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
     const newReport: ReportItem = {
       ...report,
-      id: `rep_${Date.now()}`,
+      id: reportId,
+      reporterId: currentUser?.id,
       status: 'Under Review',
       timestamp: new Date().toLocaleDateString('en-US', {
         month: 'numeric',
@@ -1654,8 +1770,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         hour: 'numeric',
         minute: '2-digit',
       }),
+      createdAt: nowIso,
     };
-    setReports(prev => [newReport, ...prev]);
+    setReports(prev => {
+      const next = [newReport, ...prev];
+      storage.set('reports', next);
+      return next;
+    });
     supabaseDb.insertReport(newReport, currentUser?.id);
 
     // If reporting a video, increment reportsCount
@@ -2016,27 +2137,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         appealStatus: 'none',
       });
 
-      // Send notification to the uploader/user
+      const recipientUserId = video.creatorId || video.creator?.id || '';
+      const recipientUserEmail = video.creator?.email || '';
+      const nowIso = new Date().toISOString();
+
+      // Send notification to the uploader/user with dedicated moderation actor
       const revokeNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
-        recipientId: video.creatorId,
+        recipientId: recipientUserId,
+        recipientEmail: recipientUserEmail,
         type: 'video_revoked',
         actor: {
-          id: currentUser?.id || 'admin',
-          username: currentUser?.username || 'admin',
-          displayName: currentUser?.displayName || 'ViralHub Moderation',
+          id: 'viralhub_moderation',
+          username: 'moderation',
+          displayName: 'ViralHub Moderation',
           avatar: '',
         },
         targetText: `revoked your video "${video.caption.slice(0, 30)}". Reason: ${finalReason}. You may submit an appeal.`,
-        timestamp: 'Just now',
+        timestamp: nowIso,
+        createdAt: nowIso,
         isUnread: true,
         videoId: video.id,
         rejectionReason: finalReason,
         appealStatus: 'none',
       };
 
-      setNotifications(prev => [revokeNotif, ...prev]);
-      supabaseDb.insertNotification(revokeNotif, video.creatorId);
+      setNotifications(prev => {
+        const next = [revokeNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
+      supabaseDb.insertNotification(revokeNotif, recipientUserId);
     }
     return true;
   };
@@ -2060,6 +2191,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       )
     );
 
+    const nowIso = new Date().toISOString();
     const appealNotif: NotificationItem = {
       id: `notif_${Date.now()}`,
       recipientId: currentUser.id,
@@ -2071,7 +2203,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         avatar: '',
       },
       targetText: `Appeal submitted for "${video.caption.slice(0, 30)}". Status: Pending Review.`,
-      timestamp: 'Just now',
+      timestamp: nowIso,
+      createdAt: nowIso,
       isUnread: true,
       videoId: video.id,
       appealStatus: 'pending',
@@ -2084,7 +2217,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ? { ...n, appealStatus: 'pending' as const, appealReason: cleanReason }
           : n
       );
-      return [appealNotif, ...updated];
+      const next = [appealNotif, ...updated];
+      storage.set('notifications', next);
+      return next;
     });
 
     supabaseDb.insertNotification(appealNotif, currentUser.id);
@@ -2097,6 +2232,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<boolean> => {
     const video = videos.find(v => v.id === videoId);
     if (!video) return false;
+
+    const nowIso = new Date().toISOString();
+    const recipientUserId = video.creatorId || video.creator?.id || '';
+    const recipientUserEmail = video.creator?.email || '';
 
     if (decision === 'approved') {
       setVideos(prev =>
@@ -2114,23 +2253,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const approvedNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
-        recipientId: video.creatorId,
+        recipientId: recipientUserId,
+        recipientEmail: recipientUserEmail,
         type: 'appeal_status',
         actor: {
-          id: currentUser?.id || 'admin',
-          username: currentUser?.username || 'admin',
-          displayName: currentUser?.displayName || 'ViralHub Moderation',
+          id: 'viralhub_moderation',
+          username: 'moderation',
+          displayName: 'ViralHub Moderation',
           avatar: '',
         },
         targetText: `Great news! Your appeal for "${video.caption.slice(0, 30)}" was Approved. Your video is now live on the feed!`,
-        timestamp: 'Just now',
+        timestamp: nowIso,
+        createdAt: nowIso,
         isUnread: true,
         videoId: video.id,
         appealStatus: 'approved',
       };
 
-      setNotifications(prev => [approvedNotif, ...prev]);
-      supabaseDb.insertNotification(approvedNotif, video.creatorId);
+      setNotifications(prev => {
+        const next = [approvedNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
+      supabaseDb.insertNotification(approvedNotif, recipientUserId);
     } else {
       setVideos(prev =>
         prev.map(v =>
@@ -2145,23 +2290,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const declinedNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
-        recipientId: video.creatorId,
+        recipientId: recipientUserId,
+        recipientEmail: recipientUserEmail,
         type: 'appeal_status',
         actor: {
-          id: currentUser?.id || 'admin',
-          username: currentUser?.username || 'admin',
-          displayName: currentUser?.displayName || 'ViralHub Moderation',
+          id: 'viralhub_moderation',
+          username: 'moderation',
+          displayName: 'ViralHub Moderation',
           avatar: '',
         },
         targetText: `Your appeal for "${video.caption.slice(0, 30)}" was Declined by moderation after careful review.`,
-        timestamp: 'Just now',
+        timestamp: nowIso,
+        createdAt: nowIso,
         isUnread: true,
         videoId: video.id,
         appealStatus: 'declined',
       };
 
-      setNotifications(prev => [declinedNotif, ...prev]);
-      supabaseDb.insertNotification(declinedNotif, video.creatorId);
+      setNotifications(prev => {
+        const next = [declinedNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
+      supabaseDb.insertNotification(declinedNotif, recipientUserId);
     }
     return true;
   };
@@ -2190,10 +2341,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     type: 'video' | 'user',
     status: 'Approved' | 'Rejected' | 'Under Review'
   ): Promise<boolean> => {
-    setReports(prev =>
-      prev.map(r => (r.id === reportId ? { ...r, status } : r))
-    );
+    let targetReport: ReportItem | undefined;
+
+    setReports(prev => {
+      const next = prev.map(r => {
+        const matches =
+          r.id === reportId ||
+          toUuid(r.id) === toUuid(reportId) ||
+          (toUuid(r.targetId) === toUuid(reportId));
+        if (matches) {
+          targetReport = { ...r, status };
+          return { ...r, status };
+        }
+        return r;
+      });
+      storage.set('reports', next);
+      return next;
+    });
+
     await supabaseDb.updateReportStatus(reportId, type, status);
+
+    // If report has a known reporter, send them a status update notification
+    if (targetReport && targetReport.reporterId) {
+      const statusTitle =
+        status === 'Approved'
+          ? 'Approved & Action Taken'
+          : status === 'Rejected'
+          ? 'Declined / Dismissed'
+          : 'Under Review';
+      const nowIso = new Date().toISOString();
+      const reportNotif: NotificationItem = {
+        id: `notif_rep_${Date.now()}`,
+        recipientId: targetReport.reporterId,
+        type: 'appeal_status',
+        actor: {
+          id: 'viralhub_moderation',
+          username: 'moderation',
+          displayName: 'ViralHub Moderation',
+          avatar: '',
+        },
+        targetText: `reviewed your report regarding "${targetReport.targetName}". Status is now: ${statusTitle}.`,
+        timestamp: nowIso,
+        createdAt: nowIso,
+        isUnread: true,
+      };
+      setNotifications(prev => {
+        const next = [reportNotif, ...prev];
+        storage.set('notifications', next);
+        return next;
+      });
+      supabaseDb.insertNotification(reportNotif, targetReport.reporterId);
+    }
+
     return true;
   };
 

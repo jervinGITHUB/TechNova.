@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
+import { formatRealtimeAgo } from '../../utils/time';
 import {
   Bell,
   Heart,
@@ -32,6 +33,15 @@ export const NotificationsView: React.FC = () => {
     declineFollowRequest,
     submitVideoAppeal,
   } = useApp();
+
+  // Realtime relative timestamp ticker (updates "Just now" to "1m ago", "5m ago", etc. automatically)
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTick(t => t + 1);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Appeal Modal State
   const [appealModalVideoId, setAppealModalVideoId] = useState<string | null>(null);
@@ -292,7 +302,7 @@ export const NotificationsView: React.FC = () => {
                     )}
                   </div>
                   <div className="text-[11px] text-neutral-500 mt-1 flex items-center gap-2">
-                    <span>{item.timestamp}</span>
+                    <span>{formatRealtimeAgo(item.createdAt || item.timestamp)}</span>
                     {!item.isUnread && (
                       <span className="text-[10px] text-neutral-500 flex items-center gap-0.5">
                         <CheckCheck className="w-3 h-3 text-emerald-400" />

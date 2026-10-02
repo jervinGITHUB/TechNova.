@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import { X, Send, Heart, ChevronUp, ChevronDown, MessageSquare } from 'lucide-react';
+import { formatRealtimeAgo } from '../../utils/time';
 
 interface CommentEntry {
   id: string;
@@ -97,7 +98,7 @@ export const CommentsDrawer: React.FC = () => {
                     name: currentUser.displayName,
                     avatar: currentUser.avatar,
                     text: inputVal.trim(),
-                    timestamp: 'Just now',
+                    timestamp: new Date().toISOString(),
                   },
                 ],
               };
@@ -113,7 +114,7 @@ export const CommentsDrawer: React.FC = () => {
         name: currentUser.displayName,
         avatar: currentUser.avatar,
         text: inputVal.trim(),
-        timestamp: 'Just now',
+        timestamp: new Date().toISOString(),
         likesCount: 0,
         isLiked: false,
       };
@@ -306,7 +307,7 @@ export const CommentsDrawer: React.FC = () => {
                         </span>
                         {comment.timestamp && (
                           <span className="text-[10px] text-neutral-400 font-normal">
-                            {comment.timestamp}
+                            {formatRealtimeAgo(comment.timestamp)}
                           </span>
                         )}
                       </div>
@@ -363,7 +364,7 @@ export const CommentsDrawer: React.FC = () => {
                             </span>
                             {reply.timestamp && (
                               <span className="text-[9px] text-neutral-400">
-                                {reply.timestamp}
+                                {formatRealtimeAgo(reply.timestamp)}
                               </span>
                             )}
                           </div>

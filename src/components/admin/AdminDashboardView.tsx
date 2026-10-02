@@ -1057,11 +1057,11 @@ export const AdminDashboardView: React.FC = () => {
                           report.status === 'Approved'
                             ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
                             : report.status === 'Rejected'
-                            ? 'bg-neutral-800 text-neutral-400 border border-neutral-700'
+                            ? 'bg-red-500/15 text-red-400 border border-red-500/30'
                             : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
                         }`}
                       >
-                        Status: {report.status}
+                        Status: {report.status === 'Rejected' ? 'Declined' : report.status}
                       </span>
                     </div>
 
@@ -1107,14 +1107,14 @@ export const AdminDashboardView: React.FC = () => {
                       </button>
                     )}
 
-                    {/* Dismiss / Reject Report */}
+                    {/* Dismiss / Decline Report */}
                     {report.status !== 'Rejected' && (
                       <button
                         onClick={() => updateReportStatusAdmin(report.id, report.type, 'Rejected')}
-                        className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1"
+                        className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1 border border-red-500/30"
                       >
                         <XCircle className="w-3.5 h-3.5" />
-                        <span>Dismiss</span>
+                        <span>Decline Report</span>
                       </button>
                     )}
                   </div>
