@@ -247,6 +247,18 @@ export const AuthPage: React.FC = () => {
                 >
                   Register with another email
                 </button>
+
+                <div className="mt-2 p-3 rounded-xl bg-[#181824] border border-neutral-800 text-[11px] text-neutral-400 text-left space-y-1">
+                  <div className="font-semibold text-neutral-200">
+                    💡 Not seeing the email in your inbox?
+                  </div>
+                  <div className="text-[10px] text-neutral-400 leading-relaxed">
+                    • Check your <strong>Spam</strong> or <strong>Junk</strong> folder for an email from Supabase.
+                  </div>
+                  <div className="text-[10px] text-neutral-400 leading-relaxed">
+                    • In your Supabase Dashboard, you can also manually confirm any account or disable email verification in <strong>Authentication → Providers → Email</strong>.
+                  </div>
+                </div>
               </div>
             </div>
           ) : authView === 'login' ? (

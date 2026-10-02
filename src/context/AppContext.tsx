@@ -733,6 +733,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           map.set(newUser.id, newUser);
           return Array.from(map.values());
         });
+        // If email is already registered in Supabase Auth, identities array is empty
+        if (user.identities && user.identities.length === 0) {
+          return {
+            success: false,
+            message: 'This email is already registered. Please click "Go to Login" to sign in with your password.',
+          };
+        }
+
         // Check if email confirmation is required by Supabase Auth
         const isConfirmed = Boolean(user.email_confirmed_at || user.confirmed_at || session);
         if (!isConfirmed) {
