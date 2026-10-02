@@ -57,6 +57,8 @@ export interface Video {
   isLiked?: boolean;
   createdAt: string;
   reportsCount?: number;
+  status?: 'pending' | 'approved' | 'rejected';
+  rejectionReason?: string;
 }
 
 export interface MessageReplyInfo {
@@ -143,6 +145,28 @@ export interface LiveViewer {
   displayName: string;
   avatar: string;
   joinedAt: string;
+}
+
+export interface AdminRecord {
+  adminId: string;
+  userId?: string;
+  username: string;
+  email: string;
+  role: 'Super Admin' | 'Admin' | 'Content Moderator';
+  permissions: string[];
+  createdAt: string;
+  lastLogin?: string;
+}
+
+export interface SystemStats {
+  totalUsers: number;
+  totalVideos: number;
+  totalLikes: number;
+  totalComments: number;
+  totalShares: number;
+  totalReports: number;
+  activeLivestreams: number;
+  totalAdmins: number;
 }
 
 export interface LiveStreamMessage {

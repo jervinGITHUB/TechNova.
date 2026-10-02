@@ -18,6 +18,8 @@ import { ReportModals } from './components/modals/ReportModals';
 import { ReportHistoryView } from './components/modals/ReportHistoryView';
 import { AudioLibraryModal } from './components/modals/AudioLibraryModal';
 import { SupabaseVercelModal } from './components/modals/SupabaseVercelModal';
+import { AdminDashboardView } from './components/admin/AdminDashboardView';
+import { AdminLoginGate } from './components/admin/AdminLoginGate';
 import { X } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -27,6 +29,7 @@ const AppContent: React.FC = () => {
     supabaseModalOpen,
     setSupabaseModalOpen,
     syncWithSupabase,
+    isAdmin,
   } = useApp();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -91,6 +94,15 @@ const AppContent: React.FC = () => {
         return (
           <div className="flex-1 h-full overflow-y-auto">
             <ReportHistoryView />
+          </div>
+        );
+      case 'admin':
+        if (!isAdmin) {
+          return <AdminLoginGate />;
+        }
+        return (
+          <div className="flex-1 h-full overflow-y-auto">
+            <AdminDashboardView />
           </div>
         );
       default:

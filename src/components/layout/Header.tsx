@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
-import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft } from 'lucide-react';
+import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft, Shield } from 'lucide-react';
 
 interface HeaderProps {
   onToggleMobileNav?: () => void;
@@ -17,6 +17,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     users,
     videos,
     navigateToUserProfile,
+    isAdmin,
   } = useApp();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -392,8 +393,23 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             )}
           </div>
 
-          {/* Right Controls: Notification Bell + "+ Upload" Button */}
-          <div className="flex items-center gap-2.5 sm:gap-4 shrink-0">
+          {/* Right Controls: Admin (if authorized) + Notification Bell + "+ Upload" Button */}
+          <div className="flex items-center gap-2 sm:gap-3.5 shrink-0">
+            {/* Admin Command Center Quick Button (Hidden from regular users) */}
+            {isAdmin && (
+              <button
+                onClick={() => setActiveTab('admin')}
+                className={`p-2 sm:p-2.5 rounded-full transition-colors cursor-pointer ${
+                  activeTab === 'admin'
+                    ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
+                    : 'text-neutral-400 hover:text-white hover:bg-[#181822]'
+                }`}
+                title="Admin Command Center"
+              >
+                <Shield className="w-5 h-5 text-purple-400" />
+              </button>
+            )}
+
             {/* Notification Bell */}
             <button
               onClick={() => setActiveTab('notifications')}

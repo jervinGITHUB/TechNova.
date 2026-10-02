@@ -17,7 +17,8 @@ import {
   Flame,
   Sparkles,
   Plus,
-  Video as VideoIcon
+  Video as VideoIcon,
+  Clock
 } from 'lucide-react';
 
 interface VideoFeedCardProps {
@@ -85,6 +86,14 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
       {/* Dark Overlay Scrim for text readability */}
       <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/85 pointer-events-none" />
+
+      {/* Pending Moderation Banner for Creator's POV */}
+      {video.status === 'pending' && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-extrabold shadow-lg backdrop-blur-md animate-pulse whitespace-nowrap">
+          <Clock className="w-3 h-3" />
+          <span>Awaiting Admin Approval (Only you see this)</span>
+        </div>
+      )}
 
       {/* Top Header: Flag / Report Icon at top-right */}
       <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
@@ -349,6 +358,7 @@ const EmptyFeedLayoutCard: React.FC = () => {
 
 export const HomeFeed: React.FC = () => {
   const {
+    currentUser,
     videos,
     shareVideo,
     setActiveTab,
@@ -359,6 +369,15 @@ export const HomeFeed: React.FC = () => {
 
   const [isMuted, setIsMuted] = useState(false);
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
+
+  // Filter: Public feed only shows approved videos (or pending videos to their creator)
+  const visibleVideos = videos.filter(v => {
+    if (v.status === 'rejected') return false;
+    if (v.status === 'pending') {
+      return currentUser && v.creatorId === currentUser.id;
+    }
+    return true;
+  });
 
   // Reference to the middle scrollable video container
   const videoFeedRef = useRef<HTMLDivElement>(null);
@@ -396,10 +415,10 @@ export const HomeFeed: React.FC = () => {
         ref={videoFeedRef}
         className="flex-1 max-w-[430px] h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar pt-1 pb-16"
       >
-        {videos.length === 0 ? (
+        {visibleVideos.length === 0 ? (
           <EmptyFeedLayoutCard />
         ) : (
-          videos.map(video => (
+          visibleVideos.map(video => (
             <VideoFeedCard
               key={video.id}
               video={video}

@@ -13,6 +13,7 @@ import {
   FollowRelation,
   FollowRequest,
   FollowStatus,
+  AdminRecord,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -68,7 +69,8 @@ export type AppTab =
   | 'edit_profile'
   | 'live_host_setup'
   | 'live_host_active'
-  | 'live_viewer';
+  | 'live_viewer'
+  | 'admin';
 
 interface ReportModalConfig {
   isOpen: boolean;
@@ -174,11 +176,26 @@ interface AppContextType {
   searchQuery: string;
   setSearchQuery: (query: string) => void;
 
-  // Supabase Database Connection
+  // Supabase Database Connection & Admin Operations
   supabaseModalOpen: boolean;
   setSupabaseModalOpen: (open: boolean) => void;
   isSupabaseConnected: boolean;
   syncWithSupabase: () => Promise<void>;
+  admins: AdminRecord[];
+  isAdmin: boolean;
+  addAdmin: (admin: Partial<AdminRecord>) => Promise<boolean>;
+  removeAdmin: (adminId: string) => Promise<boolean>;
+  deleteUserAdmin: (userId: string) => Promise<boolean>;
+  deleteVideoAdmin: (videoId: string) => Promise<boolean>;
+  approveVideoAdmin: (videoId: string) => Promise<boolean>;
+  rejectVideoAdmin: (videoId: string, reason?: string) => Promise<boolean>;
+  elevateToAdmin: (passcode: string) => boolean;
+  updateReportStatusAdmin: (
+    reportId: string,
+    type: 'video' | 'user',
+    status: 'Approved' | 'Rejected' | 'Under Review'
+  ) => Promise<boolean>;
+  syncAllToSupabase: () => Promise<{ success: boolean; message: string }>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -235,6 +252,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return raw.filter(n => !n.targetText?.includes('back!') && n.actor?.id !== 'user_andrea');
   });
   const [reports, setReports] = useState<ReportItem[]>(() => storage.get('reports', INITIAL_REPORTS));
+  const [admins, setAdmins] = useState<AdminRecord[]>(() => storage.get('admins', []));
   const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream>(() => storage.get('livestream', INITIAL_LIVESTREAM));
 
   // Modals
@@ -253,9 +271,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!config.isConnected) return;
 
     try {
-      const [remoteUsers, remoteVideos] = await Promise.all([
+      const [remoteUsers, remoteVideos, remoteAdmins, remoteReports] = await Promise.all([
         supabaseDb.fetchUsers(),
         supabaseDb.fetchVideos(),
+        supabaseDb.fetchAdmins(),
+        supabaseDb.fetchReports(),
       ]);
 
       if (remoteUsers && remoteUsers.length > 0) {
@@ -270,6 +290,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setVideos(prev => {
           const map = new Map(prev.map(v => [v.id, v]));
           remoteVideos.forEach(v => map.set(v.id, v));
+          return Array.from(map.values());
+        });
+      }
+
+      if (remoteAdmins && remoteAdmins.length > 0) {
+        setAdmins(remoteAdmins);
+      }
+
+      if (remoteReports && remoteReports.length > 0) {
+        setReports(prev => {
+          const map = new Map(prev.map(r => [r.id, r]));
+          remoteReports.forEach(r => map.set(r.id, r));
           return Array.from(map.values());
         });
       }
@@ -1019,6 +1051,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Share Video (BR-019, BR-020, BR-023)
   const shareVideo = (videoId: string) => {
+    if (currentUser) {
+      supabaseDb.insertShare(videoId, currentUser.id);
+    }
+
     setVideos(prev =>
       prev.map(v => {
         if (v.id === videoId) {
@@ -1145,10 +1181,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isLiked: false,
       createdAt: 'Just now',
       reportsCount: 0,
+      status: 'pending',
     };
     setVideos(prev => [created, ...prev]);
     supabaseDb.insertVideo(created);
-    setActiveTab('home');
   };
 
   // Submit report (BR-006, BR-007, BR-017, BR-025)
@@ -1166,7 +1202,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }),
     };
     setReports(prev => [newReport, ...prev]);
-    supabaseDb.insertReport(newReport);
+    supabaseDb.insertReport(newReport, currentUser?.id);
 
     // If reporting a video, increment reportsCount
     if (report.type === 'video') {
@@ -1471,6 +1507,151 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAudioLibraryOpen(true);
   };
 
+  // Admin Operations
+  const addAdmin = async (adminData: Partial<AdminRecord>): Promise<boolean> => {
+    const newAdmin: AdminRecord = {
+      adminId: adminData.adminId || crypto.randomUUID(),
+      userId: adminData.userId,
+      username: adminData.username || 'admin',
+      email: adminData.email || 'admin@viralhub.app',
+      role: adminData.role || 'Admin',
+      permissions: adminData.permissions || ['manage_users', 'manage_videos', 'manage_reports'],
+      createdAt: new Date().toISOString(),
+      lastLogin: new Date().toISOString(),
+    };
+
+    setAdmins(prev => [newAdmin, ...prev]);
+    storage.set('admins', [newAdmin, ...admins]);
+    await supabaseDb.upsertAdmin(newAdmin);
+    return true;
+  };
+
+  const isAdmin = Boolean(
+    currentUser &&
+      (currentUser.role === 'admin' ||
+        admins.some(
+          a =>
+            (a.userId && a.userId === currentUser.id) ||
+            (a.email && currentUser.email && a.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+            (a.username && currentUser.username && a.username.toLowerCase() === currentUser.username.toLowerCase())
+        ))
+  );
+
+  const elevateToAdmin = (passcode: string): boolean => {
+    const clean = passcode.trim();
+    if (clean === 'admin123' || clean === 'admin' || clean === 'technova2026' || clean === 'viralhub2026') {
+      if (currentUser) {
+        const updated = { ...currentUser, role: 'admin' as const };
+        setCurrentUser(updated);
+        storage.set('currentUser', updated);
+        setUsers(prev => prev.map(u => (u.id === currentUser.id ? updated : u)));
+        supabaseDb.upsertUser(updated);
+        addAdmin({
+          userId: currentUser.id,
+          username: currentUser.username,
+          email: currentUser.email,
+          role: 'Super Admin',
+          permissions: ['manage_users', 'manage_videos', 'manage_reports', 'manage_admins'],
+        });
+      }
+      return true;
+    }
+    return false;
+  };
+
+  const approveVideoAdmin = async (videoId: string): Promise<boolean> => {
+    setVideos(prev =>
+      prev.map(v => (v.id === videoId ? { ...v, status: 'approved' as const } : v))
+    );
+    const video = videos.find(v => v.id === videoId);
+    if (video) {
+      await supabaseDb.insertVideo({ ...video, status: 'approved' });
+    }
+    return true;
+  };
+
+  const rejectVideoAdmin = async (videoId: string, reason?: string): Promise<boolean> => {
+    setVideos(prev =>
+      prev.map(v => (v.id === videoId ? { ...v, status: 'rejected' as const, rejectionReason: reason } : v))
+    );
+    const video = videos.find(v => v.id === videoId);
+    if (video) {
+      await supabaseDb.insertVideo({ ...video, status: 'rejected', rejectionReason: reason });
+    }
+    return true;
+  };
+
+  const removeAdmin = async (adminId: string): Promise<boolean> => {
+    setAdmins(prev => prev.filter(a => a.adminId !== adminId));
+    storage.set('admins', admins.filter(a => a.adminId !== adminId));
+    await supabaseDb.deleteAdmin(adminId);
+    return true;
+  };
+
+  const deleteUserAdmin = async (userId: string): Promise<boolean> => {
+    setUsers(prev => prev.filter(u => u.id !== userId));
+    await supabaseDb.deleteUser(userId);
+    return true;
+  };
+
+  const deleteVideoAdmin = async (videoId: string): Promise<boolean> => {
+    setVideos(prev => prev.filter(v => v.id !== videoId));
+    await supabaseDb.deleteVideo(videoId);
+    return true;
+  };
+
+  const updateReportStatusAdmin = async (
+    reportId: string,
+    type: 'video' | 'user',
+    status: 'Approved' | 'Rejected' | 'Under Review'
+  ): Promise<boolean> => {
+    setReports(prev =>
+      prev.map(r => (r.id === reportId ? { ...r, status } : r))
+    );
+    await supabaseDb.updateReportStatus(reportId, type, status);
+    return true;
+  };
+
+  const syncAllToSupabase = async (): Promise<{ success: boolean; message: string }> => {
+    const config = getSupabaseConfig();
+    if (!config.isConnected) {
+      return {
+        success: false,
+        message: 'Supabase credentials are not connected yet. Click "Configure Supabase" to enter your URL & Key.',
+      };
+    }
+
+    try {
+      // 1. Sync all users
+      for (const u of users) {
+        await supabaseDb.upsertUser(u);
+      }
+
+      // 2. Sync all videos
+      for (const v of videos) {
+        await supabaseDb.insertVideo(v);
+      }
+
+      // 3. Sync all reports
+      for (const r of reports) {
+        await supabaseDb.insertReport(r, currentUser?.id);
+      }
+
+      // 4. Fetch fresh data back
+      await syncWithSupabase();
+
+      return {
+        success: true,
+        message: `Successfully synchronized ${users.length} users and ${videos.length} videos to your Supabase tables!`,
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        message: e?.message || 'Sync failed. Verify your Supabase RLS policies and table structure.',
+      };
+    }
+  };
+
   return (
     <AppContext.Provider
       value={{
@@ -1544,6 +1725,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setSupabaseModalOpen,
         isSupabaseConnected,
         syncWithSupabase,
+        admins,
+        isAdmin,
+        addAdmin,
+        removeAdmin,
+        deleteUserAdmin,
+        deleteVideoAdmin,
+        approveVideoAdmin,
+        rejectVideoAdmin,
+        elevateToAdmin,
+        updateReportStatusAdmin,
+        syncAllToSupabase,
       }}
     >
       {children}

@@ -76,7 +76,11 @@ export const ProfileView: React.FC = () => {
   }
 
   // Videos associated with this user
-  const userVideos = videos.filter(v => v.creatorId === targetUser.id);
+  const userVideos = videos.filter(v => {
+    if (v.creatorId !== targetUser.id) return false;
+    if (!isSelf && (v.status === 'pending' || v.status === 'rejected')) return false;
+    return true;
+  });
   const likedVideos = videos.filter(v => v.isLiked);
 
   // Dynamic likes count for user's profile
@@ -487,6 +491,19 @@ export const ProfileView: React.FC = () => {
                   <Play className="w-8 h-8 text-neutral-600" />
                 )}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
+
+                {/* Status Badges for Creator's POV */}
+                {video.status === 'pending' && (
+                  <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/90 text-black text-[10px] font-extrabold shadow backdrop-blur-sm animate-pulse">
+                    <Clock className="w-2.5 h-2.5" />
+                    <span>In Review</span>
+                  </div>
+                )}
+                {video.status === 'rejected' && (
+                  <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded-md bg-red-600/90 text-white text-[10px] font-extrabold shadow backdrop-blur-sm">
+                    Declined
+                  </div>
+                )}
 
                 {/* View count at bottom-left */}
                 <div className="absolute bottom-2 left-2 flex items-center gap-1 text-[11px] font-bold text-white drop-shadow">

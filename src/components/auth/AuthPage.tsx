@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ViralHubLogo } from '../common/ViralHubLogo';
-import { User as UserIcon, Lock, CheckCircle2 } from 'lucide-react';
+import { User as UserIcon, Lock, CheckCircle2, Shield, KeyRound, AlertCircle } from 'lucide-react';
 import { SupabaseVercelModal } from '../modals/SupabaseVercelModal';
 
 export const AuthPage: React.FC = () => {
@@ -14,11 +14,20 @@ export const AuthPage: React.FC = () => {
     supabaseModalOpen,
     setSupabaseModalOpen,
     syncWithSupabase,
+    elevateToAdmin,
+    setActiveTab,
+    quickLoginAs,
+    users,
   } = useApp();
 
   // Login form state
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+
+  // Admin access modal state
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [adminPasscode, setAdminPasscode] = useState('');
+  const [adminError, setAdminError] = useState('');
 
   // Register form state
   const [regUsername, setRegUsername] = useState('');
@@ -376,10 +385,111 @@ export const AuthPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Bottom Footer Credits */}
-      <div className="w-full text-center text-xs text-neutral-500 z-10">
-        ViralHub &copy; 2026 · Social Video Platform & Live Stream Broadcast Studio
+      {/* Bottom Footer Credits & Admin Portal Link */}
+      <div className="w-full text-center text-xs text-neutral-500 z-10 flex flex-col items-center gap-2">
+        <div>ViralHub &copy; 2026 · Social Video Platform & Live Stream Broadcast Studio</div>
+        <button
+          type="button"
+          onClick={() => {
+            setShowAdminModal(true);
+            setAdminError('');
+            setAdminPasscode('');
+          }}
+          className="text-neutral-500 hover:text-purple-400 text-[11px] font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+        >
+          <Shield className="w-3 h-3 text-purple-400" />
+          <span>Administrator Access Portal</span>
+        </button>
       </div>
+
+      {/* Admin Passcode Modal on Login Screen */}
+      {showAdminModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          <div className="absolute inset-0" onClick={() => setShowAdminModal(false)} />
+          <div className="relative w-full max-w-sm bg-[#14141e] border border-neutral-800 rounded-3xl p-6 shadow-2xl z-10 text-left space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-xl bg-purple-500/20 text-purple-400">
+                  <Shield className="w-4 h-4" />
+                </div>
+                <h3 className="text-sm font-bold text-white font-brand">Admin Portal Unlock</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAdminModal(false)}
+                className="text-neutral-400 hover:text-white p-1 text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-neutral-400 leading-relaxed">
+              Enter your administrator passcode to authorize an administrative session and unlock the Admin Command Center.
+            </p>
+
+            <form
+              onSubmit={e => {
+                e.preventDefault();
+                const code = adminPasscode.trim();
+                if (!code) {
+                  setAdminError('Enter your passcode');
+                  return;
+                }
+                if (code === 'admin123' || code === 'technova2026' || code === 'viralhub2026' || code === 'admin') {
+                  const targetUser = users.find(u => u.role === 'admin') || users[0];
+                  if (targetUser) {
+                    quickLoginAs(targetUser.id);
+                  }
+                  elevateToAdmin(code);
+                  setShowAdminModal(false);
+                  setActiveTab('admin');
+                } else {
+                  setAdminError('Invalid passcode. Default: technova2026 or admin123');
+                }
+              }}
+              className="space-y-3"
+            >
+              <div className="relative">
+                <KeyRound className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" />
+                <input
+                  type="password"
+                  value={adminPasscode}
+                  onChange={e => {
+                    setAdminPasscode(e.target.value);
+                    setAdminError('');
+                  }}
+                  placeholder="Passcode (e.g. technova2026 or admin123)"
+                  autoFocus
+                  className="w-full bg-[#1b1b26] text-xs text-white placeholder-neutral-500 pl-9 pr-3 py-2.5 rounded-xl border border-neutral-700 focus:border-purple-500 outline-none"
+                />
+              </div>
+
+              {adminError && (
+                <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-[11px] flex items-center gap-1.5">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  <span>{adminError}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowAdminModal(false)}
+                  className="px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-[#ff007a] hover:from-purple-500 hover:to-[#ff1a8c] text-white text-xs font-bold shadow"
+                >
+                  Authorize Admin
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       <SupabaseVercelModal
         isOpen={supabaseModalOpen}

@@ -11,7 +11,9 @@ import {
   LogOut,
   Sliders,
   ChevronDown,
-  ArrowRightLeft
+  ArrowRightLeft,
+  Shield,
+  Database,
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -24,12 +26,14 @@ export const Sidebar: React.FC = () => {
     totalUnreadMessages,
     setMessagesMobileView,
     logout,
-    navigateToUserProfile
+    navigateToUserProfile,
+    setSupabaseModalOpen,
+    isAdmin,
   } = useApp();
 
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
 
-  const navItems: { tab: AppTab; label: string; icon: React.ReactNode; badge?: number }[] = [
+  const baseNavItems: { tab: AppTab; label: string; icon: React.ReactNode; badge?: number }[] = [
     {
       tab: 'home',
       label: 'Home',
@@ -57,6 +61,19 @@ export const Sidebar: React.FC = () => {
       badge: totalUnreadMessages,
     },
   ];
+
+  // ONLY administrators see the Admin Panel tab
+  const navItems: { tab: AppTab; label: string; icon: React.ReactNode; badge?: number }[] = isAdmin
+    ? [
+        ...baseNavItems,
+        {
+          tab: 'admin' as AppTab,
+          label: 'Admin Panel',
+          icon: <Shield className="w-5 h-5 text-[#ff007a]" />,
+          badge: undefined,
+        },
+      ]
+    : baseNavItems;
 
   return (
     <aside className="w-64 shrink-0 bg-[#0d0d12] border-r border-neutral-800/80 flex flex-col justify-between h-screen sticky top-0 px-4 py-5 select-none z-30">
@@ -165,6 +182,32 @@ export const Sidebar: React.FC = () => {
                     <Sliders className="w-4 h-4 text-blue-400" />
                     <span>Edit Profile & Privacy</span>
                   </button>
+
+                  {isAdmin && (
+                    <button
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        setActiveTab('admin');
+                      }}
+                      className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-white hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
+                    >
+                      <Shield className="w-4 h-4 text-[#ff007a]" />
+                      <span>Admin Dashboard</span>
+                    </button>
+                  )}
+
+                  {isAdmin && (
+                    <button
+                      onClick={() => {
+                        setProfileMenuOpen(false);
+                        setSupabaseModalOpen(true);
+                      }}
+                      className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-white hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
+                    >
+                      <Database className="w-4 h-4 text-emerald-400" />
+                      <span>Supabase & Cloud Sync</span>
+                    </button>
+                  )}
 
                   <div className="h-px bg-neutral-800 my-1" />
 

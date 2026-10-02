@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import { AudioTrack } from '../../types';
-import { Film, Music, X, Video as VideoIcon, CheckCircle2, RotateCcw, AlertCircle, Play } from 'lucide-react';
+import { Film, Music, X, Video as VideoIcon, CheckCircle2, RotateCcw, AlertCircle, Play, Clock } from 'lucide-react';
 
 export const UploadView: React.FC = () => {
   const { uploadVideo, openAudioLibrary, setActiveTab } = useApp();
@@ -144,22 +144,25 @@ export const UploadView: React.FC = () => {
 
       {isSuccess ? (
         <div className="bg-[#13131a] border border-neutral-800 rounded-3xl p-8 text-center space-y-5 shadow-2xl animate-fadeIn">
-          <div className="w-16 h-16 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto shadow-[0_0_20px_rgba(16,185,129,0.3)]">
-            <CheckCircle2 className="w-8 h-8" />
+          <div className="w-16 h-16 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center mx-auto shadow-[0_0_20px_rgba(245,158,11,0.3)]">
+            <Clock className="w-8 h-8 text-amber-400" />
           </div>
           <div>
-            <h3 className="text-xl font-bold text-white font-brand">Video Published Successfully!</h3>
-            <p className="text-xs text-neutral-400 max-w-sm mx-auto mt-2 leading-relaxed">
-              Your video is now live on the ViralHub explore and home feeds for viewers to discover, like, and share.
+            <h3 className="text-xl font-bold text-white font-brand">Video Submitted for Moderation!</h3>
+            <p className="text-xs text-neutral-300 max-w-sm mx-auto mt-2 leading-relaxed">
+              Your video is now in the <strong>Admin Moderation Queue</strong>. An administrator will review and approve it before it appears publicly on the Home and Explore feeds.
             </p>
+            <div className="inline-block mt-3 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[11px] font-medium">
+              Status: Awaiting Admin Approval
+            </div>
           </div>
 
           <div className="flex items-center justify-center gap-3 pt-2">
             <button
-              onClick={() => setActiveTab('home')}
+              onClick={() => setActiveTab('profile')}
               className="py-2.5 px-6 rounded-2xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer"
             >
-              Watch on Home Feed
+              View on My Profile
             </button>
             <button
               onClick={handleResetForm}
