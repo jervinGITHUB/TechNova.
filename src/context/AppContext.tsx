@@ -87,7 +87,11 @@ interface AppContextType {
   authView: 'login' | 'register';
   setAuthView: (view: 'login' | 'register') => void;
   login: (usernameOrEmail: string, password?: string) => Promise<{ success: boolean; message?: string }>;
-  register: (username: string, email: string, password?: string) => Promise<{ success: boolean; message?: string }>;
+  register: (
+    username: string,
+    email: string,
+    password?: string
+  ) => Promise<{ success: boolean; message?: string; needsEmailConfirmation?: boolean; email?: string }>;
   loginWithGoogle: () => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   quickLoginAs: (userId: string) => void;
@@ -601,6 +605,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // A. Try Supabase Auth email + password sign in
       if (targetEmail) {
         const { user, error } = await signInWithEmail(targetEmail, password);
+        if (error) {
+          if (error.message?.toLowerCase().includes('email not confirmed')) {
+            return {
+              success: false,
+              message: 'Your email has not been confirmed yet. Please check your inbox (and spam folder) for the confirmation link to activate your account.',
+            };
+          }
+        }
         if (user && !error) {
           await handleSupabaseUserSession(user);
           return { success: true };
@@ -683,7 +695,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     username: string,
     email: string,
     password?: string
-  ): Promise<{ success: boolean; message?: string }> => {
+  ): Promise<{
+    success: boolean;
+    message?: string;
+    needsEmailConfirmation?: boolean;
+    email?: string;
+  }> => {
     const clean = username.replace('@', '').trim().toLowerCase();
     const cleanEmail = email.trim();
 
@@ -716,18 +733,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           map.set(newUser.id, newUser);
           return Array.from(map.values());
         });
+        // Check if email confirmation is required by Supabase Auth
+        const isConfirmed = Boolean(user.email_confirmed_at || user.confirmed_at || session);
+        if (!isConfirmed) {
+          // Do NOT log them in yet! Return email confirmation prompt
+          return {
+            success: true,
+            needsEmailConfirmation: true,
+            email: cleanEmail,
+            message: `Confirmation email sent to ${cleanEmail}! Please check your inbox and click the verification link to activate your account.`,
+          };
+        }
+
+        // If email confirmation is disabled or session was provided immediately:
         setCurrentUser(newUser);
         storage.set('currentUser', newUser);
         setActiveConversationId(null);
         setMessagesMobileView('list');
         setSelectedUserId(null);
-
-        if (!session) {
-          return {
-            success: true,
-            message: 'Account created and saved to your Supabase tables! You can start using ViralHub immediately.',
-          };
-        }
         await handleSupabaseUserSession(user);
         return { success: true };
       }

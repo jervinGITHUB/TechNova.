@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useApp } from '../../context/AppContext';
 import {
   getSupabaseConfig,
   saveSupabaseCredentials,
@@ -17,6 +18,7 @@ import {
   RefreshCw,
   AlertCircle,
   CheckCircle2,
+  UserCheck,
 } from 'lucide-react';
 
 interface SupabaseVercelModalProps {
@@ -30,15 +32,49 @@ export const SupabaseVercelModal: React.FC<SupabaseVercelModalProps> = ({
   onClose,
   onConnected,
 }) => {
+  const { currentUser } = useApp();
   const currentConfig = getSupabaseConfig();
   const [url, setUrl] = useState(currentConfig.url);
   const [anonKey, setAnonKey] = useState(currentConfig.anonKey);
   const [copied, setCopied] = useState(false);
+  const [copiedAdminSql, setCopiedAdminSql] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   if (!isOpen) return null;
+
+  const targetIdentifier = currentUser?.email || currentUser?.username || 'jervan098@gmail.com';
+
+  const makeAdminSql = `-- Run this in Supabase Dashboard -> SQL Editor -> New Query:
+-- 1. Ensure Role column exists on User table (so it never throws column does not exist)
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "Role" TEXT DEFAULT 'creator';
+
+-- 2. Upgrade user role in User table
+UPDATE public."User"
+SET "Role" = 'admin'
+WHERE LOWER("Email") = LOWER('${targetIdentifier}') OR LOWER("Username") = LOWER('${targetIdentifier}');
+
+-- 3. Add to Admin dashboard team with all permissions
+INSERT INTO public."Admin" ("AdminID", "UserID", "Username", "Email", "Role", "Permissions", "CreatedAt", "LastLogin")
+SELECT 
+  gen_random_uuid(),
+  "UserID",
+  "Username",
+  "Email",
+  'Super Admin',
+  ARRAY['all', 'manage_users', 'manage_videos', 'manage_reports'],
+  NOW(),
+  NOW()
+FROM public."User"
+WHERE LOWER("Email") = LOWER('${targetIdentifier}') OR LOWER("Username") = LOWER('${targetIdentifier}')
+ON CONFLICT ("AdminID") DO NOTHING;`;
+
+  const handleCopyAdminSql = () => {
+    navigator.clipboard?.writeText(makeAdminSql);
+    setCopiedAdminSql(true);
+    setTimeout(() => setCopiedAdminSql(false), 2000);
+  };
 
   const handleCopySchema = () => {
     navigator.clipboard?.writeText(SUPABASE_SQL_SCHEMA);
@@ -267,6 +303,29 @@ export const SupabaseVercelModal: React.FC<SupabaseVercelModalProps> = ({
                 </li>
                 <li>Click <strong>Deploy</strong>. Vercel automatically builds and deploys your application!</li>
               </ol>
+            </div>
+          </div>
+
+          {/* Make Account Admin SQL Script */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-bold text-white text-sm flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-amber-400" />
+                <span>4. Make My Account an Admin (SQL Script)</span>
+              </h3>
+              <button
+                onClick={handleCopyAdminSql}
+                className="py-1 px-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+              >
+                {copiedAdminSql ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedAdminSql ? 'Copied Admin SQL!' : 'Copy Admin SQL'}</span>
+              </button>
+            </div>
+            <p className="text-neutral-400 mb-2">
+              Run this in your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) to instantly grant your account Super Admin access:
+            </p>
+            <div className="bg-[#0c0c10] p-3 rounded-xl border border-neutral-800 font-mono text-[11px] text-amber-300 max-h-36 overflow-y-auto leading-relaxed">
+              <pre>{makeAdminSql}</pre>
             </div>
           </div>
         </div>

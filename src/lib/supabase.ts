@@ -209,11 +209,13 @@ export const signUpWithEmail = async (
     };
   }
   const cleanUsername = username.replace(/[^a-zA-Z0-9._]/g, '').toLowerCase();
+  const redirectUrl = typeof window !== 'undefined' ? window.location.origin : '';
   try {
     const { data, error } = await client.auth.signUp({
       email,
       password,
       options: {
+        emailRedirectTo: redirectUrl,
         data: {
           username: cleanUsername,
           full_name: displayName || username,
@@ -223,6 +225,29 @@ export const signUpWithEmail = async (
     return { user: data?.user || null, session: data?.session || null, error };
   } catch (err: any) {
     return { user: null, session: null, error: err };
+  }
+};
+
+export const resendConfirmationEmail = async (
+  email: string
+): Promise<{ success: boolean; message: string }> => {
+  const client = getSupabaseClient();
+  if (!client) return { success: false, message: 'Supabase client is not connected' };
+  try {
+    const redirectUrl = typeof window !== 'undefined' ? window.location.origin : '';
+    const { error } = await client.auth.resend({
+      type: 'signup',
+      email: email.trim(),
+      options: {
+        emailRedirectTo: redirectUrl,
+      },
+    });
+    if (error) {
+      return { success: false, message: error.message };
+    }
+    return { success: true, message: `New confirmation email sent to ${email}!` };
+  } catch (e: any) {
+    return { success: false, message: e?.message || 'Failed to resend confirmation email.' };
   }
 };
 
@@ -1436,10 +1461,11 @@ CREATE TABLE IF NOT EXISTS public."Admin" (
   "LastLogin" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
 
--- 2. USER & VIDEO SCHEMA COMPATIBILITY (Ensures IsPublic on User and Status on Video)
+-- 2. USER & VIDEO SCHEMA COMPATIBILITY (Ensures Role, IsPublic on User and Status on Video)
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "Role" TEXT DEFAULT 'creator';
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "IsPublic" BOOLEAN DEFAULT true;
 ALTER TABLE IF EXISTS public."User" ALTER COLUMN "IsPublic" SET DEFAULT true;
-ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "Status" TEXT DEFAULT 'pending';
+ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "Status" TEXT DEFAULT 'approved';
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "RejectionReason" TEXT;
 
 -- 3. ENABLE ROW LEVEL SECURITY (RLS) SAFELY ON BASE TABLES (Views like VideoStats are excluded)

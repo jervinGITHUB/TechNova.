@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ViralHubLogo } from '../common/ViralHubLogo';
-import { User as UserIcon, Lock, CheckCircle2, Shield, KeyRound, AlertCircle } from 'lucide-react';
+import { User as UserIcon, Lock, CheckCircle2, Shield, KeyRound, AlertCircle, Mail, ArrowRight, RotateCw } from 'lucide-react';
 import { SupabaseVercelModal } from '../modals/SupabaseVercelModal';
+import { resendConfirmationEmail } from '../../lib/supabase';
 
 export const AuthPage: React.FC = () => {
   const {
@@ -29,6 +30,11 @@ export const AuthPage: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Email confirmation view state
+  const [confirmationPendingEmail, setConfirmationPendingEmail] = useState<string | null>(null);
+  const [isResending, setIsResending] = useState(false);
+  const [resendStatus, setResendStatus] = useState<{ success: boolean; message: string } | null>(null);
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,20 +81,35 @@ export const AuthPage: React.FC = () => {
     }
     setErrorMessage('');
     setInfoMessage('');
+    setResendStatus(null);
     setIsSubmitting(true);
     try {
       const res = await register(regUsername, regEmail, regPassword);
-      if (res.message) {
-        if (!res.success) {
-          setErrorMessage(res.message);
-        } else {
-          setInfoMessage(res.message);
-        }
+      if (!res.success) {
+        setErrorMessage(res.message || 'Registration failed');
+      } else if (res.needsEmailConfirmation) {
+        setConfirmationPendingEmail(regEmail.trim());
+      } else if (res.message) {
+        setInfoMessage(res.message);
       }
     } catch (err: any) {
       setErrorMessage(err?.message || 'Registration failed');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleResendConfirmation = async () => {
+    if (!confirmationPendingEmail) return;
+    setIsResending(true);
+    setResendStatus(null);
+    try {
+      const res = await resendConfirmationEmail(confirmationPendingEmail);
+      setResendStatus(res);
+    } catch {
+      setResendStatus({ success: false, message: 'Could not send verification email.' });
+    } finally {
+      setIsResending(false);
     }
   };
 
@@ -159,7 +180,76 @@ export const AuthPage: React.FC = () => {
             </div>
           )}
 
-          {authView === 'login' ? (
+          {confirmationPendingEmail ? (
+            /* Email Confirmation Screen */
+            <div className="text-center py-2 space-y-5 animate-fadeIn">
+              <div className="w-16 h-16 rounded-full bg-[#ff007a]/20 text-[#ff007a] flex items-center justify-center mx-auto shadow-[0_0_25px_rgba(255,0,122,0.4)]">
+                <Mail className="w-8 h-8" />
+              </div>
+
+              <div>
+                <h2 className="text-2xl font-extrabold font-brand tracking-wide text-white">Check Your Email</h2>
+                <p className="text-xs text-neutral-300 mt-2 max-w-sm mx-auto leading-relaxed">
+                  We sent an account activation link to{' '}
+                  <span className="text-[#ff007a] font-bold break-all">{confirmationPendingEmail}</span>.
+                </p>
+                <p className="text-[11px] text-neutral-400 mt-2">
+                  Please open the email and click the confirmation link. After confirming, you will be automatically signed in and taken to your Home feed!
+                </p>
+              </div>
+
+              {resendStatus && (
+                <div
+                  className={`p-3 rounded-xl text-xs flex items-center justify-center gap-2 ${
+                    resendStatus.success
+                      ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
+                      : 'bg-red-500/10 border border-red-500/30 text-red-400'
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{resendStatus.message}</span>
+                </div>
+              )}
+
+              <div className="pt-2 flex flex-col gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const email = confirmationPendingEmail;
+                    setConfirmationPendingEmail(null);
+                    setAuthView('login');
+                    setLoginIdentifier(email);
+                  }}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <span>Go to Login</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isResending}
+                  onClick={handleResendConfirmation}
+                  className="w-full py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-1.5"
+                >
+                  {isResending ? <RotateCw className="w-3.5 h-3.5 animate-spin" /> : null}
+                  <span>{isResending ? 'Sending...' : 'Resend Confirmation Email'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmationPendingEmail(null);
+                    setErrorMessage('');
+                    setInfoMessage('');
+                  }}
+                  className="text-[11px] text-neutral-500 hover:text-neutral-400 transition-colors cursor-pointer mt-1"
+                >
+                  Register with another email
+                </button>
+              </div>
+            </div>
+          ) : authView === 'login' ? (
             /* Login Form */
             <form onSubmit={handleLoginSubmit} className="flex flex-col">
               <div className="text-center mb-8">
