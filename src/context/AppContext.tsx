@@ -371,16 +371,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (remoteUsers && remoteUsers.length > 0) {
         setUsers(prev => {
-          const map = new Map(prev.map(u => [u.id, u]));
-          remoteUsers.forEach(u => map.set(u.id, u));
-          return Array.from(map.values());
+          const userMap = new Map<string, User>();
+          const emailMap = new Map<string, string>(); // email -> id
+
+          for (const u of remoteUsers) {
+            const emailKey = u.email ? u.email.trim().toLowerCase() : null;
+            if (emailKey && emailMap.has(emailKey)) {
+              const existingId = emailMap.get(emailKey)!;
+              const existing = userMap.get(existingId);
+              if (existing && (u.role === 'admin' || existing.role !== 'admin')) {
+                existing.role = u.role === 'admin' ? 'admin' : existing.role;
+              }
+              continue; // Deduplicate
+            }
+            userMap.set(u.id, u);
+            if (emailKey) emailMap.set(emailKey, u.id);
+          }
+
+          for (const u of prev) {
+            const emailKey = u.email ? u.email.trim().toLowerCase() : null;
+            if (emailKey && emailMap.has(emailKey)) continue;
+            if (!userMap.has(u.id)) {
+              userMap.set(u.id, u);
+              if (emailKey) emailMap.set(emailKey, u.id);
+            }
+          }
+
+          return Array.from(userMap.values());
         });
       }
 
-      if (remoteVideos && remoteVideos.length > 0) {
+      if (remoteVideos !== null) {
         setVideos(prev => {
-          const map = new Map(prev.map(v => [v.id, v]));
-          remoteVideos.forEach(v => map.set(v.id, v));
+          const map = new Map<string, Video>();
+          // Put remote videos in map
+          (remoteVideos || []).forEach(v => map.set(v.id, v));
+          // Keep any newly uploaded local videos that haven't synced yet
+          prev.forEach(v => {
+            if (!map.has(v.id)) {
+              map.set(v.id, v);
+            }
+          });
           return Array.from(map.values());
         });
       }
@@ -405,43 +436,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const handleSupabaseUserSession = async (sbUser: any) => {
     if (!sbUser) return;
     const meta = sbUser.user_metadata || {};
-    const email = sbUser.email || '';
+    const email = (sbUser.email || '').trim().toLowerCase();
     const displayName = meta.full_name || meta.name || (email ? email.split('@')[0] : 'User');
     const rawUsername = meta.user_name || meta.preferred_username || (email ? email.split('@')[0] : `user_${sbUser.id.slice(0, 8)}`);
     const username = rawUsername.replace(/[^a-zA-Z0-9._]/g, '').toLowerCase() || `user_${sbUser.id.slice(0, 6)}`;
     const avatar = meta.avatar_url || meta.picture || '';
 
-    // Check if user already exists in database
+    // Check if user already exists in database or state to NEVER create duplicate accounts
     let existingUser: User | null = null;
     try {
       const remoteUsers = await supabaseDb.fetchUsers();
       if (remoteUsers) {
-        existingUser = remoteUsers.find(u => u.id === sbUser.id || (email && u.email?.toLowerCase() === email.toLowerCase())) || null;
+        existingUser = remoteUsers.find(
+          u => u.id === sbUser.id || (email && u.email?.trim().toLowerCase() === email)
+        ) || null;
       }
     } catch {
       // fallback
     }
 
+    if (!existingUser && email) {
+      existingUser = users.find(
+        u => u.id === sbUser.id || (u.email && u.email.trim().toLowerCase() === email)
+      ) || null;
+    }
+
+    // Check admin privilege
+    let isAdminRole = existingUser?.role === 'admin';
+    if (!isAdminRole && email) {
+      isAdminRole = admins.some(a => a.email && a.email.trim().toLowerCase() === email);
+    }
+    if (!isAdminRole) {
+      try {
+        isAdminRole = await supabaseDb.checkIsAdmin({ id: existingUser?.id || sbUser.id, email });
+      } catch {}
+    }
+
+    // Always re-use existing UserID if this email already has an account!
+    const finalUserId = existingUser?.id || sbUser.id;
+
     const finalUser: User = {
-      id: sbUser.id,
+      id: finalUserId,
       username: existingUser?.username || username,
       displayName: existingUser?.displayName || displayName,
-      email: email,
+      email: sbUser.email || email,
       avatar: existingUser?.avatar || avatar,
       bio: existingUser?.bio || '',
       followingCount: existingUser?.followingCount || 0,
       followersCount: existingUser?.followersCount || 0,
       likesCount: existingUser?.likesCount || '0',
       isPrivate: existingUser?.isPrivate || false,
-      role: existingUser?.role || 'creator',
+      role: isAdminRole ? 'admin' : (existingUser?.role || 'creator'),
     };
 
     setCurrentUser(finalUser);
     storage.set('currentUser', finalUser);
+
     setUsers(prev => {
-      const map = new Map(prev.map(u => [u.id, u]));
-      map.set(finalUser.id, finalUser);
-      return Array.from(map.values());
+      // Filter out any duplicates with same id or email
+      const filtered = prev.filter(
+        u => u.id !== finalUserId && (!email || u.email?.trim().toLowerCase() !== email)
+      );
+      return [finalUser, ...filtered];
     });
 
     // Record user profile in Supabase database
@@ -1354,14 +1410,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Upload Video (BR-013, BR-015, BR-016)
-  const uploadVideo = (newVideo: {
+  const uploadVideo = async (newVideo: {
     caption: string;
     hashtags: string[];
     audioTrack?: AudioTrack;
     mediaUrl: string;
     thumbnailUrl?: string;
   }) => {
-    if (!currentUser) return;
+    if (!currentUser) return false;
     const created: Video = {
       id: `vid_${Date.now()}`,
       creatorId: currentUser.id,
@@ -1381,7 +1437,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       status: 'approved',
     };
     setVideos(prev => [created, ...prev]);
-    supabaseDb.insertVideo(created);
+    const ok = await supabaseDb.insertVideo(created);
+    return ok;
   };
 
   // Submit report (BR-006, BR-007, BR-017, BR-025)

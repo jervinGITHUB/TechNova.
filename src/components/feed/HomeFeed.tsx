@@ -75,12 +75,23 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   useEffect(() => {
     if (videoRef.current) {
       if (isPlaying) {
-        videoRef.current.play().catch(() => {});
+        const playPromise = videoRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(() => {
+            // If browser policy blocks sound autoplay, mute and resume
+            if (videoRef.current) {
+              videoRef.current.muted = true;
+              videoRef.current.play().catch(() => {
+                setIsPlaying(false);
+              });
+            }
+          });
+        }
       } else {
         videoRef.current.pause();
       }
     }
-  }, [isPlaying]);
+  }, [isPlaying, isMuted, videoSrc]);
 
   const togglePlayPause = (e?: React.MouseEvent) => {
     if (e) {
@@ -115,6 +126,18 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
             loop
             muted={isMuted}
             playsInline
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onLoadedData={() => {
+              if (isPlaying && videoRef.current) {
+                videoRef.current.play().catch(() => {
+                  if (videoRef.current) {
+                    videoRef.current.muted = true;
+                    videoRef.current.play().catch(() => {});
+                  }
+                });
+              }
+            }}
             onError={() => {
               if (videoSrc !== 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4') {
                 setVideoSrc('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
@@ -441,7 +464,7 @@ export const HomeFeed: React.FC = () => {
     currentLiveStream,
   } = useApp();
 
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
 
   // Filter: Public feed only shows approved videos (or pending videos to their creator)

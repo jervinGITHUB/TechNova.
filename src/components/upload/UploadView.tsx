@@ -152,24 +152,53 @@ export const UploadView: React.FC = () => {
     }
 
     let finalMediaUrl = videoPreviewUrl;
+    let uploadErrorMessage = '';
 
     // If uploading a local file and Supabase is connected, upload to Supabase Storage
     // so any device on the internet can stream it!
     if (videoFile && getSupabaseConfig().isConnected) {
-      setStorageStatusMessage('Uploading video to Supabase Storage bucket for multi-device access...');
+      setStorageStatusMessage('Uploading video to Supabase Storage bucket ("videos")...');
       try {
         const uploadRes = await supabaseDb.uploadVideoFile(videoFile);
         if (uploadRes.url) {
           finalMediaUrl = uploadRes.url;
+          setStorageStatusMessage('Uploaded successfully to Supabase Storage!');
         } else {
+          uploadErrorMessage = uploadRes.error || 'Storage upload failed';
           console.warn('Storage upload note:', uploadRes.error);
         }
-      } catch (err) {
+      } catch (err: any) {
+        uploadErrorMessage = err?.message || 'Storage upload error';
         console.warn('Failed to upload file to storage:', err);
       }
     }
 
-    uploadVideo({
+    // If storage upload failed or returned blob URL, encode files up to 15MB as universal Data URL
+    // so the video actually plays and displays across all other devices!
+    if (videoFile && (!finalMediaUrl || finalMediaUrl.startsWith('blob:'))) {
+      if (videoFile.size <= 15 * 1024 * 1024) {
+        setStorageStatusMessage('Encoding video stream for universal multi-device playback...');
+        try {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
+            reader.readAsDataURL(videoFile);
+          });
+          if (dataUrl) {
+            finalMediaUrl = dataUrl;
+          }
+        } catch {
+          // fallback
+        }
+      } else if (uploadErrorMessage) {
+        setErrorMessage(`Cloud Storage upload failed: ${uploadErrorMessage}. Please ensure a public bucket named "videos" exists in your Supabase project under Storage -> New Bucket.`);
+        setIsPublishing(false);
+        return;
+      }
+    }
+
+    await uploadVideo({
       caption: caption.trim() || 'New viral moment! 🔥',
       hashtags: extractedTags.length > 0 ? extractedTags : ['#viral', '#fyp'],
       audioTrack: selectedAudio || undefined,

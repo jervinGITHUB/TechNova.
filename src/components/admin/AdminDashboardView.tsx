@@ -51,6 +51,7 @@ export const AdminDashboardView: React.FC = () => {
     rejectVideoAdmin,
     updateReportStatusAdmin,
     syncAllToSupabase,
+    syncWithSupabase,
     setSupabaseModalOpen,
     navigateToUserProfile,
     logout,
@@ -75,7 +76,6 @@ export const AdminDashboardView: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSyncingAll, setIsSyncAll] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [copiedSql, setCopiedSql] = useState(false);
   const [connectionLatency, setConnectionLatency] = useState<number | null>(null);
 
   // Filters
@@ -97,9 +97,35 @@ export const AdminDashboardView: React.FC = () => {
 
   const supabaseConfig = getSupabaseConfig();
 
+  // Deduplicate users so that even if database had duplicate rows for an email, each unique user account displays once!
+  const uniqueUsers = React.useMemo(() => {
+    const map = new Map<string, typeof users[0]>();
+    for (const u of users) {
+      const emailKey = u.email ? u.email.trim().toLowerCase() : u.id;
+      if (map.has(emailKey)) {
+        const existing = map.get(emailKey)!;
+        if (u.role === 'admin' && existing.role !== 'admin') {
+          existing.role = 'admin';
+        }
+        continue;
+      }
+      map.set(emailKey, u);
+    }
+    return Array.from(map.values());
+  }, [users]);
+
+  // Filtered lists
+  const filteredUsers = uniqueUsers.filter(
+    u =>
+      u.username.toLowerCase().includes(userSearch.toLowerCase()) ||
+      u.displayName.toLowerCase().includes(userSearch.toLowerCase()) ||
+      u.email.toLowerCase().includes(userSearch.toLowerCase())
+  );
+
   const loadData = async () => {
     setIsRefreshing(true);
     try {
+      await syncWithSupabase();
       const [remoteStats, counts, testRes] = await Promise.all([
         supabaseDb.fetchSystemStats(),
         supabaseDb.fetchAllTableCounts(),
@@ -132,12 +158,6 @@ export const AdminDashboardView: React.FC = () => {
   useEffect(() => {
     loadData();
   }, []);
-
-  const handleCopySql = () => {
-    navigator.clipboard?.writeText(SUPABASE_SQL_SCHEMA);
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2200);
-  };
 
   const handleSyncAll = async () => {
     setIsSyncAll(true);
@@ -187,14 +207,6 @@ export const AdminDashboardView: React.FC = () => {
   const pendingReportsCount = reports.filter(r => r.status === 'Under Review').length;
   const approvedReportsCount = reports.filter(r => r.status === 'Approved').length;
   const rejectedReportsCount = reports.filter(r => r.status === 'Rejected').length;
-
-  // Filtered lists
-  const filteredUsers = users.filter(
-    u =>
-      u.username.toLowerCase().includes(userSearch.toLowerCase()) ||
-      u.displayName.toLowerCase().includes(userSearch.toLowerCase()) ||
-      u.email.toLowerCase().includes(userSearch.toLowerCase())
-  );
 
   const filteredVideos = videos.filter(v => {
     const matchesSearch =
@@ -285,15 +297,6 @@ export const AdminDashboardView: React.FC = () => {
           >
             <Activity className={`w-3.5 h-3.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
             <span>{isSyncingAll ? 'Syncing to Cloud...' : 'Sync All to Supabase'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleCopySql}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 text-xs font-medium transition-colors cursor-pointer"
-          >
-            {copiedSql ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-            <span>{copiedSql ? 'Copied SQL!' : 'Copy SQL Schema'}</span>
           </button>
 
           <button
@@ -523,133 +526,64 @@ export const AdminDashboardView: React.FC = () => {
               </button>
             </div>
           )}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Supabase Connection Diagnostics */}
-            <div className="lg:col-span-2 bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <Server className="w-5 h-5 text-[#ff007a]" />
-                  <h3 className="text-base font-bold text-white font-brand">Database & Runtime Diagnostics</h3>
-                </div>
-                <button
-                  onClick={() => setSupabaseModalOpen(true)}
-                  className="text-xs text-[#ff007a] hover:underline font-semibold cursor-pointer"
-                >
-                  Configure Supabase
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
-                <div className="p-3.5 rounded-2xl bg-[#181824] border border-neutral-800 space-y-1">
-                  <span className="text-[11px] text-neutral-400">Configured Endpoint</span>
-                  <div className="font-mono text-white truncate text-xs">
-                    {supabaseConfig.url || 'Not configured (Local high-speed fallback active)'}
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-[#181824] border border-neutral-800 space-y-1">
-                  <span className="text-[11px] text-neutral-400">Connection Mode</span>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        supabaseConfig.isConnected ? 'bg-emerald-400' : 'bg-amber-400'
-                      }`}
-                    />
-                    <span className="font-semibold text-white">
-                      {supabaseConfig.isConnected
-                        ? `Supabase Cloud (${supabaseConfig.source === 'env' ? 'Vercel Env' : 'Custom Config'})`
-                        : 'Local State / Ready for Supabase'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-[#181824] border border-neutral-800 space-y-1">
-                  <span className="text-[11px] text-neutral-400">Postgres Schema Compatibility</span>
-                  <div className="text-emerald-400 font-semibold flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Exact PascalCase ("User", "Video", "Like", "Comment", "Share", "Admin")</span>
-                  </div>
-                </div>
-
-                <div className="p-3.5 rounded-2xl bg-[#181824] border border-neutral-800 space-y-1">
-                  <span className="text-[11px] text-neutral-400">UUID Safety Converter</span>
-                  <div className="text-emerald-400 font-semibold flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    <span>Deterministic v4 Engine Active</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-[#161624] border border-neutral-800 text-xs text-neutral-300 space-y-2">
-                <div className="font-semibold text-white flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-amber-400" />
-                  <span>Why Interactions Were Not Recording & How It Is Now Resolved:</span>
-                </div>
-                <p className="text-neutral-400 leading-relaxed">
-                  Your Supabase tables in project <strong>"teknobabols"</strong> use exact PascalCase table names (<code>User</code>, <code>Video</code>, <code>Comment</code>, <code>Like</code>, <code>Share</code>, etc.) with strict <code>UUID</code> primary keys. Previous queries queried lowercase tables and passed text IDs, which Postgres rejected. We updated the entire data access layer to map directly to your 17 tables and deterministic UUIDs!
-                </p>
-              </div>
+          {/* Administrative Quick Actions Grid */}
+          <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-6 sm:p-7 space-y-5">
+            <div>
+              <h3 className="text-base sm:text-lg font-bold text-white font-brand mb-1">Administrative Actions</h3>
+              <p className="text-xs text-neutral-400">Manage user accounts, moderate community content, review flags, and manage system moderators.</p>
             </div>
 
-            {/* Quick Actions Panel */}
-            <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-4 flex flex-col justify-between">
-              <div>
-                <h3 className="text-base font-bold text-white font-brand mb-1">Administrative Actions</h3>
-                <p className="text-xs text-neutral-400 mb-4">Quick shortcuts for system maintenance</p>
-
-                <div className="space-y-2">
-                  <button
-                    onClick={() => setActiveAdminTab('users')}
-                    className="w-full flex items-center justify-between p-3 rounded-xl bg-[#191926] hover:bg-[#202030] text-xs font-semibold text-white transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Users className="w-4 h-4 text-blue-400" />
-                      <span>Manage Users ({users.length})</span>
-                    </div>
-                    <span className="text-[10px] text-neutral-400">View</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveAdminTab('videos')}
-                    className="w-full flex items-center justify-between p-3 rounded-xl bg-[#191926] hover:bg-[#202030] text-xs font-semibold text-white transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Film className="w-4 h-4 text-[#ff007a]" />
-                      <span>Moderate Content ({videos.length})</span>
-                    </div>
-                    <span className="text-[10px] text-neutral-400">View</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveAdminTab('reports')}
-                    className="w-full flex items-center justify-between p-3 rounded-xl bg-[#191926] hover:bg-[#202030] text-xs font-semibold text-white transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <AlertTriangle className="w-4 h-4 text-amber-400" />
-                      <span>Pending Reports ({reports.length})</span>
-                    </div>
-                    <span className="text-[10px] text-neutral-400">Review</span>
-                  </button>
-
-                  <button
-                    onClick={() => setActiveAdminTab('admins')}
-                    className="w-full flex items-center justify-between p-3 rounded-xl bg-[#191926] hover:bg-[#202030] text-xs font-semibold text-white transition-colors cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <Shield className="w-4 h-4 text-purple-400" />
-                      <span>Admin Team & Privileges</span>
-                    </div>
-                    <span className="text-[10px] text-neutral-400">Manage</span>
-                  </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <button
+                onClick={() => setActiveAdminTab('users')}
+                className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-blue-500/40 text-left transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                  <Users className="w-5 h-5" />
                 </div>
-              </div>
+                <div>
+                  <div className="text-sm font-bold text-white">Manage Users</div>
+                  <div className="text-xs text-neutral-400 mt-0.5">{uniqueUsers.length} total accounts</div>
+                </div>
+              </button>
 
               <button
-                onClick={() => setSupabaseModalOpen(true)}
-                className="w-full py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-white text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-2 mt-4"
+                onClick={() => setActiveAdminTab('videos')}
+                className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-[#ff007a]/40 text-left transition-all cursor-pointer group"
               >
-                <Sliders className="w-3.5 h-3.5" />
-                <span>Open Connection Settings</span>
+                <div className="w-10 h-10 rounded-xl bg-[#ff007a]/10 text-[#ff007a] flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                  <Film className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">Moderate Content</div>
+                  <div className="text-xs text-neutral-400 mt-0.5">{videos.length} videos · {pendingVideosCount} pending</div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => setActiveAdminTab('reports')}
+                className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-amber-500/40 text-left transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">Pending Reports</div>
+                  <div className="text-xs text-neutral-400 mt-0.5">{reports.length} reports · {pendingReportsCount} review</div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => setActiveAdminTab('admins')}
+                className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-purple-500/40 text-left transition-all cursor-pointer group"
+              >
+                <div className="w-10 h-10 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                  <Shield className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="text-sm font-bold text-white">Admin Team</div>
+                  <div className="text-xs text-neutral-400 mt-0.5">{admins.length || 1} administrators</div>
+                </div>
               </button>
             </div>
           </div>
@@ -1333,7 +1267,7 @@ export const AdminDashboardView: React.FC = () => {
       )}
 
       {/* =================================================================== */}
-      {/* TAB 6: SUPABASE TABLES & SQL RUNNER */}
+      {/* TAB 6: SUPABASE TABLES & ROW COUNTS */}
       {/* =================================================================== */}
       {activeAdminTab === 'database' && (
         <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-6">
@@ -1345,11 +1279,11 @@ export const AdminDashboardView: React.FC = () => {
               </p>
             </div>
             <button
-              onClick={handleCopySql}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-colors cursor-pointer shadow-sm w-fit"
+              onClick={loadData}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold transition-colors cursor-pointer"
             >
-              {copiedSql ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copiedSql ? 'Copied Full SQL!' : 'Copy SQL Setup Script'}</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#ff007a]' : ''}`} />
+              <span>Refresh Counts</span>
             </button>
           </div>
 
@@ -1386,30 +1320,6 @@ export const AdminDashboardView: React.FC = () => {
                 <div className="text-[10px] text-neutral-400">{t.desc}</div>
               </div>
             ))}
-          </div>
-
-          {/* SQL Editor Instructions */}
-          <div className="space-y-3 pt-4 border-t border-neutral-800">
-            <h4 className="text-sm font-bold text-white flex items-center gap-2">
-              <Database className="w-4 h-4 text-emerald-400" />
-              <span>Step-by-Step SQL Editor Instructions for Supabase:</span>
-            </h4>
-            <ol className="list-decimal list-inside space-y-1.5 text-xs text-neutral-300">
-              <li>
-                Open your Supabase Dashboard: <code className="text-[#ff007a]">https://supabase.com/dashboard</code>
-              </li>
-              <li>
-                Navigate to <strong>SQL Editor</strong> (left sidebar) &rarr; Click <strong>New Query</strong>.
-              </li>
-              <li>Click the "Copy SQL Setup Script" button above and paste into the editor.</li>
-              <li>
-                Click <strong>Run</strong>. This creates the <code className="text-white">Admin</code> table and configures permissive public Row Level Security (RLS) policies so client inserts never fail!
-              </li>
-            </ol>
-
-            <div className="bg-[#0c0c10] p-3 rounded-xl border border-neutral-800 font-mono text-[11px] text-neutral-400 max-h-48 overflow-y-auto leading-relaxed">
-              <pre>{SUPABASE_SQL_SCHEMA}</pre>
-            </div>
           </div>
         </div>
       )}

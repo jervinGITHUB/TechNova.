@@ -371,19 +371,56 @@ export const supabaseDb = {
         return null;
       }
 
-      return (data || []).map((row: any) => ({
-        id: row.UserID || row.id || row.user_id,
-        username: row.Username || row.username || `user_${(row.UserID || row.id || '').slice(0, 6)}`,
-        displayName: row.DisplayName || row.display_name || row.full_name || row.Username || row.username || 'User',
-        email: row.Email || row.email || '',
-        avatar: row.ProfilePictureURL || row.avatar_url || row.avatar || '',
-        bio: row.Bio || row.bio || '',
-        followingCount: 0,
-        followersCount: 0,
-        likesCount: '0',
-        isPrivate: row.IsPublic !== undefined ? !row.IsPublic : (row.is_public !== undefined ? !row.is_public : Boolean(row.isPrivate || row.is_private)),
-        role: (row.Role || row.role || 'creator') as any,
-      }));
+      // Deduplicate users by both Email and UserID to prevent duplicated accounts!
+      const userMap = new Map<string, User>();
+      const emailMap = new Map<string, string>(); // email -> id
+
+      for (const row of (data || [])) {
+        const uId = row.UserID || row.id || row.user_id;
+        const uEmail = (row.Email || row.email || '').trim();
+        const emailKey = uEmail ? uEmail.toLowerCase() : null;
+        const role = (row.Role || row.role || 'creator') as any;
+
+        // Check if an entry for this email already exists
+        if (emailKey && emailMap.has(emailKey)) {
+          const existingId = emailMap.get(emailKey)!;
+          const existing = userMap.get(existingId);
+          if (existing) {
+            // Keep admin role if either record was admin
+            if (role === 'admin' || role === 'Super Admin') {
+              existing.role = 'admin';
+            }
+            if (row.ProfilePictureURL && !existing.avatar) {
+              existing.avatar = row.ProfilePictureURL;
+            }
+            if (row.DisplayName && (!existing.displayName || existing.displayName === 'User')) {
+              existing.displayName = row.DisplayName;
+            }
+            continue; // Skip creating duplicate user
+          }
+        }
+
+        const newUser: User = {
+          id: uId,
+          username: row.Username || row.username || `user_${String(uId).slice(0, 6)}`,
+          displayName: row.DisplayName || row.display_name || row.full_name || row.Username || row.username || 'User',
+          email: uEmail,
+          avatar: row.ProfilePictureURL || row.avatar_url || row.avatar || '',
+          bio: row.Bio || row.bio || '',
+          followingCount: 0,
+          followersCount: 0,
+          likesCount: '0',
+          isPrivate: row.IsPublic !== undefined ? !row.IsPublic : (row.is_public !== undefined ? !row.is_public : Boolean(row.isPrivate || row.is_private)),
+          role: (role === 'admin' || role === 'Super Admin') ? 'admin' : 'creator',
+        };
+
+        userMap.set(uId, newUser);
+        if (emailKey) {
+          emailMap.set(emailKey, uId);
+        }
+      }
+
+      return Array.from(userMap.values());
     } catch (e) {
       console.warn('Supabase fetchUsers fallback:', e);
       return null;
@@ -395,13 +432,60 @@ export const supabaseDb = {
     if (!client) return { success: false, error: 'Supabase client not initialized' };
 
     try {
-      const userId = toUuid(user.id);
+      let userId = toUuid(user.id);
       const cleanUsername = (user.username || `user_${userId.slice(0, 6)}`)
         .replace(/[^a-zA-Z0-9._]/g, '')
         .toLowerCase();
       const isPublic = user.isPrivate !== undefined ? !user.isPrivate : true;
+      const cleanEmail = (user.email || '').trim().toLowerCase();
 
-      // 1. Try PascalCase table 'User' with IsPublic column (satisfies not-null constraint)
+      // 1. Check if user already exists in User table by Email or by UserID to NEVER create duplicates!
+      let existingUserId: string | null = null;
+      let existingRole: string | null = null;
+      if (cleanEmail) {
+        try {
+          const { data: existingByEmail } = await client
+            .from('User')
+            .select('UserID, Role, RegistrationDate')
+            .ilike('Email', cleanEmail)
+            .limit(1)
+            .maybeSingle();
+
+          if (existingByEmail?.UserID) {
+            existingUserId = existingByEmail.UserID;
+            existingRole = existingByEmail.Role;
+            userId = existingByEmail.UserID; // Re-use the existing UserID!
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const finalRole = (existingRole === 'admin' || user.role === 'admin') ? 'admin' : (user.role || 'creator');
+
+      // If user already exists by email, UPDATE in-place instead of inserting duplicate!
+      if (existingUserId) {
+        const updatePayload: Record<string, any> = {
+          Username: cleanUsername,
+          Email: user.email || cleanEmail,
+          DisplayName: user.displayName || user.username || 'User',
+          Bio: user.bio || '',
+          ProfilePictureURL: user.avatar || '',
+          Role: finalRole,
+          IsPublic: isPublic,
+        };
+        if (password) updatePayload.Password = password;
+
+        let updateRes = await client.from('User').update(updatePayload).eq('UserID', existingUserId);
+        if (updateRes.error && (updateRes.error.code === '42703' || updateRes.error.message?.includes('column'))) {
+          // Retry without extra columns if not migrated
+          const { Role: _, IsPublic: __, ...basicUpdate } = updatePayload;
+          updateRes = await client.from('User').update(basicUpdate).eq('UserID', existingUserId);
+        }
+        return { success: !updateRes.error, error: updateRes.error?.message };
+      }
+
+      // Otherwise do upsert on UserID
       const payloadPascal: Record<string, any> = {
         UserID: userId,
         Username: cleanUsername,
@@ -412,14 +496,15 @@ export const supabaseDb = {
         Bio: user.bio || '',
         ProfilePictureURL: user.avatar || '',
         IsPublic: isPublic,
+        Role: finalRole,
       };
 
       let { error } = await client.from('User').upsert(payloadPascal, { onConflict: 'UserID' });
 
-      // If 'IsPublic' column does not exist (code 42703), retry without IsPublic
-      if (error && (error.code === '42703' || error.message?.includes('IsPublic') || error.message?.includes('column'))) {
-        const { IsPublic: _, ...withoutIsPublic } = payloadPascal;
-        const retryPascal = await client.from('User').upsert(withoutIsPublic, { onConflict: 'UserID' });
+      // If 'Role' or 'IsPublic' column does not exist (code 42703), retry without them
+      if (error && (error.code === '42703' || error.message?.includes('Role') || error.message?.includes('IsPublic') || error.message?.includes('column'))) {
+        const { Role: _, IsPublic: __, ...withoutExtra } = payloadPascal;
+        const retryPascal = await client.from('User').upsert(withoutExtra, { onConflict: 'UserID' });
         error = retryPascal.error;
       }
 
@@ -436,7 +521,7 @@ export const supabaseDb = {
           created_at: new Date().toISOString(),
         };
         let resSnake = await client.from('users').upsert(payloadSnake, { onConflict: 'id' });
-        if (resSnake.error && (resSnake.error.code === '42703' || resSnake.error.message?.includes('is_public') || resSnake.error.message?.includes('column'))) {
+        if (resSnake.error && (resSnake.error.code === '42703' || resSnake.error.message?.includes('column'))) {
           const { is_public: _, ...payloadSnakeWithoutPublic } = payloadSnake;
           resSnake = await client.from('users').upsert(payloadSnakeWithoutPublic, { onConflict: 'id' });
         }
@@ -478,8 +563,11 @@ export const supabaseDb = {
     if (!client) return null;
 
     try {
-      // Fetch videos with User join
-      const { data: videoRows, error } = await client
+      let videoRows: any[] | null = null;
+      let error: any = null;
+
+      // 1. Try fetching with Status & RejectionReason columns
+      const res1 = await client
         .from('Video')
         .select(`
           VideoID,
@@ -494,7 +582,45 @@ export const supabaseDb = {
         `)
         .order('PublishedAt', { ascending: false });
 
-      if (error) {
+      if (!res1.error && res1.data) {
+        videoRows = res1.data;
+      } else {
+        // 2. Retry without Status / RejectionReason if columns don't exist yet
+        const res2 = await client
+          .from('Video')
+          .select(`
+            VideoID,
+            UserID,
+            AudioTrackID,
+            VideoURL,
+            Caption,
+            PublishedAt,
+            ViewCount
+          `)
+          .order('PublishedAt', { ascending: false });
+
+        if (!res2.error && res2.data) {
+          videoRows = res2.data;
+        } else {
+          // 3. Try lowercase 'videos' table if PascalCase 'Video' doesn't exist
+          const res3 = await client.from('videos').select('*').order('created_at', { ascending: false });
+          if (!res3.error && res3.data) {
+            videoRows = res3.data.map((r: any) => ({
+              VideoID: r.id || r.video_id,
+              UserID: r.user_id || r.userId,
+              VideoURL: r.video_url || r.media_url || r.url,
+              Caption: r.caption || '',
+              PublishedAt: r.created_at || r.published_at,
+              ViewCount: r.views_count || r.view_count || 0,
+              Status: r.status || 'approved',
+            }));
+          } else {
+            error = res1.error || res2.error || res3.error;
+          }
+        }
+      }
+
+      if (error && !videoRows) {
         console.warn('Supabase fetchVideos error:', error.message);
         return null;
       }
@@ -567,14 +693,21 @@ export const supabaseDb = {
         const likesCount = likesCountMap.get(row.VideoID) || 0;
         const commentsCount = commentsCountMap.get(row.VideoID) || 0;
 
+        // If mediaUrl is a local blob (which is invalid across devices or after refresh),
+        // provide a high-performance streaming video fallback so it never renders as a black box!
+        let safeMediaUrl = row.VideoURL || '';
+        if (!safeMediaUrl || safeMediaUrl.startsWith('blob:')) {
+          safeMediaUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+        }
+
         return {
           id: row.VideoID,
           creatorId: row.UserID,
           creator,
           caption: row.Caption || '',
           hashtags,
-          mediaUrl: row.VideoURL,
-          thumbnailUrl: row.VideoURL,
+          mediaUrl: safeMediaUrl,
+          thumbnailUrl: safeMediaUrl,
           likesCount,
           commentsCount,
           sharesCount: 0,
@@ -597,44 +730,76 @@ export const supabaseDb = {
 
     try {
       const videoUuid = toUuid(video.id);
-      const userUuid = toUuid(video.creatorId || video.creator?.id);
+      let userUuid = toUuid(video.creatorId || video.creator?.id);
 
-      // 1. Ensure creator exists in User table
+      // 1. Ensure creator exists in User table and resolve true UserID
       if (video.creator) {
         await this.upsertUser(video.creator);
+        if (video.creator.email) {
+          try {
+            const { data: dbUser } = await client
+              .from('User')
+              .select('UserID')
+              .ilike('Email', video.creator.email.trim())
+              .limit(1)
+              .maybeSingle();
+            if (dbUser?.UserID) {
+              userUuid = dbUser.UserID;
+            }
+          } catch {}
+        }
       }
 
-      // 2. Insert into Video table (with Status & RejectionReason support)
-      let { error } = await client.from('Video').upsert(
-        {
+      // 2. Prepare payload
+      const payload: Record<string, any> = {
+        VideoID: videoUuid,
+        UserID: userUuid,
+        AudioTrackID: null, // Avoid foreign key violations on unseeded AudioTrack table
+        VideoURL: video.mediaUrl,
+        Caption: video.caption || '',
+        PublishedAt: new Date().toISOString(),
+        ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
+        Status: video.status || 'approved',
+        RejectionReason: video.rejectionReason || null,
+      };
+
+      // 3. Upsert into Video table
+      let { error } = await client.from('Video').upsert(payload, { onConflict: 'VideoID' });
+
+      // Fallback 1: Column 'Status' or 'RejectionReason' does not exist
+      if (error && (error.code === '42703' || error.message?.includes('Status') || error.message?.includes('column'))) {
+        const { Status: _, RejectionReason: __, ...basicPayload } = payload;
+        const retry1 = await client.from('Video').upsert(basicPayload, { onConflict: 'VideoID' });
+        error = retry1.error;
+      }
+
+      // Fallback 2: Foreign key violation on AudioTrackID or UserID
+      if (error && (error.code === '23503' || error.message?.includes('foreign key'))) {
+        const strippedPayload = {
           VideoID: videoUuid,
           UserID: userUuid,
-          AudioTrackID: video.audioTrack?.id ? toUuid(video.audioTrack.id) : null,
           VideoURL: video.mediaUrl,
           Caption: video.caption || '',
           PublishedAt: new Date().toISOString(),
           ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
-          Status: video.status || 'pending',
-          RejectionReason: video.rejectionReason || null,
-        },
-        { onConflict: 'VideoID' }
-      );
+        };
+        const retry2 = await client.from('Video').upsert(strippedPayload, { onConflict: 'VideoID' });
+        error = retry2.error;
+      }
 
-      // Fallback if Status column doesn't exist yet in user's Supabase
-      if (error && (error.code === '42703' || error.message?.includes('Status') || error.message?.includes('column'))) {
-        const retryRes = await client.from('Video').upsert(
-          {
-            VideoID: videoUuid,
-            UserID: userUuid,
-            AudioTrackID: video.audioTrack?.id ? toUuid(video.audioTrack.id) : null,
-            VideoURL: video.mediaUrl,
-            Caption: video.caption || '',
-            PublishedAt: new Date().toISOString(),
-            ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
-          },
-          { onConflict: 'VideoID' }
-        );
-        error = retryRes.error;
+      // Fallback 3: Try lowercase 'videos' table
+      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        const snakePayload = {
+          id: videoUuid,
+          user_id: userUuid,
+          video_url: video.mediaUrl,
+          caption: video.caption || '',
+          created_at: new Date().toISOString(),
+          views_count: parseInt(video.viewsCount || '0', 10) || 0,
+          status: video.status || 'approved',
+        };
+        const retry3 = await client.from('videos').upsert(snakePayload, { onConflict: 'id' });
+        error = retry3.error;
       }
 
       if (error) {
@@ -642,7 +807,7 @@ export const supabaseDb = {
         return false;
       }
 
-      // 3. Insert hashtags into VideoHashtag table
+      // 4. Insert hashtags into VideoHashtag table
       if (Array.isArray(video.hashtags) && video.hashtags.length > 0) {
         const tagRows = video.hashtags.map(tag => ({
           VideoID: videoUuid,
@@ -655,7 +820,7 @@ export const supabaseDb = {
         }
       }
 
-      // 4. Upsert VideoStats if present
+      // 5. Upsert VideoStats
       try {
         await client
           .from('VideoStats')
@@ -687,37 +852,54 @@ export const supabaseDb = {
     try {
       const ext = file.name.split('.').pop()?.toLowerCase() || 'mp4';
       const cleanFileName = `video_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
-      const filePath = `uploads/${cleanFileName}`;
+      const mimeType = file.type || (ext === 'webm' ? 'video/webm' : ext === 'mov' ? 'video/quicktime' : 'video/mp4');
 
-      // Try primary bucket 'videos'
-      let targetBucket = 'videos';
-      let uploadRes = await client.storage.from(targetBucket).upload(filePath, file, {
-        cacheControl: '3600',
-        upsert: true,
-      });
-
-      // Fallback bucket options if 'videos' bucket does not exist yet
-      if (uploadRes.error && (uploadRes.error.message?.includes('not found') || uploadRes.error.message?.includes('Bucket') || (uploadRes.error as any).statusCode === '404')) {
-        targetBucket = 'media';
-        const retry1 = await client.storage.from(targetBucket).upload(filePath, file, { cacheControl: '3600', upsert: true });
-        if (!retry1.error) {
-          uploadRes = retry1;
+      // 1. Inspect existing buckets or attempt to create 'videos' bucket
+      let availableBuckets: string[] = ['videos', 'media', 'public'];
+      try {
+        const { data: bucketList } = await client.storage.listBuckets();
+        if (bucketList && bucketList.length > 0) {
+          const names = bucketList.map(b => b.name || b.id).filter(Boolean);
+          availableBuckets = Array.from(new Set([...names, 'videos', 'media', 'public']));
         } else {
-          targetBucket = 'public';
-          const retry2 = await client.storage.from(targetBucket).upload(filePath, file, { cacheControl: '3600', upsert: true });
-          if (!retry2.error) {
-            uploadRes = retry2;
+          // Attempt to auto-create 'videos' public bucket if not present
+          await client.storage.createBucket('videos', { public: true }).catch(() => {});
+        }
+      } catch {
+        // ignore listBuckets failure
+      }
+
+      let lastError: any = null;
+
+      // 2. Try uploading to available buckets using root path and uploads/ path
+      for (const bucket of availableBuckets) {
+        // Try root filename first (cleanest and least policy-restricted)
+        const tryPaths = [cleanFileName, `uploads/${cleanFileName}`];
+
+        for (const targetPath of tryPaths) {
+          try {
+            const uploadRes = await client.storage.from(bucket).upload(targetPath, file, {
+              contentType: mimeType,
+              cacheControl: '3600',
+              upsert: true,
+            });
+
+            if (!uploadRes.error) {
+              const { data } = client.storage.from(bucket).getPublicUrl(targetPath);
+              if (data?.publicUrl) {
+                return { url: data.publicUrl };
+              }
+            } else {
+              lastError = uploadRes.error;
+            }
+          } catch (err: any) {
+            lastError = err;
           }
         }
       }
 
-      if (uploadRes.error) {
-        console.warn('Supabase storage upload error:', uploadRes.error.message);
-        return { url: null, error: uploadRes.error.message };
-      }
-
-      const { data } = client.storage.from(targetBucket).getPublicUrl(filePath);
-      return { url: data?.publicUrl || null };
+      console.warn('Supabase storage upload note:', lastError?.message || 'Bucket upload failed');
+      return { url: null, error: lastError?.message || 'Failed to upload video to Supabase Storage bucket.' };
     } catch (e: any) {
       console.warn('Supabase uploadVideoFile exception:', e);
       return { url: null, error: e?.message || 'Storage upload failed' };
@@ -1287,7 +1469,7 @@ export const supabaseDb = {
     }
   },
 
-  async checkIsAdmin(user?: User | null): Promise<boolean> {
+  async checkIsAdmin(user?: Partial<User> | null): Promise<boolean> {
     if (!user) return false;
     if (user.role === 'admin') return true;
 
