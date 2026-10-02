@@ -49,6 +49,7 @@ export const AdminDashboardView: React.FC = () => {
     deleteVideoAdmin,
     approveVideoAdmin,
     rejectVideoAdmin,
+    reviewVideoAppeal,
     updateReportStatusAdmin,
     syncAllToSupabase,
     syncWithSupabase,
@@ -99,7 +100,7 @@ export const AdminDashboardView: React.FC = () => {
   // Filters
   const [userSearch, setUserSearch] = useState('');
   const [videoSearch, setVideoSearch] = useState('');
-  const [videoStatusFilter, setVideoStatusFilter] = useState<'pending' | 'approved' | 'rejected' | 'all'>('pending');
+  const [videoStatusFilter, setVideoStatusFilter] = useState<'approved' | 'rejected' | 'appeals' | 'all'>('approved');
   const [reportFilter, setReportFilter] = useState<'all' | 'video' | 'user'>('all');
   const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'Under Review' | 'Approved' | 'Rejected'>('all');
 
@@ -200,10 +201,10 @@ export const AdminDashboardView: React.FC = () => {
     await loadData();
   };
 
-  // Pending and status counts
-  const pendingVideosCount = videos.filter(v => v.status === 'pending').length;
+  // Video counts
   const approvedVideosCount = videos.filter(v => v.status === 'approved' || (!v.status && v.id.startsWith('vid_sample'))).length;
   const rejectedVideosCount = videos.filter(v => v.status === 'rejected').length;
+  const pendingAppealsCount = videos.filter(v => v.appealStatus === 'pending').length;
 
   const pendingReportsCount = reports.filter(r => r.status === 'Under Review').length;
   const approvedReportsCount = reports.filter(r => r.status === 'Approved').length;
@@ -216,14 +217,14 @@ export const AdminDashboardView: React.FC = () => {
       v.hashtags.some(tag => tag.toLowerCase().includes(videoSearch.toLowerCase()));
     if (!matchesSearch) return false;
 
-    if (videoStatusFilter === 'pending') {
-      return v.status === 'pending';
-    }
     if (videoStatusFilter === 'approved') {
       return v.status === 'approved' || (!v.status && v.id.startsWith('vid_sample'));
     }
     if (videoStatusFilter === 'rejected') {
       return v.status === 'rejected';
+    }
+    if (videoStatusFilter === 'appeals') {
+      return v.appealStatus === 'pending';
     }
     return true;
   });
@@ -442,9 +443,9 @@ export const AdminDashboardView: React.FC = () => {
           { id: 'users', label: `Users (${uniqueUsers.length})`, icon: <Users className="w-4 h-4" /> },
           {
             id: 'videos',
-            label: pendingVideosCount > 0 ? `Videos (${videos.length}) · ${pendingVideosCount} Pending` : `Videos (${videos.length})`,
+            label: pendingAppealsCount > 0 ? `Videos (${videos.length}) · ${pendingAppealsCount} Appeal${pendingAppealsCount > 1 ? 's' : ''}` : `Videos (${videos.length})`,
             icon: <Film className="w-4 h-4" />,
-            highlight: pendingVideosCount > 0,
+            highlight: pendingAppealsCount > 0,
           },
           {
             id: 'reports',
@@ -476,8 +477,8 @@ export const AdminDashboardView: React.FC = () => {
       {/* =================================================================== */}
       {activeAdminTab === 'overview' && (
         <div className="space-y-6">
-          {/* Pending Video Approvals Alert Banner */}
-          {pendingVideosCount > 0 && (
+          {/* Creator Appeals Alert Banner */}
+          {pendingAppealsCount > 0 && (
             <div className="p-4 sm:p-5 rounded-3xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg">
               <div className="flex items-center gap-3.5">
                 <div className="p-3 rounded-2xl bg-amber-500/20 text-amber-400 shrink-0">
@@ -485,25 +486,25 @@ export const AdminDashboardView: React.FC = () => {
                 </div>
                 <div>
                   <h4 className="text-sm font-bold text-white font-brand flex items-center gap-2">
-                    <span>{pendingVideosCount} Client Video{pendingVideosCount > 1 ? 's' : ''} Awaiting Admin Approval</span>
+                    <span>{pendingAppealsCount} Creator Appeal{pendingAppealsCount > 1 ? 's' : ''} Awaiting Admin Review</span>
                     <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold">
                       Needs Review
                     </span>
                   </h4>
                   <p className="text-xs text-neutral-300 mt-0.5">
-                    Uploaded client videos stay in the moderation queue until accepted or declined by an administrator.
+                    Creators have submitted appeals for revoked videos requesting reinstatement to the public feed.
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => {
                   setActiveAdminTab('videos');
-                  setVideoStatusFilter('pending');
+                  setVideoStatusFilter('appeals');
                 }}
                 className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs shrink-0 cursor-pointer shadow-md transition-all flex items-center gap-1.5"
               >
-                <span>Review Moderation Queue</span>
-                <span>({pendingVideosCount}) →</span>
+                <span>Review Creator Appeals</span>
+                <span>({pendingAppealsCount}) →</span>
               </button>
             </div>
           )}
@@ -558,7 +559,10 @@ export const AdminDashboardView: React.FC = () => {
               </button>
 
               <button
-                onClick={() => setActiveAdminTab('videos')}
+                onClick={() => {
+                  setActiveAdminTab('videos');
+                  setVideoStatusFilter('approved');
+                }}
                 className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-[#ff007a]/40 text-left transition-all cursor-pointer group"
               >
                 <div className="w-10 h-10 rounded-xl bg-[#ff007a]/10 text-[#ff007a] flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
@@ -566,7 +570,7 @@ export const AdminDashboardView: React.FC = () => {
                 </div>
                 <div>
                   <div className="text-sm font-bold text-white">Moderate Content</div>
-                  <div className="text-xs text-neutral-400 mt-0.5">{videos.length} videos · {pendingVideosCount} pending</div>
+                  <div className="text-xs text-neutral-400 mt-0.5">{videos.length} videos · {pendingAppealsCount} appeals</div>
                 </div>
               </button>
 
@@ -702,16 +706,16 @@ export const AdminDashboardView: React.FC = () => {
             <div>
               <div className="flex items-center gap-2.5">
                 <h3 className="text-base font-bold text-white font-brand">
-                  Video Moderation & Approval Queue
+                  Video Moderation & Appeals
                 </h3>
-                {pendingVideosCount > 0 && (
+                {pendingAppealsCount > 0 && (
                   <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold animate-pulse">
-                    {pendingVideosCount} awaiting approval
+                    {pendingAppealsCount} appeal{pendingAppealsCount > 1 ? 's' : ''} awaiting review
                   </span>
                 )}
               </div>
               <p className="text-xs text-neutral-400 mt-0.5">
-                All client video uploads require administrator approval before appearing publicly on Home and Explore feeds.
+                Monitor live community videos, manage guidelines compliance, and review creator moderation appeals.
               </p>
             </div>
 
@@ -728,12 +732,12 @@ export const AdminDashboardView: React.FC = () => {
             </div>
           </div>
 
-          {/* Sub-Filter Tabs */}
+          {/* Sub-Filter Tabs (Pending Approval removed as requested) */}
           <div className="flex flex-wrap items-center gap-2">
             {[
-              { id: 'pending', label: `Pending Approval (${pendingVideosCount})`, isAlert: pendingVideosCount > 0 },
               { id: 'approved', label: `Live & Approved (${approvedVideosCount})` },
-              { id: 'rejected', label: `Declined (${rejectedVideosCount})` },
+              { id: 'rejected', label: `Declined / Revoked (${rejectedVideosCount})` },
+              { id: 'appeals', label: `Creator Appeals (${pendingAppealsCount})`, isAlert: pendingAppealsCount > 0 },
               { id: 'all', label: `All Videos (${videos.length})` },
             ].map(tab => (
               <button
@@ -759,8 +763,8 @@ export const AdminDashboardView: React.FC = () => {
                 <Film className="w-8 h-8 mx-auto text-neutral-600 mb-1" />
                 <div className="font-semibold text-neutral-300 text-sm">No videos found</div>
                 <p className="text-neutral-500 max-w-sm mx-auto">
-                  {videoStatusFilter === 'pending'
-                    ? 'The moderation queue is completely clear! No videos are awaiting approval.'
+                  {videoStatusFilter === 'appeals'
+                    ? 'There are currently no creator appeals awaiting review.'
                     : `No videos found matching your filter (${videoStatusFilter}).`}
                 </p>
               </div>
@@ -769,8 +773,8 @@ export const AdminDashboardView: React.FC = () => {
                 <div
                   key={video.id}
                   className={`bg-[#181824] border rounded-2xl overflow-hidden flex flex-col justify-between transition-all group ${
-                    video.status === 'pending'
-                      ? 'border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.15)]'
+                    video.appealStatus === 'pending'
+                      ? 'border-amber-500/50 shadow-[0_0_20px_rgba(245,158,11,0.2)] ring-1 ring-amber-500/40'
                       : video.status === 'rejected'
                       ? 'border-red-500/30 opacity-90'
                       : 'border-neutral-800 hover:border-neutral-700'
@@ -791,23 +795,21 @@ export const AdminDashboardView: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Status Badge */}
-                      {video.status === 'pending' && (
+                      {/* Status Badges */}
+                      {video.appealStatus === 'pending' ? (
                         <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold flex items-center gap-1 shrink-0 animate-pulse">
                           <Clock className="w-2.5 h-2.5" />
-                          <span>Awaiting Review</span>
+                          <span>Appeal Pending</span>
                         </span>
-                      )}
-                      {video.status === 'approved' && (
+                      ) : video.status === 'approved' ? (
                         <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-1 shrink-0">
                           <CheckCircle2 className="w-2.5 h-2.5" />
                           <span>Approved & Live</span>
                         </span>
-                      )}
-                      {video.status === 'rejected' && (
+                      ) : (
                         <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-bold flex items-center gap-1 shrink-0">
                           <XCircle className="w-2.5 h-2.5" />
-                          <span>Declined</span>
+                          <span>Declined / Revoked</span>
                         </span>
                       )}
                     </div>
@@ -827,10 +829,21 @@ export const AdminDashboardView: React.FC = () => {
                       {video.caption || 'No caption provided'}
                     </p>
 
+                    {/* Appeal details box if appeal is submitted */}
+                    {video.appealStatus === 'pending' && (
+                      <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1">
+                        <div className="font-bold flex items-center gap-1.5 text-amber-300">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>Creator Submitted Appeal:</span>
+                        </div>
+                        <p className="text-[11px] text-neutral-200 italic">"{video.appealReason}"</p>
+                      </div>
+                    )}
+
                     {/* Rejection Note if Declined */}
                     {video.status === 'rejected' && video.rejectionReason && (
                       <div className="p-2 rounded-xl bg-red-500/10 border border-red-500/20 text-[11px] text-red-300">
-                        <strong>Declined reason:</strong> {video.rejectionReason}
+                        <strong>Revocation reason:</strong> {video.rejectionReason}
                       </div>
                     )}
 
@@ -870,24 +883,21 @@ export const AdminDashboardView: React.FC = () => {
 
                     {/* Decision Buttons */}
                     <div className="flex items-center justify-between gap-2 pt-1 border-t border-neutral-800/40">
-                      {video.status === 'pending' ? (
+                      {video.appealStatus === 'pending' ? (
                         <>
                           <button
-                            onClick={() => approveVideoAdmin(video.id)}
+                            onClick={() => reviewVideoAppeal(video.id, 'approved')}
                             className="flex-1 py-1.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold flex items-center justify-center gap-1 shadow cursor-pointer transition-all"
                           >
                             <Check className="w-3.5 h-3.5 stroke-[3]" />
-                            <span>Approve & Publish</span>
+                            <span>Approve Appeal</span>
                           </button>
                           <button
-                            onClick={() => {
-                              setRejectingVideoId(video.id);
-                              setRejectReason('Inappropriate visual content or guidelines violation');
-                            }}
+                            onClick={() => reviewVideoAppeal(video.id, 'declined')}
                             className="py-1.5 px-3 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                           >
                             <XCircle className="w-3.5 h-3.5" />
-                            <span>Decline</span>
+                            <span>Decline Appeal</span>
                           </button>
                           <button
                             onClick={() => deleteVideoAdmin(video.id)}
@@ -907,9 +917,9 @@ export const AdminDashboardView: React.FC = () => {
                             <button
                               onClick={() => {
                                 setRejectingVideoId(video.id);
-                                setRejectReason('Post-publication moderation review');
+                                setRejectReason('Post-publication guidelines violation');
                               }}
-                              className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium cursor-pointer"
+                              className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-red-500/20 hover:text-red-300 text-neutral-300 text-xs font-medium cursor-pointer transition-colors"
                             >
                               Revoke
                             </button>

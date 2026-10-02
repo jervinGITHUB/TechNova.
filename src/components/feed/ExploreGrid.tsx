@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import {
   Play,
@@ -47,7 +47,7 @@ export const ExploreGrid: React.FC = () => {
   });
 
   // Filter matching videos (only approved videos or creator's own pending videos)
-  const filteredVideos = videos.filter(v => {
+  const filteredVideos = deduplicateVideos(videos).filter(v => {
     if (v.status === 'rejected') return false;
     if (v.status === 'pending') {
       if (!currentUser || v.creatorId !== currentUser.id) return false;

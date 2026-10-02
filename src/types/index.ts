@@ -59,6 +59,9 @@ export interface Video {
   reportsCount?: number;
   status?: 'pending' | 'approved' | 'rejected';
   rejectionReason?: string;
+  appealReason?: string;
+  appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
+  appealTimestamp?: string;
 }
 
 export interface MessageReplyInfo {
@@ -111,7 +114,7 @@ export type FollowStatus = 'none' | 'requested' | 'following' | 'friends';
 export interface NotificationItem {
   id: string;
   recipientId?: string;
-  type: 'like' | 'follow' | 'follow_request' | 'comment' | 'share';
+  type: 'like' | 'follow' | 'follow_request' | 'comment' | 'share' | 'video_revoked' | 'appeal_status';
   actor: {
     id: string;
     username: string;
@@ -124,6 +127,9 @@ export interface NotificationItem {
   videoId?: string;
   requestId?: string;
   status?: 'pending' | 'accepted' | 'declined' | 'confirmed';
+  appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
+  rejectionReason?: string;
+  appealReason?: string;
 }
 
 export interface ReportItem {

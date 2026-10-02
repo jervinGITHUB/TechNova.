@@ -147,6 +147,7 @@ export const UploadView: React.FC = () => {
 
   const handlePublish = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isPublishing) return;
     if (!videoPreviewUrl || !videoFile) {
       setErrorMessage('Please choose a video file first.');
       return;

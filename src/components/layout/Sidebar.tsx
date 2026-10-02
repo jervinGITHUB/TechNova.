@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ArrowRightLeft,
   Shield,
+  ShieldAlert,
   Database,
 } from 'lucide-react';
 
@@ -186,6 +187,17 @@ export const Sidebar: React.FC = () => {
                   >
                     <ArrowRightLeft className="w-4 h-4 text-[#ff007a]" />
                     <span>Switch Account</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setActiveTab('report_history');
+                    }}
+                    className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-white hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
+                  >
+                    <ShieldAlert className="w-4 h-4 text-amber-400" />
+                    <span>Report History</span>
                   </button>
 
                   <div className="h-px bg-neutral-800 my-1" />

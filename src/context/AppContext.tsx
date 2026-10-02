@@ -193,6 +193,8 @@ interface AppContextType {
   deleteVideoAdmin: (videoId: string) => Promise<boolean>;
   approveVideoAdmin: (videoId: string) => Promise<boolean>;
   rejectVideoAdmin: (videoId: string, reason?: string) => Promise<boolean>;
+  submitVideoAppeal: (videoId: string, reason: string) => Promise<boolean>;
+  reviewVideoAppeal: (videoId: string, decision: 'approved' | 'declined') => Promise<boolean>;
   updateReportStatusAdmin: (
     reportId: string,
     type: 'video' | 'user',
@@ -211,6 +213,31 @@ interface AppContextType {
   feedRefreshKey: number;
   refreshFeed: () => void;
 }
+
+export const deduplicateVideos = (videoList: Video[]): Video[] => {
+  const seenIds = new Set<string>();
+  const seenContent = new Set<string>();
+  const result: Video[] = [];
+
+  for (const v of videoList) {
+    if (!v || !v.id) continue;
+    if (seenIds.has(v.id)) continue;
+
+    const creatorKey = v.creatorId || v.creator?.id || '';
+    const captionKey = (v.caption || '').trim().toLowerCase();
+    const mediaKey = (v.mediaUrl || '').trim();
+
+    if (mediaKey && creatorKey) {
+      const contentKey = `${creatorKey}___${captionKey}___${mediaKey}`;
+      if (seenContent.has(contentKey)) continue;
+      seenContent.add(contentKey);
+    }
+
+    seenIds.add(v.id);
+    result.push(v);
+  }
+  return result;
+};
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -236,7 +263,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const [videos, setVideos] = useState<Video[]>(() => {
-    return storage.get<Video[]>('videos', INITIAL_VIDEOS);
+    const stored = storage.get<Video[]>('videos', INITIAL_VIDEOS);
+    return deduplicateVideos(stored);
   });
 
   const [audioTracks] = useState<AudioTrack[]>(() => storage.get('audioTracks', INITIAL_AUDIO_TRACKS));
@@ -393,7 +421,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const currentUserLikedSet = React.useMemo(() => new Set(currentUserLikes), [currentUserLikes]);
 
   const activeVideos = React.useMemo(() => {
-    return videos.map(v => ({
+    return deduplicateVideos(videos).map(v => ({
       ...v,
       isLiked: currentUserLikedSet.has(v.id),
     }));
@@ -452,16 +480,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (remoteVideos !== null) {
         setVideos(prev => {
-          const map = new Map<string, Video>();
-          // Put remote videos in map
-          (remoteVideos || []).forEach(v => map.set(v.id, v));
-          // Keep any newly uploaded local videos that haven't synced yet
-          prev.forEach(v => {
-            if (!map.has(v.id)) {
-              map.set(v.id, v);
-            }
-          });
-          return Array.from(map.values());
+          return deduplicateVideos([...(remoteVideos || []), ...prev]);
         });
       }
 
@@ -922,16 +941,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = async () => {
+    let nextAccount: User | null = null;
+
     if (currentUser) {
-      setSavedAccounts(prev => {
-        const next = prev.filter(
-          a =>
-            a.id !== currentUser.id &&
-            (!currentUser.email || !a.email || a.email.toLowerCase() !== currentUser.email.toLowerCase())
-        );
-        storage.set('saved_accounts_v2', next);
-        return next;
-      });
+      const remainingAccounts = savedAccounts.filter(
+        a =>
+          a.id !== currentUser.id &&
+          (!currentUser.email || !a.email || a.email.toLowerCase() !== currentUser.email.toLowerCase())
+      );
+      setSavedAccounts(remainingAccounts);
+      storage.set('saved_accounts_v2', remainingAccounts);
+
+      if (remainingAccounts.length > 0) {
+        nextAccount = remainingAccounts[0];
+      }
     }
 
     try {
@@ -939,13 +962,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {
       // ignore
     }
-    setCurrentUser(null);
-    storage.remove('currentUser');
-    setActiveConversationId(null);
-    setMessagesMobileView('list');
-    setSelectedUserId(null);
-    setAuthView('login');
-    setIsAdmin(false);
+
+    if (nextAccount) {
+      // Automatically switch to the other account left (the 2nd recently logged in on device)
+      quickLoginAs(nextAccount.id);
+    } else {
+      // No other accounts left on device: redirect to login page
+      setCurrentUser(null);
+      storage.remove('currentUser');
+      setActiveConversationId(null);
+      setMessagesMobileView('list');
+      setSelectedUserId(null);
+      setAuthView('login');
+      setIsAdmin(false);
+    }
   };
 
   const quickLoginAs = (userId: string) => {
@@ -1586,8 +1616,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     thumbnailUrl?: string;
   }) => {
     if (!currentUser) return false;
+    const videoId = crypto.randomUUID();
     const created: Video = {
-      id: `vid_${Date.now()}`,
+      id: videoId,
       creatorId: currentUser.id,
       creator: currentUser,
       caption: newVideo.caption || 'New viral moment! 🔥',
@@ -1600,11 +1631,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       sharesCount: 0,
       viewsCount: '1',
       isLiked: false,
-      createdAt: 'Just now',
+      createdAt: new Date().toISOString(),
       reportsCount: 0,
       status: 'approved',
+      appealStatus: 'none',
     };
-    setVideos(prev => [created, ...prev]);
+    setVideos(prev => deduplicateVideos([created, ...prev]));
     const ok = await supabaseDb.insertVideo(created);
     return ok;
   };
@@ -1950,22 +1982,186 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const approveVideoAdmin = async (videoId: string): Promise<boolean> => {
     setVideos(prev =>
-      prev.map(v => (v.id === videoId ? { ...v, status: 'approved' as const } : v))
+      prev.map(v => (v.id === videoId ? { ...v, status: 'approved' as const, rejectionReason: undefined } : v))
     );
     const video = videos.find(v => v.id === videoId);
     if (video) {
-      await supabaseDb.insertVideo({ ...video, status: 'approved' });
+      await supabaseDb.insertVideo({ ...video, status: 'approved', rejectionReason: undefined });
     }
     return true;
   };
 
   const rejectVideoAdmin = async (videoId: string, reason?: string): Promise<boolean> => {
-    setVideos(prev =>
-      prev.map(v => (v.id === videoId ? { ...v, status: 'rejected' as const, rejectionReason: reason } : v))
-    );
+    const finalReason = reason || 'Inappropriate visual content or guidelines violation';
     const video = videos.find(v => v.id === videoId);
+
+    setVideos(prev =>
+      prev.map(v =>
+        v.id === videoId
+          ? {
+              ...v,
+              status: 'rejected' as const,
+              rejectionReason: finalReason,
+              appealStatus: 'none' as const,
+            }
+          : v
+      )
+    );
+
     if (video) {
-      await supabaseDb.insertVideo({ ...video, status: 'rejected', rejectionReason: reason });
+      await supabaseDb.insertVideo({
+        ...video,
+        status: 'rejected',
+        rejectionReason: finalReason,
+        appealStatus: 'none',
+      });
+
+      // Send notification to the uploader/user
+      const revokeNotif: NotificationItem = {
+        id: `notif_${Date.now()}`,
+        recipientId: video.creatorId,
+        type: 'video_revoked',
+        actor: {
+          id: currentUser?.id || 'admin',
+          username: currentUser?.username || 'admin',
+          displayName: currentUser?.displayName || 'ViralHub Moderation',
+          avatar: '',
+        },
+        targetText: `revoked your video "${video.caption.slice(0, 30)}". Reason: ${finalReason}. You may submit an appeal.`,
+        timestamp: 'Just now',
+        isUnread: true,
+        videoId: video.id,
+        rejectionReason: finalReason,
+        appealStatus: 'none',
+      };
+
+      setNotifications(prev => [revokeNotif, ...prev]);
+      supabaseDb.insertNotification(revokeNotif, video.creatorId);
+    }
+    return true;
+  };
+
+  const submitVideoAppeal = async (videoId: string, reason: string): Promise<boolean> => {
+    if (!currentUser) return false;
+    const cleanReason = reason.trim();
+    const video = videos.find(v => v.id === videoId);
+    if (!video) return false;
+
+    setVideos(prev =>
+      prev.map(v =>
+        v.id === videoId
+          ? {
+              ...v,
+              appealReason: cleanReason,
+              appealStatus: 'pending' as const,
+              appealTimestamp: new Date().toISOString(),
+            }
+          : v
+      )
+    );
+
+    const appealNotif: NotificationItem = {
+      id: `notif_${Date.now()}`,
+      recipientId: currentUser.id,
+      type: 'appeal_status',
+      actor: {
+        id: 'system_moderation',
+        username: 'moderation',
+        displayName: 'Moderation System',
+        avatar: '',
+      },
+      targetText: `Appeal submitted for "${video.caption.slice(0, 30)}". Status: Pending Review.`,
+      timestamp: 'Just now',
+      isUnread: true,
+      videoId: video.id,
+      appealStatus: 'pending',
+      appealReason: cleanReason,
+    };
+
+    setNotifications(prev => {
+      const updated = prev.map(n =>
+        n.videoId === videoId && (n.type === 'video_revoked' || n.type === 'appeal_status')
+          ? { ...n, appealStatus: 'pending' as const, appealReason: cleanReason }
+          : n
+      );
+      return [appealNotif, ...updated];
+    });
+
+    supabaseDb.insertNotification(appealNotif, currentUser.id);
+    return true;
+  };
+
+  const reviewVideoAppeal = async (
+    videoId: string,
+    decision: 'approved' | 'declined'
+  ): Promise<boolean> => {
+    const video = videos.find(v => v.id === videoId);
+    if (!video) return false;
+
+    if (decision === 'approved') {
+      setVideos(prev =>
+        prev.map(v =>
+          v.id === videoId
+            ? {
+                ...v,
+                status: 'approved' as const,
+                appealStatus: 'approved' as const,
+                rejectionReason: undefined,
+              }
+            : v
+        )
+      );
+
+      const approvedNotif: NotificationItem = {
+        id: `notif_${Date.now()}`,
+        recipientId: video.creatorId,
+        type: 'appeal_status',
+        actor: {
+          id: currentUser?.id || 'admin',
+          username: currentUser?.username || 'admin',
+          displayName: currentUser?.displayName || 'ViralHub Moderation',
+          avatar: '',
+        },
+        targetText: `Great news! Your appeal for "${video.caption.slice(0, 30)}" was Approved. Your video is now live on the feed!`,
+        timestamp: 'Just now',
+        isUnread: true,
+        videoId: video.id,
+        appealStatus: 'approved',
+      };
+
+      setNotifications(prev => [approvedNotif, ...prev]);
+      supabaseDb.insertNotification(approvedNotif, video.creatorId);
+    } else {
+      setVideos(prev =>
+        prev.map(v =>
+          v.id === videoId
+            ? {
+                ...v,
+                appealStatus: 'declined' as const,
+              }
+            : v
+        )
+      );
+
+      const declinedNotif: NotificationItem = {
+        id: `notif_${Date.now()}`,
+        recipientId: video.creatorId,
+        type: 'appeal_status',
+        actor: {
+          id: currentUser?.id || 'admin',
+          username: currentUser?.username || 'admin',
+          displayName: currentUser?.displayName || 'ViralHub Moderation',
+          avatar: '',
+        },
+        targetText: `Your appeal for "${video.caption.slice(0, 30)}" was Declined by moderation after careful review.`,
+        timestamp: 'Just now',
+        isUnread: true,
+        videoId: video.id,
+        appealStatus: 'declined',
+      };
+
+      setNotifications(prev => [declinedNotif, ...prev]);
+      supabaseDb.insertNotification(declinedNotif, video.creatorId);
     }
     return true;
   };
@@ -2122,6 +2318,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteVideoAdmin,
         approveVideoAdmin,
         rejectVideoAdmin,
+        submitVideoAppeal,
+        reviewVideoAppeal,
         updateReportStatusAdmin,
         syncAllToSupabase,
         switchAccountModalOpen,

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { Avatar } from '../common/Avatar';
@@ -500,7 +500,7 @@ export const HomeFeed: React.FC = () => {
 
   // Filter: Public feed only shows approved videos (or pending videos to their creator)
   const visibleApprovedVideos = useMemo(() => {
-    return videos.filter(v => {
+    return deduplicateVideos(videos).filter(v => {
       if (v.status === 'rejected') return false;
       if (v.status === 'pending') {
         return currentUser && v.creatorId === currentUser.id;
