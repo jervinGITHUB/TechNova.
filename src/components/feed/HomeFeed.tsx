@@ -46,6 +46,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   const [duration, setDuration] = useState(0);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const bgAudioRef = useRef<HTMLAudioElement>(null);
 
   useEffect(() => {
     setVideoSrc(video.mediaUrl);
@@ -73,13 +74,20 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   // ONLY the active visible video plays with sound! Other videos are paused.
   useEffect(() => {
     const videoEl = videoRef.current;
+    const bgAudioEl = bgAudioRef.current;
     if (!videoEl) return;
 
     if (isActive) {
       videoEl.currentTime = 0;
       setIsPlaying(true);
-      // Attempt unmuted playback with full audio
-      videoEl.muted = false;
+
+      // Raw audio volume & mute controls from video author
+      const isMuted = Boolean(video.originalAudioMuted);
+      videoEl.muted = isMuted;
+      videoEl.volume = isMuted
+        ? 0
+        : Math.max(0, Math.min(1, (video.originalAudioVolume ?? 100) / 100));
+
       const playPromise = videoEl.play();
       if (playPromise !== undefined) {
         playPromise.catch(() => {
@@ -91,20 +99,36 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           });
         });
       }
+
+      // Background audio track playback
+      if (bgAudioEl && video.audioTrack?.audioUrl) {
+        bgAudioEl.currentTime = 0;
+        bgAudioEl.volume = Math.max(0, Math.min(1, (video.audioVolume ?? 100) / 100));
+        bgAudioEl.play().catch(() => {});
+      }
     } else {
       videoEl.pause();
       videoEl.muted = true;
       videoEl.currentTime = 0;
+      if (bgAudioEl) {
+        bgAudioEl.pause();
+        bgAudioEl.currentTime = 0;
+      }
       setIsPlaying(false);
       setCurrentTime(0);
     }
-  }, [isActive, videoSrc]);
+  }, [isActive, videoSrc, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume]);
 
   // Window-level interaction handler to ensure audio is unmuted on gesture
   useEffect(() => {
     const handleGesture = () => {
-      if (isActive && videoRef.current && videoRef.current.muted) {
+      if (isActive && videoRef.current && !video.originalAudioMuted) {
         videoRef.current.muted = false;
+        videoRef.current.volume = Math.max(0, Math.min(1, (video.originalAudioVolume ?? 100) / 100));
+      }
+      if (isActive && bgAudioRef.current && video.audioTrack?.audioUrl) {
+        bgAudioRef.current.volume = Math.max(0, Math.min(1, (video.audioVolume ?? 100) / 100));
+        bgAudioRef.current.play().catch(() => {});
       }
     };
     window.addEventListener('click', handleGesture, { once: true });
@@ -113,22 +137,31 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       window.removeEventListener('click', handleGesture);
       window.removeEventListener('touchstart', handleGesture);
     };
-  }, [isActive]);
+  }, [isActive, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioTrack]);
 
   const togglePlayPause = (e?: React.MouseEvent) => {
     if (e) {
       e.stopPropagation();
     }
     const videoEl = videoRef.current;
+    const bgAudioEl = bgAudioRef.current;
     if (!videoEl) return;
 
     if (isPlaying) {
       videoEl.pause();
+      if (bgAudioEl) bgAudioEl.pause();
       setIsPlaying(false);
       setShowFeedbackIcon(true);
     } else {
-      videoEl.muted = false;
+      if (!video.originalAudioMuted) {
+        videoEl.muted = false;
+        videoEl.volume = Math.max(0, Math.min(1, (video.originalAudioVolume ?? 100) / 100));
+      }
       videoEl.play().catch(() => {});
+      if (bgAudioEl && video.audioTrack?.audioUrl) {
+        bgAudioEl.volume = Math.max(0, Math.min(1, (video.audioVolume ?? 100) / 100));
+        bgAudioEl.play().catch(() => {});
+      }
       setIsPlaying(true);
       setShowFeedbackIcon(true);
       setTimeout(() => setShowFeedbackIcon(false), 800);
@@ -146,6 +179,9 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     const newTime = ratio * duration;
     videoEl.currentTime = newTime;
     setCurrentTime(newTime);
+    if (bgAudioRef.current && bgAudioRef.current.duration) {
+      bgAudioRef.current.currentTime = newTime % bgAudioRef.current.duration;
+    }
   };
 
   const formatTime = (secs: number) => {
@@ -179,6 +215,14 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
             onTimeUpdate={() => {
               if (videoRef.current) {
                 setCurrentTime(videoRef.current.currentTime);
+                if (bgAudioRef.current && bgAudioRef.current.duration) {
+                  const diff = Math.abs(
+                    bgAudioRef.current.currentTime - (videoRef.current.currentTime % bgAudioRef.current.duration)
+                  );
+                  if (diff > 0.4) {
+                    bgAudioRef.current.currentTime = videoRef.current.currentTime % bgAudioRef.current.duration;
+                  }
+                }
               }
             }}
             onLoadedMetadata={() => {
@@ -186,8 +230,18 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
                 setDuration(videoRef.current.duration || 0);
               }
             }}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
+            onPlay={() => {
+              setIsPlaying(true);
+              if (bgAudioRef.current && video.audioTrack?.audioUrl) {
+                bgAudioRef.current.play().catch(() => {});
+              }
+            }}
+            onPause={() => {
+              setIsPlaying(false);
+              if (bgAudioRef.current) {
+                bgAudioRef.current.pause();
+              }
+            }}
             onError={() => {
               if (videoSrc !== 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4') {
                 setVideoSrc('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
@@ -207,6 +261,16 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           <VideoIcon className="w-12 h-12 mb-2 text-neutral-600 stroke-1" />
           <span className="text-xs font-semibold text-neutral-400">Video Canvas</span>
         </div>
+      )}
+
+      {/* Synchronized Background Audio Track */}
+      {video.audioTrack?.audioUrl && (
+        <audio
+          ref={bgAudioRef}
+          src={video.audioTrack.audioUrl}
+          loop
+          preload="auto"
+        />
       )}
 
       {/* Dark Overlay Scrim for text readability */}

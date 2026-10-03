@@ -26,7 +26,32 @@ export const DEFAULT_USER: User = {
 
 // All seed datasets emptied as requested:
 export const INITIAL_USERS: User[] = [];
-export const INITIAL_AUDIO_TRACKS: AudioTrack[] = [];
+export const INITIAL_AUDIO_TRACKS: AudioTrack[] = [
+  {
+    id: 'track_synthwave_energy',
+    title: 'Neon Horizon (Synthwave)',
+    artist: 'CyberBeat',
+    duration: '00:30',
+    coverUrl: 'https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?w=150&auto=format&fit=crop',
+    audioUrl: 'https://actions.google.com/sounds/v1/science_fiction/alien_beacon.ogg',
+  },
+  {
+    id: 'track_lofi_sunset',
+    title: 'Lo-Fi Chill Sunset',
+    artist: 'LofiVibes',
+    duration: '00:25',
+    coverUrl: 'https://images.unsplash.com/photo-1518609878373-06d740f60d8b?w=150&auto=format&fit=crop',
+    audioUrl: 'https://actions.google.com/sounds/v1/ambiences/coffee_shop.ogg',
+  },
+  {
+    id: 'track_deep_bass_groove',
+    title: 'Deep Bass Groove',
+    artist: 'PulseNation',
+    duration: '00:20',
+    coverUrl: 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=150&auto=format&fit=crop',
+    audioUrl: 'https://actions.google.com/sounds/v1/household/clock_ticking.ogg',
+  },
+];
 export const INITIAL_VIDEOS: Video[] = [];
 export const INITIAL_CONVERSATIONS: Conversation[] = [];
 export const INITIAL_FOLLOWS: { followerId: string; followingId: string }[] = [];

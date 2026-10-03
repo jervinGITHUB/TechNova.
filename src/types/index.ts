@@ -22,6 +22,8 @@ export interface AudioTrack {
   duration: string; // e.g. "00:30"
   coverUrl: string;
   audioUrl?: string;
+  sourceVideoId?: string;
+  sourceUsername?: string;
 }
 
 export interface VideoComment {
@@ -62,6 +64,9 @@ export interface Video {
   appealReason?: string;
   appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
   appealTimestamp?: string;
+  audioVolume?: number;
+  originalAudioMuted?: boolean;
+  originalAudioVolume?: number;
 }
 
 export interface MessageReplyInfo {

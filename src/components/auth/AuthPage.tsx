@@ -1,7 +1,19 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ViralHubLogo } from '../common/ViralHubLogo';
-import { User as UserIcon, Lock, CheckCircle2, Shield, KeyRound, AlertCircle, Mail, ArrowRight, RotateCw } from 'lucide-react';
+import { Avatar } from '../common/Avatar';
+import {
+  User as UserIcon,
+  Lock,
+  CheckCircle2,
+  AlertCircle,
+  Mail,
+  ArrowRight,
+  RotateCw,
+  UserPlus,
+  X,
+  Users,
+} from 'lucide-react';
 import { SupabaseVercelModal } from '../modals/SupabaseVercelModal';
 import { resendConfirmationEmail } from '../../lib/supabase';
 
@@ -12,11 +24,20 @@ export const AuthPage: React.FC = () => {
     login,
     register,
     loginWithGoogle,
+    quickLoginAs,
+    savedAccounts,
+    removeSavedAccount,
     supabaseModalOpen,
     setSupabaseModalOpen,
     syncWithSupabase,
-    isSupabaseConnected,
   } = useApp();
+
+  // Saved accounts available on this device (limited to 5)
+  const validSavedAccounts = savedAccounts
+    .filter(a => a && a.id && (a.username || a.displayName))
+    .slice(0, 5);
+
+  const [showManualLoginForm, setShowManualLoginForm] = useState(false);
 
   // Login form state
   const [loginIdentifier, setLoginIdentifier] = useState('');
@@ -156,7 +177,7 @@ export const AuthPage: React.FC = () => {
         </div>
 
         {/* Right Form Card: Login or Register */}
-        <div className="w-full max-w-md bg-[#13131a]/90 border border-neutral-800/90 rounded-3xl p-8 sm:p-10 shadow-2xl backdrop-blur-xl">
+        <div className="w-full max-w-md bg-[#13131a]/90 border border-neutral-800/90 rounded-3xl p-7 sm:p-9 shadow-2xl backdrop-blur-xl">
           {errorMessage && (
             <div className="mb-5 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center gap-2">
               <span className="w-1.5 h-1.5 rounded-full bg-red-400 shrink-0" />
@@ -210,6 +231,7 @@ export const AuthPage: React.FC = () => {
                     setConfirmationPendingEmail(null);
                     setAuthView('login');
                     setLoginIdentifier(email);
+                    setShowManualLoginForm(true);
                   }}
                   className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer flex items-center justify-center gap-1.5"
                 >
@@ -238,129 +260,261 @@ export const AuthPage: React.FC = () => {
                 >
                   Register with another email
                 </button>
-
-                <div className="mt-2 p-3 rounded-xl bg-[#181824] border border-neutral-800 text-[11px] text-neutral-400 text-left space-y-1">
-                  <div className="font-semibold text-neutral-200">
-                    💡 Not seeing the email in your inbox?
-                  </div>
-                  <div className="text-[10px] text-neutral-400 leading-relaxed">
-                    • Check your <strong>Spam</strong> or <strong>Junk</strong> folder for an email from Supabase.
-                  </div>
-                  <div className="text-[10px] text-neutral-400 leading-relaxed">
-                    • In your Supabase Dashboard, you can also manually confirm any account or disable email verification in <strong>Authentication → Providers → Email</strong>.
-                  </div>
-                </div>
               </div>
             </div>
           ) : authView === 'login' ? (
-            /* Login Form */
-            <form onSubmit={handleLoginSubmit} className="flex flex-col">
-              <div className="text-center mb-8">
-                <h2 className="text-3xl font-extrabold font-brand tracking-wide text-white">Login</h2>
-                <p className="text-xs sm:text-sm text-neutral-400 mt-2">
-                  Please enter your Login and your Password
-                </p>
-              </div>
-
-              <div className="space-y-4">
-                {/* Username or Email Input */}
-                <div>
-                  <div className="relative flex items-center">
-                    <div className="absolute left-4 text-neutral-400">
-                      <UserIcon className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Username or Email"
-                      value={loginIdentifier}
-                      onChange={e => setLoginIdentifier(e.target.value)}
-                      className="w-full bg-[#181822] text-sm text-white placeholder-neutral-500 pl-11 pr-4 py-3.5 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all"
-                    />
+            /* Login View: Show logged-in device accounts if present, or credentials form */
+            validSavedAccounts.length > 0 && !showManualLoginForm ? (
+              /* ============================================================= */
+              /* SCENARIO A: Saved Logged-In Accounts on this Device (Max 5)   */
+              /* ============================================================= */
+              <div className="flex flex-col space-y-4 animate-fadeIn text-left">
+                <div className="text-center mb-1">
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#ff007a]/15 text-[#ff007a] text-xs font-bold mb-2">
+                    <Users className="w-3.5 h-3.5" />
+                    <span>Logged-in on this device ({validSavedAccounts.length}/5)</span>
                   </div>
+                  <h2 className="text-2xl sm:text-3xl font-extrabold font-brand tracking-wide text-white">
+                    Choose an Account
+                  </h2>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Select your profile to continue instantly without entering credentials
+                  </p>
                 </div>
 
-                {/* Password Input */}
-                <div>
-                  <div className="relative flex items-center">
-                    <div className="absolute left-4 text-neutral-400">
-                      <Lock className="w-4 h-4" />
-                    </div>
-                    <input
-                      type="password"
-                      placeholder="Password"
-                      value={loginPassword}
-                      onChange={e => setLoginPassword(e.target.value)}
-                      className="w-full bg-[#181822] text-sm text-white placeholder-neutral-500 pl-11 pr-4 py-3.5 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all"
-                    />
-                  </div>
-                  <div className="flex justify-end mt-2">
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {validSavedAccounts.map(acc => {
+                    const roleLower = String(acc.role || '').toLowerCase();
+                    const isAdmin = roleLower === 'admin' || roleLower === 'super admin' || roleLower === 'administrator';
+
+                    return (
+                      <div
+                        key={acc.id}
+                        onClick={() => quickLoginAs(acc.id)}
+                        className="flex items-center justify-between p-3.5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800 hover:border-[#ff007a]/70 transition-all cursor-pointer group shadow-sm"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar
+                            src={acc.avatar}
+                            alt={acc.displayName || acc.username}
+                            size="md"
+                            className="border border-neutral-700 group-hover:border-[#ff007a] transition-colors"
+                          />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs sm:text-sm font-bold text-white truncate group-hover:text-[#ff007a] transition-colors">
+                                {acc.displayName || acc.username}
+                              </span>
+                              {isAdmin && (
+                                <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-extrabold uppercase tracking-wider shrink-0">
+                                  Admin
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-neutral-400 truncate">
+                              @{acc.username} {acc.email ? `· ${acc.email}` : ''}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={e => {
+                              e.stopPropagation();
+                              removeSavedAccount(acc.id);
+                            }}
+                            className="p-1.5 rounded-lg text-neutral-500 hover:text-red-400 hover:bg-neutral-800 transition-colors"
+                            title="Remove account from device"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+
+                          <div className="w-7 h-7 rounded-full bg-[#ff007a]/15 group-hover:bg-[#ff007a] text-[#ff007a] group-hover:text-white flex items-center justify-center transition-all">
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Switch to manual credentials form */}
+                <div className="pt-2 space-y-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowManualLoginForm(true)}
+                    className="w-full py-3 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-white font-semibold text-xs transition-colors cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <UserPlus className="w-4 h-4 text-cyan-400" />
+                    <span>Log in with Another Account or Password</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isSubmitting}
+                    onClick={handleGoogleSignIn}
+                    className="w-full py-2.5 px-4 rounded-xl bg-[#1c1c27] hover:bg-[#232332] border border-neutral-700/80 text-white text-xs font-medium flex items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24">
+                      <path
+                        fill="#EA4335"
+                        d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.1 8.9 5 12 5z"
+                      />
+                      <path
+                        fill="#4285F4"
+                        d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.3 0 10.1 0 12s.6 3.7 1.6 5.6l3.7-2.9z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5.3L1.6 16c1.9 3.8 5.8 7 10.4 7z"
+                      />
+                    </svg>
+                    <span>{isSubmitting ? 'Connecting...' : 'Continue with Google'}</span>
+                  </button>
+                </div>
+
+                {/* Bottom switch to Register */}
+                <div className="mt-4 text-center text-xs text-neutral-400">
+                  Not a member yet?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorMessage('');
+                      setInfoMessage('');
+                      setAuthView('register');
+                    }}
+                    className="text-[#ff007a] hover:underline font-semibold cursor-pointer"
+                  >
+                    Register!
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* ============================================================= */
+              /* SCENARIO B: Manual Login with Username/Email and Password      */
+              /* ============================================================= */
+              <form onSubmit={handleLoginSubmit} className="flex flex-col animate-fadeIn">
+                <div className="text-center mb-6">
+                  {validSavedAccounts.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setErrorMessage('Password reset instructions will be sent to your registered email.')}
-                      className="text-[11px] text-neutral-400 hover:text-white transition-colors"
+                      onClick={() => setShowManualLoginForm(false)}
+                      className="text-xs text-[#ff007a] hover:underline mb-2 inline-flex items-center gap-1 font-semibold cursor-pointer"
                     >
-                      Forgot password?
+                      ← Back to saved accounts ({validSavedAccounts.length})
                     </button>
+                  )}
+                  <h2 className="text-3xl font-extrabold font-brand tracking-wide text-white">Login</h2>
+                  <p className="text-xs sm:text-sm text-neutral-400 mt-1">
+                    Please enter your Login and your Password
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  {/* Username or Email Input */}
+                  <div>
+                    <div className="relative flex items-center">
+                      <div className="absolute left-4 text-neutral-400">
+                        <UserIcon className="w-4 h-4" />
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Username or Email"
+                        value={loginIdentifier}
+                        onChange={e => setLoginIdentifier(e.target.value)}
+                        className="w-full bg-[#181822] text-sm text-white placeholder-neutral-500 pl-11 pr-4 py-3.5 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Password Input */}
+                  <div>
+                    <div className="relative flex items-center">
+                      <div className="absolute left-4 text-neutral-400">
+                        <Lock className="w-4 h-4" />
+                      </div>
+                      <input
+                        type="password"
+                        placeholder="Password"
+                        value={loginPassword}
+                        onChange={e => setLoginPassword(e.target.value)}
+                        className="w-full bg-[#181822] text-sm text-white placeholder-neutral-500 pl-11 pr-4 py-3.5 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all"
+                      />
+                    </div>
+                    <div className="flex justify-end mt-2">
+                      <button
+                        type="button"
+                        onClick={() => setErrorMessage('Password reset instructions will be sent to your registered email.')}
+                        className="text-[11px] text-neutral-400 hover:text-white transition-colors"
+                      >
+                        Forgot password?
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Log In Button */}
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="mt-6 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-semibold text-sm shadow-[0_0_20px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-[0.99] disabled:opacity-50"
-              >
-                {isSubmitting ? 'Signing in...' : 'Log In'}
-              </button>
+                {/* Log In Button */}
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="mt-6 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-semibold text-sm shadow-[0_0_20px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-[0.99] disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Signing in...' : 'Log In'}
+                </button>
 
-              {/* Continue with Google OAuth Button */}
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={handleGoogleSignIn}
-                className="mt-3 w-full py-3 px-4 rounded-xl bg-[#1c1c27] hover:bg-[#232332] border border-neutral-700/80 text-white text-xs font-medium flex items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:opacity-50"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path
-                    fill="#EA4335"
-                    d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.1 8.9 5 12 5z"
-                  />
-                  <path
-                    fill="#4285F4"
-                    d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.3 0 10.1 0 12s.6 3.7 1.6 5.6l3.7-2.9z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5.3L1.6 16c1.9 3.8 5.8 7 10.4 7z"
-                  />
-                </svg>
-                <span>{isSubmitting ? 'Connecting...' : 'Continue with Google'}</span>
-              </button>
-
-              {/* Bottom switch to Register */}
-              <div className="mt-8 text-center text-xs text-neutral-400">
-                Not a member yet?{' '}
+                {/* Continue with Google OAuth Button */}
                 <button
                   type="button"
-                  onClick={() => {
-                    setErrorMessage('');
-                    setInfoMessage('');
-                    setAuthView('register');
-                  }}
-                  className="text-[#ff007a] hover:underline font-semibold cursor-pointer"
+                  disabled={isSubmitting}
+                  onClick={handleGoogleSignIn}
+                  className="mt-3 w-full py-3 px-4 rounded-xl bg-[#1c1c27] hover:bg-[#232332] border border-neutral-700/80 text-white text-xs font-medium flex items-center justify-center gap-2.5 transition-colors cursor-pointer disabled:opacity-50"
                 >
-                  Register!
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path
+                      fill="#EA4335"
+                      d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.1 8.9 5 12 5z"
+                    />
+                    <path
+                      fill="#4285F4"
+                      d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.3 0 10.1 0 12s.6 3.7 1.6 5.6l3.7-2.9z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5.3L1.6 16c1.9 3.8 5.8 7 10.4 7z"
+                    />
+                  </svg>
+                  <span>{isSubmitting ? 'Connecting...' : 'Continue with Google'}</span>
                 </button>
-              </div>
-            </form>
+
+                {/* Bottom switch to Register */}
+                <div className="mt-8 text-center text-xs text-neutral-400">
+                  Not a member yet?{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorMessage('');
+                      setInfoMessage('');
+                      setAuthView('register');
+                    }}
+                    className="text-[#ff007a] hover:underline font-semibold cursor-pointer"
+                  >
+                    Register!
+                  </button>
+                </div>
+              </form>
+            )
           ) : (
             /* Register Form */
-            <form onSubmit={handleRegisterSubmit} className="flex flex-col">
+            <form onSubmit={handleRegisterSubmit} className="flex flex-col animate-fadeIn">
               <div className="text-center mb-6">
                 <h2 className="text-3xl font-extrabold font-brand tracking-wide text-white">Register</h2>
                 <p className="text-xs sm:text-sm text-neutral-400 mt-2">
@@ -471,6 +625,7 @@ export const AuthPage: React.FC = () => {
                   onClick={() => {
                     setErrorMessage('');
                     setInfoMessage('');
+                    setShowManualLoginForm(false);
                     setAuthView('login');
                   }}
                   className="text-[#ff007a] hover:underline font-semibold cursor-pointer"

@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Video, NotificationItem, ReportItem, LiveStream, AdminRecord, SystemStats } from '../types';
+import { User, Video, AudioTrack, NotificationItem, ReportItem, LiveStream, AdminRecord, SystemStats } from '../types';
 
 export interface SupabaseConfig {
   url: string;
@@ -568,7 +568,7 @@ export const supabaseDb = {
       let videoRows: any[] | null = null;
       let error: any = null;
 
-      // 1. Try fetching with Status & RejectionReason columns
+      // 1. Try fetching with Status, RejectionReason, AppealStatus & AppealReason columns
       const res1 = await client
         .from('Video')
         .select(`
@@ -580,14 +580,16 @@ export const supabaseDb = {
           PublishedAt,
           ViewCount,
           Status,
-          RejectionReason
+          RejectionReason,
+          AppealStatus,
+          AppealReason
         `)
         .order('PublishedAt', { ascending: false });
 
       if (!res1.error && res1.data) {
         videoRows = res1.data;
       } else {
-        // 2. Retry without Status / RejectionReason if columns don't exist yet
+        // 2. Retry without AppealStatus / AppealReason if columns don't exist yet
         const res2 = await client
           .from('Video')
           .select(`
@@ -597,7 +599,9 @@ export const supabaseDb = {
             VideoURL,
             Caption,
             PublishedAt,
-            ViewCount
+            ViewCount,
+            Status,
+            RejectionReason
           `)
           .order('PublishedAt', { ascending: false });
 
@@ -718,6 +722,8 @@ export const supabaseDb = {
           createdAt: row.PublishedAt || new Date().toISOString(),
           status: (row.Status as any) || 'approved',
           rejectionReason: row.RejectionReason || undefined,
+          appealStatus: (row.AppealStatus as any) || (row.appeal_status as any) || 'none',
+          appealReason: row.AppealReason || row.appeal_reason || undefined,
         };
       });
     } catch (e) {
@@ -763,6 +769,8 @@ export const supabaseDb = {
         ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
         Status: video.status || 'approved',
         RejectionReason: video.rejectionReason || null,
+        AppealStatus: video.appealStatus || 'none',
+        AppealReason: video.appealReason || null,
       };
 
       // 3. Upsert into Video table
@@ -843,6 +851,161 @@ export const supabaseDb = {
       return true;
     } catch (e) {
       console.warn('Supabase insertVideo fallback:', e);
+      return false;
+    }
+  },
+
+  async submitVideoAppeal(videoId: string, reason: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+    try {
+      const vUuid = toUuid(videoId);
+      let res = await client
+        .from('Video')
+        .update({
+          AppealStatus: 'pending',
+          AppealReason: reason,
+        })
+        .or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`);
+
+      if (res.error) {
+        // Fallback for snake_case table
+        await client
+          .from('videos')
+          .update({
+            appeal_status: 'pending',
+            appeal_reason: reason,
+          })
+          .or(`id.eq.${vUuid},id.eq.${videoId}`);
+      }
+      return true;
+    } catch (e) {
+      console.warn('Supabase submitVideoAppeal error:', e);
+      return false;
+    }
+  },
+
+  async reviewVideoAppeal(videoId: string, decision: 'approved' | 'declined'): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+    try {
+      const vUuid = toUuid(videoId);
+      const isApproved = decision === 'approved';
+      let payload: Record<string, any> = {
+        AppealStatus: decision,
+        Status: isApproved ? 'approved' : 'rejected',
+      };
+      if (isApproved) {
+        payload.RejectionReason = null;
+      }
+
+      let res = await client
+        .from('Video')
+        .update(payload)
+        .or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`);
+
+      if (res.error) {
+        await client
+          .from('videos')
+          .update({
+            appeal_status: decision,
+            status: isApproved ? 'approved' : 'rejected',
+          })
+          .or(`id.eq.${vUuid},id.eq.${videoId}`);
+      }
+      return true;
+    } catch (e) {
+      console.warn('Supabase reviewVideoAppeal error:', e);
+      return false;
+    }
+  },
+
+  async updateVideoStatus(videoId: string, status: 'approved' | 'rejected', reason?: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+    try {
+      const vUuid = toUuid(videoId);
+      const payload: Record<string, any> = {
+        Status: status,
+      };
+      if (reason !== undefined) {
+        payload.RejectionReason = reason;
+      }
+      if (status === 'approved') {
+        payload.RejectionReason = null;
+        payload.AppealStatus = 'approved';
+      }
+      let res = await client
+        .from('Video')
+        .update(payload)
+        .or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`);
+
+      if (res.error) {
+        await client
+          .from('videos')
+          .update({
+            status,
+            rejection_reason: reason || null,
+          })
+          .or(`id.eq.${vUuid},id.eq.${videoId}`);
+      }
+      return true;
+    } catch (e) {
+      console.warn('Supabase updateVideoStatus error:', e);
+      return false;
+    }
+  },
+
+  async fetchAudioTracks(): Promise<AudioTrack[] | null> {
+    const client = getSupabaseClient();
+    if (!client) return null;
+    try {
+      let data: any[] | null = null;
+      const res1 = await client.from('AudioLibrary').select('*');
+      if (!res1.error && res1.data) {
+        data = res1.data;
+      } else {
+        const res2 = await client.from('AudioTrack').select('*');
+        if (!res2.error && res2.data) {
+          data = res2.data;
+        }
+      }
+
+      if (!data || data.length === 0) return null;
+
+      return data.map((r: any) => ({
+        id: r.AudioTrackID || r.id,
+        title: r.Title || r.title || 'Sound',
+        artist: r.Artist || r.artist || 'Creator',
+        duration: r.Duration || r.duration || '00:15',
+        coverUrl: r.CoverURL || r.cover_url || '',
+        audioUrl: r.AudioURL || r.audio_url || '',
+      }));
+    } catch (e) {
+      console.warn('Supabase fetchAudioTracks fallback:', e);
+      return null;
+    }
+  },
+
+  async insertAudioTrack(track: AudioTrack): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+    try {
+      const trackUuid = toUuid(track.id);
+      const payload = {
+        AudioTrackID: trackUuid,
+        Title: track.title,
+        Artist: track.artist,
+        Duration: track.duration,
+        AudioURL: track.audioUrl || '',
+        CoverURL: track.coverUrl || '',
+      };
+      let res = await client.from('AudioLibrary').upsert(payload, { onConflict: 'AudioTrackID' });
+      if (res.error) {
+        await client.from('AudioTrack').upsert(payload, { onConflict: 'AudioTrackID' });
+      }
+      return true;
+    } catch {
       return false;
     }
   },

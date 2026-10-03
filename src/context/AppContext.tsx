@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import {
   User,
   Video,
@@ -155,7 +155,10 @@ interface AppContextType {
     audioTrack?: AudioTrack;
     mediaUrl: string;
     thumbnailUrl?: string;
-  }) => void;
+    audioVolume?: number;
+    originalAudioMuted?: boolean;
+    originalAudioVolume?: number;
+  }) => Promise<boolean>;
   submitReport: (report: Omit<ReportItem, 'id' | 'timestamp' | 'status'>) => void;
   
   // Messaging
@@ -224,6 +227,7 @@ interface AppContextType {
   switchAccountModalOpen: boolean;
   setSwitchAccountModalOpen: (open: boolean) => void;
   savedAccounts: User[];
+  removeSavedAccount: (userId: string) => void;
   userLikes: Record<string, string[]>;
   getUserLikedVideos: (userId: string) => Video[];
 
@@ -285,7 +289,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return deduplicateVideos(stored);
   });
 
-  const [audioTracks] = useState<AudioTrack[]>(() => storage.get('audioTracks', INITIAL_AUDIO_TRACKS));
+  const [audioTracksList, setAudioTracksList] = useState<AudioTrack[]>(() =>
+    storage.get('audioTracks', INITIAL_AUDIO_TRACKS)
+  );
+
+  // Combine curated audio tracks + sounds from all uploaded community videos
+  const audioTracks = useMemo<AudioTrack[]>(() => {
+    const map = new Map<string, AudioTrack>();
+    // 1. Curated / stored tracks
+    (audioTracksList || []).forEach(t => {
+      if (t && t.id) map.set(t.id, t);
+    });
+    // 2. Original sounds from videos (other users' videos audio)
+    (videos || []).forEach(v => {
+      if (!v || !v.mediaUrl || v.status === 'rejected') return;
+      if (v.audioTrack && v.audioTrack.id) {
+        map.set(v.audioTrack.id, v.audioTrack);
+      }
+      const soundId = `sound_vid_${v.id}`;
+      if (!map.has(soundId)) {
+        const creatorName = v.creator?.displayName || v.creator?.username || 'Creator';
+        const cleanCaption = (v.caption || '').replace(/#\w+/g, '').trim();
+        map.set(soundId, {
+          id: soundId,
+          title: v.audioTrack?.title || `Original Sound - @${v.creator?.username || 'creator'}`,
+          artist: `${creatorName}${cleanCaption ? ` · "${cleanCaption.slice(0, 24)}"` : ''}`,
+          duration: v.audioTrack?.duration || '00:30',
+          coverUrl: v.thumbnailUrl || v.creator?.avatar || '',
+          audioUrl: v.audioTrack?.audioUrl || v.mediaUrl,
+          sourceVideoId: v.id,
+          sourceUsername: v.creator?.username || '',
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [audioTracksList, videos]);
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     const resetDone = storage.get<boolean>('conversations_reset_zero_v6', false);
     if (!resetDone) {
@@ -357,7 +395,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const filtered = prev.filter(
         a => a.id !== acc.id && (!acc.email || !a.email || a.email.toLowerCase() !== acc.email.toLowerCase())
       );
-      const next = [acc, ...filtered];
+      const next = [acc, ...filtered].slice(0, 5); // Device limit of 5 logged-in accounts
+      storage.set('saved_accounts_v2', next);
+      return next;
+    });
+  };
+
+  const removeSavedAccount = (userId: string) => {
+    setSavedAccounts(prev => {
+      const next = prev.filter(a => a.id !== userId);
       storage.set('saved_accounts_v2', next);
       return next;
     });
@@ -510,9 +556,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (remoteVideos !== null) {
-        setVideos(prev => {
-          return deduplicateVideos([...(remoteVideos || []), ...prev]);
+        const storedAppeals = storage.get<Record<string, any>>('video_appeals_v2', {});
+        const patchedRemote = remoteVideos.map(v => {
+          const appeal = storedAppeals[v.id] || storedAppeals[toUuid(v.id)];
+          if (appeal) {
+            return {
+              ...v,
+              appealStatus: appeal.status || v.appealStatus,
+              appealReason: appeal.reason || v.appealReason,
+              status: appeal.status === 'approved' ? 'approved' : v.status,
+            };
+          }
+          return v;
         });
+
+        setVideos(prev => {
+          const localAppealMap = new Map<string, typeof prev[0]>();
+          prev.forEach(p => {
+            if (p.appealStatus && p.appealStatus !== 'none') {
+              localAppealMap.set(p.id, p);
+              localAppealMap.set(toUuid(p.id), p);
+            }
+          });
+
+          const enhanced = patchedRemote.map(r => {
+            const local = localAppealMap.get(r.id) || localAppealMap.get(toUuid(r.id));
+            if (local && (!r.appealStatus || r.appealStatus === 'none')) {
+              return {
+                ...r,
+                appealStatus: local.appealStatus,
+                appealReason: local.appealReason,
+              };
+            }
+            return r;
+          });
+
+          const merged = deduplicateVideos([...enhanced, ...prev]);
+          storage.set('videos', merged);
+          return merged;
+        });
+      }
+
+      try {
+        const remoteAudio = await supabaseDb.fetchAudioTracks();
+        if (remoteAudio && remoteAudio.length > 0) {
+          setAudioTracksList(prev => {
+            const map = new Map<string, AudioTrack>();
+            prev.forEach(t => map.set(t.id, t));
+            remoteAudio.forEach(t => map.set(t.id, t));
+            const merged = Array.from(map.values());
+            storage.set('audioTracks', merged);
+            return merged;
+          });
+        }
+      } catch (e) {
+        // audio sync fallback
       }
 
       if (remoteAdmins && remoteAdmins.length > 0) {
@@ -1014,6 +1112,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // If email confirmation is disabled or session was provided immediately:
         setCurrentUser(newUser);
         storage.set('currentUser', newUser);
+        recordSavedAccount(newUser);
         setActiveConversationId(null);
         setMessagesMobileView('list');
         setSelectedUserId(null);
@@ -1039,6 +1138,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers(prev => [newUser, ...prev]);
     setCurrentUser(newUser);
     storage.set('currentUser', newUser);
+    recordSavedAccount(newUser);
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setSelectedUserId(null);
@@ -1063,20 +1163,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const logout = async () => {
-    let nextAccount: User | null = null;
-
+    // Ensure current active account is saved in the device's logged-in accounts list
     if (currentUser) {
-      const remainingAccounts = savedAccounts.filter(
-        a =>
-          a.id !== currentUser.id &&
-          (!currentUser.email || !a.email || a.email.toLowerCase() !== currentUser.email.toLowerCase())
-      );
-      setSavedAccounts(remainingAccounts);
-      storage.set('saved_accounts_v2', remainingAccounts);
-
-      if (remainingAccounts.length > 0) {
-        nextAccount = remainingAccounts[0];
-      }
+      recordSavedAccount(currentUser);
     }
 
     try {
@@ -1085,19 +1174,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // ignore
     }
 
-    if (nextAccount) {
-      // Automatically switch to the other account left (the 2nd recently logged in on device)
-      quickLoginAs(nextAccount.id);
-    } else {
-      // No other accounts left on device: redirect to login page
-      setCurrentUser(null);
-      storage.remove('currentUser');
-      setActiveConversationId(null);
-      setMessagesMobileView('list');
-      setSelectedUserId(null);
-      setAuthView('login');
-      setIsAdmin(false);
-    }
+    // Retain logged-in accounts on device so the user can easily select an account on the login page!
+    setCurrentUser(null);
+    storage.remove('currentUser');
+    setActiveConversationId(null);
+    setMessagesMobileView('list');
+    setSelectedUserId(null);
+    setAuthView('login');
+    setIsAdmin(false);
   };
 
   const quickLoginAs = (userId: string) => {
@@ -1774,7 +1858,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     audioTrack?: AudioTrack;
     mediaUrl: string;
     thumbnailUrl?: string;
-  }) => {
+    audioVolume?: number;
+    originalAudioMuted?: boolean;
+    originalAudioVolume?: number;
+  }): Promise<boolean> => {
     if (!currentUser) return false;
     const videoId = crypto.randomUUID();
     const created: Video = {
@@ -1795,8 +1882,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       reportsCount: 0,
       status: 'approved',
       appealStatus: 'none',
+      audioVolume: newVideo.audioVolume ?? 100,
+      originalAudioMuted: Boolean(newVideo.originalAudioMuted),
+      originalAudioVolume: newVideo.originalAudioVolume ?? 100,
     };
-    setVideos(prev => deduplicateVideos([created, ...prev]));
+
+    setVideos(prev => {
+      const next = deduplicateVideos([created, ...prev]);
+      storage.set('videos', next);
+      return next;
+    });
+
+    // If an audio track was attached, ensure it's saved in Supabase AudioTrack/AudioLibrary
+    if (newVideo.audioTrack) {
+      supabaseDb.insertAudioTrack(newVideo.audioTrack);
+    }
+
+    // Also register this video's original sound as an audio track in Supabase
+    const originalSoundTrack: AudioTrack = {
+      id: `sound_vid_${videoId}`,
+      title: newVideo.audioTrack?.title || `Original Sound - @${currentUser.username}`,
+      artist: currentUser.displayName || currentUser.username,
+      duration: '00:30',
+      coverUrl: created.thumbnailUrl || currentUser.avatar || '',
+      audioUrl: newVideo.audioTrack?.audioUrl || created.mediaUrl,
+      sourceVideoId: videoId,
+      sourceUsername: currentUser.username,
+    };
+    supabaseDb.insertAudioTrack(originalSoundTrack);
+
     const ok = await supabaseDb.insertVideo(created);
     return ok;
   };
@@ -2201,20 +2315,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const finalReason = reason || 'Inappropriate visual content or guidelines violation';
     const video = videos.find(v => v.id === videoId);
 
-    setVideos(prev =>
-      prev.map(v =>
+    setVideos(prev => {
+      const next = prev.map(v =>
         v.id === videoId
           ? {
               ...v,
               status: 'rejected' as const,
               rejectionReason: finalReason,
               appealStatus: 'none' as const,
+              appealReason: undefined,
             }
           : v
-      )
-    );
+      );
+      storage.set('videos', next);
+      return next;
+    });
+
+    const storedAppeals = storage.get<Record<string, any>>('video_appeals_v2', {});
+    if (storedAppeals[videoId]) {
+      delete storedAppeals[videoId];
+      storage.set('video_appeals_v2', storedAppeals);
+    }
 
     if (video) {
+      await supabaseDb.updateVideoStatus(videoId, 'rejected', finalReason);
       await supabaseDb.insertVideo({
         ...video,
         status: 'rejected',
@@ -2263,20 +2387,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const video = videos.find(v => v.id === videoId);
     if (!video) return false;
 
-    setVideos(prev =>
-      prev.map(v =>
+    const nowIso = new Date().toISOString();
+
+    setVideos(prev => {
+      const next = prev.map(v =>
         v.id === videoId
           ? {
               ...v,
               appealReason: cleanReason,
               appealStatus: 'pending' as const,
-              appealTimestamp: new Date().toISOString(),
+              appealTimestamp: nowIso,
             }
           : v
-      )
-    );
+      );
+      storage.set('videos', next);
+      return next;
+    });
 
-    const nowIso = new Date().toISOString();
+    // Store in global persistent appeals map so Admin can see it across accounts/refreshes
+    const storedAppeals = storage.get<Record<string, any>>('video_appeals_v2', {});
+    storedAppeals[videoId] = {
+      videoId,
+      reason: cleanReason,
+      status: 'pending',
+      timestamp: nowIso,
+      creatorId: video.creatorId,
+      creatorUsername: video.creator?.username,
+    };
+    storage.set('video_appeals_v2', storedAppeals);
+
+    // Call Supabase DB submitVideoAppeal
+    supabaseDb.submitVideoAppeal(videoId, cleanReason);
+
+    // Notification to creator
     const appealNotif: NotificationItem = {
       id: `notif_${Date.now()}`,
       recipientId: currentUser.id,
@@ -2296,18 +2439,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       appealReason: cleanReason,
     };
 
+    // Notification to Admin
+    const adminAppealNotif: NotificationItem = {
+      id: `notif_${Date.now()}_admin`,
+      recipientId: 'admin',
+      type: 'appeal_status',
+      actor: {
+        id: currentUser.id,
+        username: currentUser.username,
+        displayName: currentUser.displayName,
+        avatar: currentUser.avatar,
+      },
+      targetText: `submitted an appeal for revoked video: "${video.caption.slice(0, 30)}". Reason: "${cleanReason}".`,
+      timestamp: nowIso,
+      createdAt: nowIso,
+      isUnread: true,
+      videoId: video.id,
+      appealStatus: 'pending',
+      appealReason: cleanReason,
+    };
+
     setNotifications(prev => {
       const updated = prev.map(n =>
         n.videoId === videoId && (n.type === 'video_revoked' || n.type === 'appeal_status')
           ? { ...n, appealStatus: 'pending' as const, appealReason: cleanReason }
           : n
       );
-      const next = [appealNotif, ...updated];
+      const next = [adminAppealNotif, appealNotif, ...updated];
       storage.set('notifications', next);
       return next;
     });
 
     supabaseDb.insertNotification(appealNotif, currentUser.id);
+    supabaseDb.insertNotification(adminAppealNotif, 'admin');
     return true;
   };
 
@@ -2322,9 +2486,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const recipientUserId = video.creatorId || video.creator?.id || '';
     const recipientUserEmail = video.creator?.email || '';
 
+    // Update persistent appeals map
+    const storedAppeals = storage.get<Record<string, any>>('video_appeals_v2', {});
+    if (storedAppeals[videoId]) {
+      storedAppeals[videoId].status = decision;
+      storage.set('video_appeals_v2', storedAppeals);
+    }
+
     if (decision === 'approved') {
-      setVideos(prev =>
-        prev.map(v =>
+      setVideos(prev => {
+        const next = prev.map(v =>
           v.id === videoId
             ? {
                 ...v,
@@ -2333,8 +2504,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 rejectionReason: undefined,
               }
             : v
-        )
-      );
+        );
+        storage.set('videos', next);
+        return next;
+      });
+
+      await supabaseDb.reviewVideoAppeal(videoId, 'approved');
+      await supabaseDb.updateVideoStatus(videoId, 'approved');
 
       const approvedNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
@@ -2362,16 +2538,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       supabaseDb.insertNotification(approvedNotif, recipientUserId);
     } else {
-      setVideos(prev =>
-        prev.map(v =>
+      setVideos(prev => {
+        const next = prev.map(v =>
           v.id === videoId
             ? {
                 ...v,
+                status: 'rejected' as const,
                 appealStatus: 'declined' as const,
               }
             : v
-        )
-      );
+        );
+        storage.set('videos', next);
+        return next;
+      });
+
+      await supabaseDb.reviewVideoAppeal(videoId, 'declined');
 
       const declinedNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
@@ -2609,6 +2790,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         switchAccountModalOpen,
         setSwitchAccountModalOpen,
         savedAccounts,
+        removeSavedAccount,
         userLikes,
         getUserLikedVideos,
         feedRefreshKey,
