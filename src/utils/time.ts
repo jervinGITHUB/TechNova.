@@ -19,8 +19,16 @@ export const formatRealtimeAgo = (timestampOrDate?: string | number | null): str
     if (str.toLowerCase() === 'just now') {
       return 'Just now';
     }
+    // If it's an ISO timestamp from PostgreSQL / Supabase without timezone suffix, force UTC 'Z'
+    let parseTarget = str;
+    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(parseTarget)) {
+      parseTarget = parseTarget.replace(' ', 'T');
+      if (!parseTarget.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(parseTarget)) {
+        parseTarget += 'Z';
+      }
+    }
     // If it's already a relative format like "2m ago" or "5h ago" and invalid as Date, return as-is
-    const parsed = new Date(str);
+    const parsed = new Date(parseTarget);
     if (isNaN(parsed.getTime())) {
       return str;
     }
