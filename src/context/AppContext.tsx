@@ -37,6 +37,8 @@ import {
   signUpWithEmail,
   signOutSupabase,
   toUuid,
+  recordDeletedUserId,
+  isUserIdDeleted,
 } from '../lib/supabase';
 
 // Persistent set of notification IDs that were marked as read by user
@@ -581,11 +583,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ]);
 
       if (remoteUsers && remoteUsers.length > 0) {
+        // 1. Check if the current client user was deleted by Admin from Supabase!
+        if (currentUser && !isAdmin) {
+          const isDeleted = isUserIdDeleted(currentUser.id, currentUser.email);
+          const stillInDb = remoteUsers.some(
+            u =>
+              u.id === currentUser.id ||
+              toUuid(u.id) === toUuid(currentUser.id) ||
+              (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+          );
+          if (isDeleted || !stillInDb) {
+            console.warn('Current account was deleted by admin. Logging out session...');
+            logout();
+            return;
+          }
+        }
+
+        // 2. Clean up savedAccounts on device if any account was deleted
+        setSavedAccounts(prevAccounts => {
+          const filtered = prevAccounts.filter(a => {
+            if (isUserIdDeleted(a.id, a.email)) return false;
+            return remoteUsers.some(
+              ru =>
+                ru.id === a.id ||
+                toUuid(ru.id) === toUuid(a.id) ||
+                (a.email && ru.email && a.email.toLowerCase() === ru.email.toLowerCase())
+            );
+          });
+          if (filtered.length !== prevAccounts.length) {
+            storage.set('saved_accounts_v2', filtered);
+          }
+          return filtered;
+        });
+
+        // 3. Build active users list, ensuring deleted accounts are never revived
         setUsers(prev => {
           const userMap = new Map<string, User>();
           const emailMap = new Map<string, string>(); // email -> id
 
           for (const u of remoteUsers) {
+            if (isUserIdDeleted(u.id, u.email)) continue;
             const emailKey = u.email ? u.email.trim().toLowerCase() : null;
             if (emailKey && emailMap.has(emailKey)) {
               const existingId = emailMap.get(emailKey)!;
@@ -599,7 +636,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (emailKey) emailMap.set(emailKey, u.id);
           }
 
+          // Retain only valid non-deleted local accounts
           for (const u of prev) {
+            if (isUserIdDeleted(u.id, u.email)) continue;
             const emailKey = u.email ? u.email.trim().toLowerCase() : null;
             if (emailKey && emailMap.has(emailKey)) continue;
             if (!userMap.has(u.id)) {
@@ -608,7 +647,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
 
-          return Array.from(userMap.values());
+          const nextUsers = Array.from(userMap.values());
+          storage.set('users', nextUsers);
+          return nextUsers;
         });
       }
 
@@ -1152,35 +1193,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return acc + (conv.unreadCount || 0);
   }, 0);
 
-  // User's own notifications inbox: interactions addressed to currentUser
-  const userNotifications = notifications.filter(n => {
-    if (!currentUser) return false;
+  // User's own notifications inbox: interactions addressed to currentUser (strictly sorted newest first)
+  const userNotifications = useMemo(() => {
+    return notifications
+      .filter(n => {
+        if (!currentUser) return false;
 
-    // Check if notification is addressed to currentUser (by direct ID, email, or UUID equivalence)
-    const isRecipient =
-      !n.recipientId ||
-      n.recipientId === currentUser.id ||
-      (currentUser.email && n.recipientId.toLowerCase() === currentUser.email.toLowerCase()) ||
-      (n.recipientEmail && currentUser.email && n.recipientEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
-      toUuid(n.recipientId) === toUuid(currentUser.id);
+        // Check if notification is addressed to currentUser (by direct ID, email, or UUID equivalence)
+        const isRecipient =
+          !n.recipientId ||
+          n.recipientId === currentUser.id ||
+          (currentUser.email && n.recipientId.toLowerCase() === currentUser.email.toLowerCase()) ||
+          (n.recipientEmail && currentUser.email && n.recipientEmail.toLowerCase() === currentUser.email.toLowerCase()) ||
+          toUuid(n.recipientId) === toUuid(currentUser.id);
 
-    if (!isRecipient) return false;
+        if (!isRecipient) return false;
 
-    // NEVER drop moderation/system notifications (video_revoked, appeal_status, report updates)
-    if (n.type === 'video_revoked' || n.type === 'appeal_status') {
-      return true;
-    }
+        // NEVER drop moderation/system notifications (video_revoked, appeal_status, report updates)
+        if (n.type === 'video_revoked' || n.type === 'appeal_status') {
+          return true;
+        }
 
-    // For social notifications (likes, comments, follows), don't notify user of their own actions
-    if (n.actor?.id && n.actor.id === currentUser.id) {
-      return false;
-    }
+        // For social notifications (likes, comments, follows), don't notify user of their own actions
+        if (n.actor?.id && (n.actor.id === currentUser.id || toUuid(n.actor.id) === toUuid(currentUser.id))) {
+          return false;
+        }
 
-    // Filter out any simulated reciprocal artifacts
-    if (n.targetText?.includes('back!')) return false;
+        // Filter out any simulated reciprocal artifacts
+        if (n.targetText?.includes('back!')) return false;
 
-    return true;
-  });
+        return true;
+      })
+      .sort((a, b) => {
+        const timeA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
+        const timeB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
+        return timeB - timeA; // Newest on top!
+      });
+  }, [notifications, currentUser]);
 
   const totalUnreadNotifications = userNotifications.filter(n => n.isUnread).length;
 
@@ -1626,49 +1675,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // Case 3: Not following -> Follow or Send Request
-    if (targetUser.isPrivate) {
-      // Private account: send request
-      const reqId = `req_${Date.now()}`;
-      const nowIso = new Date().toISOString();
-      const newReq: FollowRequest = {
-        id: reqId,
-        fromUserId: currentUser.id,
-        toUserId: targetUser.id,
-        timestamp: nowIso,
-      };
-      setFollowRequests(prev => [...prev, newReq]);
+    // Case 3: Follow Back OR Follow
+    // If target already follows currentUser (e.g. currentUser accepted their request or they follow currentUser):
+    // Even if targetUser is marked private, because targetUser already follows currentUser,
+    // clicking "Follow Back" directly completes the mutual follow and makes them Friends immediately!
+    const targetFollowsMe = isTargetFollowingMe(targetUser.id);
 
-      const reqNotif: NotificationItem = {
-        id: `notif_${Date.now()}`,
-        recipientId: targetUser.id,
-        type: 'follow_request',
-        actor: {
-          id: currentUser.id,
-          username: currentUser.username,
-          displayName: currentUser.displayName,
-          avatar: currentUser.avatar,
-        },
-        targetText: 'sent you a follow request.',
-        timestamp: nowIso,
-        createdAt: nowIso,
-        isUnread: true,
-        requestId: reqId,
-      };
-      setNotifications(prev => {
-        const next = [reqNotif, ...prev];
-        storage.set('notifications', next);
-        return next;
+    if (targetFollowsMe || !targetUser.isPrivate) {
+      // Follow immediately!
+      setFollowRelations(prev => {
+        const exists = prev.some(f => f.followerId === currentUser.id && f.followingId === targetUser.id);
+        if (exists) return prev;
+        return [...prev, { followerId: currentUser.id, followingId: targetUser.id }];
       });
-      supabaseDb.insertNotification(reqNotif, targetUser.id);
-    } else {
-      // Public account: Follow immediately
-      setFollowRelations(prev => [
-        ...prev,
-        { followerId: currentUser.id, followingId: targetUser.id },
-      ]);
 
-      const targetFollowsMe = isTargetFollowingMe(targetUser.id);
+      // Clear any pending follow requests from this user
+      setFollowRequests(prev =>
+        prev.filter(r => !(r.fromUserId === userId && r.toUserId === currentUser.id) && !(r.fromUserId === currentUser.id && r.toUserId === userId))
+      );
 
       setUsers(prev =>
         prev.map(u => {
@@ -1706,14 +1730,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createdAt: nowIso,
         isUnread: true,
       };
+
       setNotifications(prev => {
         const next = [newNotif, ...prev];
         storage.set('notifications', next);
         return next;
       });
+
       supabaseDb.toggleFollow(currentUser.id, targetUser.id, true);
       supabaseDb.insertNotification(newNotif, targetUser.id);
+      return;
     }
+
+    // Case 4: Target is private AND does not follow me yet -> Send follow request
+    const reqId = `req_${Date.now()}`;
+    const nowIso = new Date().toISOString();
+    const newReq: FollowRequest = {
+      id: reqId,
+      fromUserId: currentUser.id,
+      toUserId: targetUser.id,
+      timestamp: nowIso,
+    };
+    setFollowRequests(prev => [...prev, newReq]);
+
+    const reqNotif: NotificationItem = {
+      id: `notif_${Date.now()}`,
+      recipientId: targetUser.id,
+      type: 'follow_request',
+      actor: {
+        id: currentUser.id,
+        username: currentUser.username,
+        displayName: currentUser.displayName,
+        avatar: currentUser.avatar,
+      },
+      targetText: 'sent you a follow request.',
+      timestamp: nowIso,
+      createdAt: nowIso,
+      isUnread: true,
+      requestId: reqId,
+    };
+    setNotifications(prev => {
+      const next = [reqNotif, ...prev];
+      storage.set('notifications', next);
+      return next;
+    });
+    supabaseDb.insertNotification(reqNotif, targetUser.id);
   };
 
   // Sync counts whenever followRelations change
@@ -1741,7 +1802,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const acceptFollowRequest = (requestId: string, andFollowBack = true) => {
     if (!currentUser) return;
     const req = followRequests.find(r => r.id === requestId);
-    const requesterId = req?.fromUserId;
+    const matchingNotif = notifications.find(n => n.requestId === requestId || n.id === requestId);
+    const requesterId = req?.fromUserId || matchingNotif?.actor?.id;
 
     if (requesterId) {
       if (andFollowBack) {
@@ -1784,8 +1846,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         supabaseDb.toggleFollow(requesterId, currentUser.id, true);
         supabaseDb.toggleFollow(currentUser.id, requesterId, true);
         supabaseDb.insertNotification(replyNotif, requesterId);
+        supabaseDb.updateNotificationStatus(requestId, 'accepted', 'You are now friends!');
+        if (matchingNotif?.id && matchingNotif.id !== requestId) {
+          supabaseDb.updateNotificationStatus(matchingNotif.id, 'accepted', 'You are now friends!');
+        }
       } else {
-        // Confirm only: Requester follows currentUser, but currentUser does NOT follow them back!
+        // Confirm only: Requester follows currentUser, but currentUser does NOT follow them back yet!
+        // When currentUser visits requester's profile, currentUser will see "Follow Back"!
         setFollowRelations(prev => {
           const next = [...prev];
           if (!next.some(f => f.followerId === requesterId && f.followingId === currentUser.id)) {
@@ -1809,7 +1876,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           timestamp: nowIso,
           createdAt: nowIso,
           isUnread: true,
-          status: 'accepted',
+          status: 'confirmed',
         };
         setNotifications(prev => {
           const next = [replyNotif, ...prev];
@@ -1819,17 +1886,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         supabaseDb.toggleFollow(requesterId, currentUser.id, true);
         supabaseDb.insertNotification(replyNotif, requesterId);
+        supabaseDb.updateNotificationStatus(requestId, 'confirmed', 'is now following you.');
+        if (matchingNotif?.id && matchingNotif.id !== requestId) {
+          supabaseDb.updateNotificationStatus(matchingNotif.id, 'confirmed', 'is now following you.');
+        }
       }
     }
 
-    // Remove request from pending follow requests
-    setFollowRequests(prev => prev.filter(r => r.id !== requestId));
+    // Remove request from pending follow requests thoroughly
+    setFollowRequests(prev =>
+      prev.filter(r => r.id !== requestId && !(requesterId && r.fromUserId === requesterId && r.toUserId === currentUser.id))
+    );
 
     // Update currentUser notification in inbox
     setNotifications(prev =>
       prev.map(n => {
         if (
           n.requestId === requestId ||
+          n.id === requestId ||
           (requesterId && n.recipientId === currentUser.id && n.actor.id === requesterId && n.type === 'follow_request')
         ) {
           return {
@@ -1845,10 +1919,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const declineFollowRequest = (requestId: string) => {
-    setFollowRequests(prev => prev.filter(r => r.id !== requestId));
+    const req = followRequests.find(r => r.id === requestId);
+    const matchingNotif = notifications.find(n => n.requestId === requestId || n.id === requestId);
+    const requesterId = req?.fromUserId || matchingNotif?.actor?.id;
+
+    setFollowRequests(prev =>
+      prev.filter(r => r.id !== requestId && !(requesterId && r.fromUserId === requesterId && r.toUserId === currentUser?.id))
+    );
     setNotifications(prev =>
       prev.map(n =>
-        n.requestId === requestId
+        n.requestId === requestId || n.id === requestId
           ? {
               ...n,
               isUnread: false,
@@ -1858,6 +1938,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : n
       )
     );
+
+    supabaseDb.updateNotificationStatus(requestId, 'declined', 'Follow request declined');
+    if (matchingNotif?.id && matchingNotif.id !== requestId) {
+      supabaseDb.updateNotificationStatus(matchingNotif.id, 'declined', 'Follow request declined');
+    }
   };
 
   const getUserFollowers = (userId: string): User[] => {
@@ -2901,14 +2986,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteUserAdmin = async (userId: string): Promise<boolean> => {
-    setUsers(prev => prev.filter(u => u.id !== userId));
-    await supabaseDb.deleteUser(userId);
-    return true;
+    const targetUser = users.find(u => u.id === userId || toUuid(u.id) === toUuid(userId));
+    const targetEmail = targetUser?.email;
+
+    // 1. Remove from local users list
+    setUsers(prev => {
+      const next = prev.filter(u => u.id !== userId && toUuid(u.id) !== toUuid(userId));
+      storage.set('users', next);
+      return next;
+    });
+
+    // 2. Remove from saved accounts on this device (even if logged in on this device!)
+    removeSavedAccount(userId);
+    if (targetEmail) {
+      setSavedAccounts(prev => {
+        const next = prev.filter(
+          a => a.id !== userId && (!a.email || a.email.toLowerCase() !== targetEmail.toLowerCase())
+        );
+        storage.set('saved_accounts_v2', next);
+        return next;
+      });
+    }
+
+    // 3. Remove all videos belonging to this user from local state and storage
+    const userVideos = videos.filter(
+      v => v.creatorId === userId || toUuid(v.creatorId) === toUuid(userId) || v.creator?.id === userId || toUuid(v.creator?.id) === toUuid(userId)
+    );
+    setVideos(prev => {
+      const next = prev.filter(
+        v => v.creatorId !== userId && toUuid(v.creatorId) !== toUuid(userId) && v.creator?.id !== userId && toUuid(v.creator?.id) !== toUuid(userId)
+      );
+      storage.set('videos', next);
+      return next;
+    });
+
+    // 4. Remove all storage bucket files for user's videos
+    for (const v of userVideos) {
+      if (v.mediaUrl) {
+        supabaseDb.deleteVideoFileFromStorage(v.mediaUrl).catch(() => {});
+      }
+    }
+
+    // 5. Remove follows, requests, notifications, conversations
+    setFollowRelations(prev =>
+      prev.filter(f => f.followerId !== userId && f.followingId !== userId && toUuid(f.followerId) !== toUuid(userId) && toUuid(f.followingId) !== toUuid(userId))
+    );
+    setFollowRequests(prev =>
+      prev.filter(r => r.fromUserId !== userId && r.toUserId !== userId && toUuid(r.fromUserId) !== toUuid(userId) && toUuid(r.toUserId) !== toUuid(userId))
+    );
+    setNotifications(prev =>
+      prev.filter(n => n.recipientId !== userId && n.actor?.id !== userId && toUuid(n.recipientId) !== toUuid(userId) && toUuid(n.actor?.id) !== toUuid(userId))
+    );
+    setConversations(prev =>
+      prev.filter(c => !c.participantIds?.includes(userId) && c.participant?.id !== userId)
+    );
+
+    // 6. Record in deleted accounts registry so all devices / tabs log them out immediately
+    recordDeletedUserId(userId, targetEmail);
+
+    // 7. Delete from Supabase Database & cascade child tables
+    const res = await supabaseDb.deleteUser(userId);
+
+    // 8. Broadcast account deleted event to other local tabs
+    storage.set('viralhub_account_deleted_event', { userId, email: targetEmail, timestamp: Date.now() });
+
+    return res;
   };
 
   const deleteVideo = async (videoId: string): Promise<boolean> => {
+    const targetVideo = videos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
+    const mediaUrl = targetVideo?.mediaUrl;
+
     setVideos(prev => {
-      const next = prev.filter(v => v.id !== videoId);
+      const next = prev.filter(v => v.id !== videoId && toUuid(v.id) !== toUuid(videoId));
       storage.set('videos', next);
       return next;
     });
@@ -2917,13 +3067,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUserLikes(prev => {
       const next: Record<string, string[]> = {};
       Object.keys(prev).forEach(k => {
-        next[k] = (prev[k] || []).filter(id => id !== videoId);
+        next[k] = (prev[k] || []).filter(id => id !== videoId && toUuid(id) !== toUuid(videoId));
       });
       storage.set('user_likes_map', next);
       return next;
     });
 
-    await supabaseDb.deleteVideo(videoId);
+    // Delete both from Supabase DB and Supabase Storage bucket!
+    await supabaseDb.deleteVideo(videoId, mediaUrl);
     return true;
   };
 

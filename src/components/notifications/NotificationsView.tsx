@@ -103,6 +103,15 @@ export const NotificationsView: React.FC = () => {
 
   const unreadCount = notifications.filter(n => n.isUnread).length;
 
+  // Ensure new notifications are strictly on top across all devices
+  const sortedNotifications = React.useMemo(() => {
+    return [...notifications].sort((a, b) => {
+      const timeA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
+      const timeB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
+      return timeB - timeA;
+    });
+  }, [notifications]);
+
   return (
     <div className="flex-1 p-4 sm:p-8 max-w-3xl mx-auto w-full select-none text-left">
       {/* Top Header */}
@@ -110,7 +119,7 @@ export const NotificationsView: React.FC = () => {
         <div className="flex items-center gap-3">
           <h2 className="text-2xl font-bold font-brand text-white">Notifications</h2>
           {unreadCount > 0 ? (
-            <span className="px-2.5 py-0.5 rounded-full bg-[#ff007a] text-white text-xs font-bold shadow-[0_0_8px_rgba(255,0,122,0.6)]">
+            <span className="px-2.5 py-0.5 rounded-full bg-[#ff007a] text-white text-xs font-bold shadow-[0_0_8px_rgba(255,0,122,0.4)]">
               {unreadCount} unread
             </span>
           ) : (
@@ -133,7 +142,7 @@ export const NotificationsView: React.FC = () => {
 
       {/* Notifications list */}
       <div className="space-y-3">
-        {notifications.map(item => {
+        {sortedNotifications.map(item => {
           const matchedVideo = item.videoId ? videos.find(v => v.id === item.videoId) : null;
           const currentAppealStatus = matchedVideo?.appealStatus || item.appealStatus || 'none';
 
@@ -151,8 +160,8 @@ export const NotificationsView: React.FC = () => {
                   : item.type === 'appeal_status'
                   ? 'bg-[#141822] border-amber-500/30 hover:bg-[#181d2a]'
                   : item.isUnread
-                  ? 'bg-gradient-to-r from-[#ff007a]/15 via-[#211726] to-[#151520] border-l-4 border-l-[#ff007a] border-[#ff007a]/50 shadow-[0_0_15px_rgba(255,0,122,0.15)] ring-1 ring-[#ff007a]/30'
-                  : 'bg-[#121218] border-neutral-800/80 border-l border-neutral-800/80 hover:bg-[#171722] hover:border-neutral-700/80'
+                  ? 'bg-[#151119] border border-[#ff007a]/25 border-l-4 border-l-[#ff007a]/70 hover:bg-[#1a1420]'
+                  : 'bg-[#121218] border border-neutral-800/80 hover:bg-[#171722] hover:border-neutral-700/80'
               }`}
             >
               {/* Actor Avatar + Content Info */}
@@ -178,7 +187,7 @@ export const NotificationsView: React.FC = () => {
                       item.type === 'video_revoked'
                         ? 'border-red-500/60'
                         : item.isUnread
-                        ? 'border-[#ff007a] shadow-[0_0_8px_rgba(255,0,122,0.4)]'
+                        ? 'border-[#ff007a]/60 shadow-[0_0_6px_rgba(255,0,122,0.25)]'
                         : 'border-neutral-700 group-hover/avatar:border-neutral-500'
                     }`}
                   />
@@ -315,16 +324,16 @@ export const NotificationsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right Side: Status Badge & Glowing Dot if Unread */}
+              {/* Right Side: Status Badge & Dot if Unread */}
               <div className="flex items-center gap-2 shrink-0 ml-2">
                 {item.isUnread ? (
-                  <div className="flex items-center gap-2">
-                    <span className="hidden sm:inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-[#ff007a]/25 text-[#ff007a] border border-[#ff007a]/40 text-[10px] font-extrabold uppercase tracking-wider">
-                      <span className="w-1.5 h-1.5 rounded-full bg-[#ff007a] animate-ping" />
+                  <div className="flex items-center gap-1.5">
+                    <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ff007a]/15 text-[#ff007a] border border-[#ff007a]/30 text-[10px] font-bold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#ff007a]" />
                       Unread
                     </span>
                     <span
-                      className="w-2.5 h-2.5 rounded-full bg-[#ff007a] shadow-[0_0_10px_rgba(255,0,122,0.9)] animate-pulse"
+                      className="w-2 h-2 rounded-full bg-[#ff007a] shadow-[0_0_6px_rgba(255,0,122,0.6)]"
                       title="Unread notification"
                     />
                   </div>

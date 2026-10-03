@@ -57,6 +57,43 @@ export const toUuid = (input?: string | null): string => {
 };
 
 // =========================================================================
+// Deleted Users Registry (ensures immediate logout across all devices)
+// =========================================================================
+export const recordDeletedUserId = (userId: string, email?: string | null) => {
+  try {
+    const raw = localStorage.getItem('viralhub_deleted_user_ids') || '[]';
+    const list: string[] = JSON.parse(raw);
+    const set = new Set(list);
+    if (userId) {
+      set.add(userId);
+      set.add(toUuid(userId));
+    }
+    if (email) {
+      set.add(email.trim().toLowerCase());
+    }
+    localStorage.setItem('viralhub_deleted_user_ids', JSON.stringify(Array.from(set)));
+  } catch {}
+};
+
+export const isUserIdDeleted = (userId?: string | null, email?: string | null): boolean => {
+  if (!userId && !email) return false;
+  try {
+    const raw = localStorage.getItem('viralhub_deleted_user_ids') || '[]';
+    const list: string[] = JSON.parse(raw);
+    const set = new Set(list.map(s => s.toLowerCase()));
+    if (userId && (set.has(userId.toLowerCase()) || set.has(toUuid(userId).toLowerCase()))) {
+      return true;
+    }
+    if (email && set.has(email.trim().toLowerCase())) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+};
+
+// =========================================================================
 // Configuration & Client Initialization
 // =========================================================================
 export const getSupabaseConfig = (): SupabaseConfig => {
@@ -547,8 +584,66 @@ export const supabaseDb = {
 
     try {
       const targetUuid = toUuid(userId);
-      const { error } = await client.from('User').delete().eq('UserID', targetUuid);
-      return !error;
+
+      // 1. Fetch user videos and delete their media files from Supabase Storage bucket
+      try {
+        const { data: userVideos } = await client
+          .from('Video')
+          .select('VideoID, VideoURL')
+          .or(`UserID.eq.${targetUuid},UserID.eq.${userId}`);
+
+        if (userVideos && userVideos.length > 0) {
+          for (const uv of userVideos) {
+            if (uv.VideoURL) {
+              await this.deleteVideoFileFromStorage(uv.VideoURL);
+            }
+            const uvUuid = uv.VideoID;
+            try { await client.from('ReportVideo').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
+            try { await client.from('VideoHashtag').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
+            try { await client.from('VideoStats').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
+            try { await client.from('Like').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
+            try { await client.from('likes').delete().or(`video_id.eq.${uvUuid},video_id.eq.${uv.VideoID}`); } catch {}
+            try { await client.from('Comment').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
+            try { await client.from('comments').delete().or(`video_id.eq.${uvUuid},video_id.eq.${uv.VideoID}`); } catch {}
+            try { await client.from('Share').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
+          }
+          await client.from('Video').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`);
+          await client.from('videos').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId}`);
+        }
+      } catch (err) {
+        console.warn('Error clearing user videos during user delete:', err);
+      }
+
+      // 2. Cascade delete from child database tables to prevent foreign key errors
+      try { await client.from('Like').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
+      try { await client.from('likes').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId}`); } catch {}
+      try { await client.from('Comment').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
+      try { await client.from('comments').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId}`); } catch {}
+      try { await client.from('Share').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
+      try {
+        await client.from('Following').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId},FollowingUserID.eq.${targetUuid},FollowingUserID.eq.${userId}`);
+      } catch {}
+      try {
+        await client.from('following').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId},following_user_id.eq.${targetUuid},following_user_id.eq.${userId}`);
+      } catch {}
+      try {
+        await client.from('Follower').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId},FollowerUserID.eq.${targetUuid},FollowerUserID.eq.${userId}`);
+      } catch {}
+      try {
+        await client.from('follower').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId},follower_user_id.eq.${targetUuid},follower_user_id.eq.${userId}`);
+      } catch {}
+      try { await client.from('Notification').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
+      try { await client.from('ReportUser').delete().or(`ReportUserID.eq.${targetUuid},ReportedUserID.eq.${targetUuid},ReportUserID.eq.${userId},ReportedUserID.eq.${userId}`); } catch {}
+      try { await client.from('ReportVideo').delete().or(`ReporterUserID.eq.${targetUuid},ReporterUserID.eq.${userId}`); } catch {}
+      try { await client.from('Message').delete().or(`SenderUserID.eq.${targetUuid},SenderUserID.eq.${userId}`); } catch {}
+      try { await client.from('Admin').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
+
+      // 3. Delete from User table (PascalCase and snake_case)
+      const res1 = await client.from('User').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`);
+      if (res1.error) {
+        await client.from('users').delete().or(`id.eq.${targetUuid},id.eq.${userId}`);
+      }
+      return true;
     } catch (e) {
       console.warn('Supabase deleteUser error:', e);
       return false;
@@ -1112,18 +1207,85 @@ export const supabaseDb = {
     }
   },
 
-  async deleteVideo(videoId: string): Promise<boolean> {
+  async deleteVideoFileFromStorage(mediaUrl?: string | null): Promise<boolean> {
+    if (!mediaUrl) return false;
+    const client = getSupabaseClient();
+    if (!client) return false;
+
+    try {
+      const rawUrl = mediaUrl.trim();
+      // Match Supabase storage URL format:
+      // /storage/v1/object/public/<bucket>/<path> or /storage/v1/object/sign/<bucket>/<path>
+      const match = rawUrl.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/?#]+)\/(.+)$/i);
+      if (match) {
+        const bucket = decodeURIComponent(match[1]);
+        let filePath = decodeURIComponent(match[2]);
+        if (filePath.includes('?')) {
+          filePath = filePath.split('?')[0];
+        }
+        const { error } = await client.storage.from(bucket).remove([filePath]);
+        if (!error) return true;
+      }
+
+      // Fallback: extract the filename (e.g. video_17279...mp4) and try candidate buckets
+      const urlParts = rawUrl.split('/');
+      const fileName = urlParts[urlParts.length - 1]?.split('?')[0];
+      if (fileName && (fileName.endsWith('.mp4') || fileName.endsWith('.webm') || fileName.endsWith('.mov') || fileName.startsWith('video_'))) {
+        const candidateBuckets = ['videos', 'video', 'media', 'uploads', 'public', 'files', 'posts', 'storage'];
+        for (const b of candidateBuckets) {
+          try {
+            await client.storage.from(b).remove([fileName, `uploads/${fileName}`]);
+          } catch {
+            // ignore
+          }
+        }
+      }
+      return true;
+    } catch (err) {
+      console.warn('Supabase storage file deletion error:', err);
+      return false;
+    }
+  },
+
+  async deleteVideo(videoId: string, mediaUrl?: string): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;
 
     try {
       const vUuid = toUuid(videoId);
-      try { await client.from('VideoHashtag').delete().eq('VideoID', vUuid); } catch {}
-      try { await client.from('Like').delete().eq('VideoID', vUuid); } catch {}
-      try { await client.from('Comment').delete().eq('VideoID', vUuid); } catch {}
-      try { await client.from('Share').delete().eq('VideoID', vUuid); } catch {}
-      const { error } = await client.from('Video').delete().eq('VideoID', vUuid);
-      return !error;
+
+      // 1. Delete video file from Supabase Storage bucket
+      if (mediaUrl) {
+        await this.deleteVideoFileFromStorage(mediaUrl);
+      }
+      try {
+        const { data: dbRow } = await client
+          .from('Video')
+          .select('VideoURL')
+          .or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`)
+          .maybeSingle();
+        if (dbRow?.VideoURL) {
+          await this.deleteVideoFileFromStorage(dbRow.VideoURL);
+        }
+      } catch {}
+
+      // 2. Cascade delete from child database tables to prevent foreign key errors
+      try { await client.from('ReportVideo').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
+      try { await client.from('VideoHashtag').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
+      try { await client.from('VideoStats').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
+      try { await client.from('Like').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
+      try { await client.from('likes').delete().or(`video_id.eq.${vUuid},video_id.eq.${videoId}`); } catch {}
+      try { await client.from('Comment').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
+      try { await client.from('comments').delete().or(`video_id.eq.${vUuid},video_id.eq.${videoId}`); } catch {}
+      try { await client.from('Share').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
+      try { await client.from('Notification').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
+
+      // 3. Delete from Video table (PascalCase and snake_case)
+      const resPascal = await client.from('Video').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`);
+      if (resPascal.error) {
+        await client.from('videos').delete().or(`id.eq.${vUuid},id.eq.${videoId}`);
+      }
+      return true;
     } catch (e) {
       console.warn('Supabase deleteVideo error:', e);
       return false;
@@ -1622,6 +1784,71 @@ export const supabaseDb = {
       return true;
     } catch (e) {
       console.warn('Supabase markAllNotificationsAsRead warning:', e);
+      return false;
+    }
+  },
+
+  async updateNotificationStatus(
+    notificationIdOrRequestId: string,
+    newStatus: 'accepted' | 'confirmed' | 'declined',
+    newText?: string
+  ): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+    try {
+      const targetUuid = toUuid(notificationIdOrRequestId);
+      // Fetch the notification first by ID
+      const { data } = await client
+        .from('Notification')
+        .select('*')
+        .or(`NotificationID.eq.${targetUuid},NotificationID.eq.${notificationIdOrRequestId}`)
+        .maybeSingle();
+
+      if (data) {
+        let parsed: any = {};
+        if (data.NotificationMessage && data.NotificationMessage.trim().startsWith('{')) {
+          try {
+            parsed = JSON.parse(data.NotificationMessage);
+          } catch {}
+        } else {
+          parsed = { text: data.NotificationMessage || '' };
+        }
+
+        parsed.status = newStatus;
+        if (newText) parsed.text = newText;
+
+        await client
+          .from('Notification')
+          .update({
+            NotificationMessage: JSON.stringify(parsed),
+            IsRead: true,
+          })
+          .or(`NotificationID.eq.${targetUuid},NotificationID.eq.${notificationIdOrRequestId}`);
+      } else {
+        // Query by requestId serialized inside NotificationMessage
+        const { data: allNotifs } = await client
+          .from('Notification')
+          .select('*')
+          .ilike('NotificationMessage', `%"requestId":"${notificationIdOrRequestId}"%`);
+        if (allNotifs && allNotifs.length > 0) {
+          for (const row of allNotifs) {
+            let parsed: any = {};
+            try { parsed = JSON.parse(row.NotificationMessage); } catch {}
+            parsed.status = newStatus;
+            if (newText) parsed.text = newText;
+            await client
+              .from('Notification')
+              .update({
+                NotificationMessage: JSON.stringify(parsed),
+                IsRead: true,
+              })
+              .eq('NotificationID', row.NotificationID);
+          }
+        }
+      }
+      return true;
+    } catch (e) {
+      console.warn('Supabase updateNotificationStatus warning:', e);
       return false;
     }
   },

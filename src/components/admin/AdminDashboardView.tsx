@@ -58,6 +58,7 @@ export const AdminDashboardView: React.FC = () => {
     setSupabaseModalOpen,
     navigateToUserProfile,
     setSwitchAccountModalOpen,
+    savedAccounts,
     logout,
   } = useApp();
 
@@ -717,10 +718,30 @@ export const AdminDashboardView: React.FC = () => {
                             <Eye className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => deleteUserAdmin(u.id)}
+                            onClick={async () => {
+                              const isTargetClientOnThisDevice = (savedAccounts || []).some(
+                                a => a.id === u.id || (a.email && u.email && a.email.toLowerCase() === u.email.toLowerCase())
+                              );
+                              const confirmPrompt = window.confirm(
+                                `Are you sure you want to permanently delete user @${u.username} (${u.displayName})?\n\n` +
+                                `This will remove the user from Supabase, delete all their uploaded videos from the Supabase Storage bucket, and clean up their account across all devices.` +
+                                (isTargetClientOnThisDevice ? `\n\n(This client account is logged in/saved on this device and will be removed from your saved accounts).` : '')
+                              );
+                              if (!confirmPrompt) return;
+
+                              const res = await deleteUserAdmin(u.id);
+                              if (res) {
+                                setSyncStatusMsg({
+                                  type: 'success',
+                                  text: `Account @${u.username} successfully deleted from Supabase & all devices.`,
+                                });
+                                setTimeout(() => setSyncStatusMsg(null), 4000);
+                                await loadData();
+                              }
+                            }}
                             disabled={u.id === currentUser?.id}
                             className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer disabled:opacity-30"
-                            title="Delete User"
+                            title={u.id === currentUser?.id ? 'Cannot delete active Admin session' : 'Permanently Delete User'}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
