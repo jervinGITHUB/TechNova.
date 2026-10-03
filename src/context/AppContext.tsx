@@ -513,8 +513,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const remoteIsAdmin = await supabaseDb.checkIsAdmin(currentUser);
         if (!isCancelled) {
           setIsAdmin(remoteIsAdmin);
-          if (remoteIsAdmin) {
-            setCurrentUser(prev => (prev ? { ...prev, role: 'admin' } : prev));
+          if (remoteIsAdmin && currentUser.role !== 'admin') {
+            setCurrentUser(prev => (prev && prev.role !== 'admin' ? { ...prev, role: 'admin' } : prev));
           }
         }
       } catch {
@@ -525,7 +525,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       isCancelled = true;
     };
-  }, [currentUser, admins]);
+  }, [currentUser?.id, currentUser?.email, currentUser?.role, admins.length]);
 
   // Load current user's liked videos from Supabase on login / account switch
   useEffect(() => {
@@ -541,7 +541,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
     });
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   // Dynamically compute `isLiked` per video strictly for the active currentUser!
   const currentUserLikes = (currentUser && userLikes[currentUser.id]) || [];
@@ -570,23 +570,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? supabaseDb.fetchConversationsAndMessages(currentUser.id)
         : Promise.resolve(null);
 
+      // Fetch users first, then pass to fetchVideos to eliminate redundant fetchUsers calls
+      const usersPromise = supabaseDb.fetchUsers();
       const [
         remoteUsers,
-        remoteVideos,
         remoteAdmins,
         remoteReports,
         remoteNotifications,
         remoteFollows,
         remoteConvs,
       ] = await Promise.all([
-        supabaseDb.fetchUsers(),
-        supabaseDb.fetchVideos(),
+        usersPromise,
         supabaseDb.fetchAdmins(),
         supabaseDb.fetchReports(),
         supabaseDb.fetchNotifications(),
         supabaseDb.fetchFollows(),
         convsPromise,
       ]);
+
+      const remoteVideos = await supabaseDb.fetchVideos(remoteUsers || undefined);
 
       // 1. Synchronize Users
       if (remoteUsers !== null) {
@@ -1023,13 +1025,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (getSupabaseConfig().isConnected) {
       syncWithSupabase();
 
-      // Realtime polling ticker every 3.5 seconds across devices
-      const timer = setInterval(() => {
-        syncWithSupabase();
-      }, 3500);
-
-      // Re-sync on tab/window focus
-      const onFocus = () => syncWithSupabase();
+      // Gentle throttled re-sync on tab/window focus (max once every 30 seconds)
+      let lastFocusSync = Date.now();
+      const onFocus = () => {
+        const now = Date.now();
+        if (now - lastFocusSync > 30000) {
+          lastFocusSync = now;
+          syncWithSupabase();
+        }
+      };
       window.addEventListener('focus', onFocus);
 
       // Local cross-tab realtime sync via storage events
@@ -1071,15 +1075,125 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
       window.addEventListener('storage', handleStorageEvent);
 
-      // Supabase realtime channel listener
+      // Targeted Supabase Realtime channel listeners (avoids downloading all tables on every change)
       let realtimeChannel: any = null;
       try {
         const client = getSupabaseClient();
         if (client) {
+          const userChannelId = currentUser?.id ? String(currentUser.id).replace(/[^a-zA-Z0-9_-]/g, '') : 'public';
           realtimeChannel = client
-            .channel('viralhub_cross_device_sync')
-            .on('postgres_changes', { event: '*', schema: 'public' }, () => {
-              syncWithSupabase();
+            .channel(`viralhub_rt_${userChannelId}`)
+            // 1. Notification updates: only update notifications when relevant to this user
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'Notification' }, (payload: any) => {
+              const row = payload.new || payload.old;
+              if (!row || !currentUser) return;
+              const targetUserId = row.UserID;
+              if (isSameUser(targetUserId, currentUser.id)) {
+                supabaseDb.fetchNotifications().then(notifs => {
+                  if (notifs) {
+                    setNotifications(notifs);
+                    const newForMe = notifs.find(
+                      n =>
+                        n.isUnread &&
+                        isSameUser(n.recipientId, currentUser.id) &&
+                        !isSameUser(n.actor?.id, currentUser.id) &&
+                        !knownNotificationIdsRef.current.has(n.id)
+                    );
+                    if (newForMe) {
+                      knownNotificationIdsRef.current.add(newForMe.id);
+                      setActiveNotificationPopup(newForMe);
+                    }
+                  }
+                });
+              }
+            })
+            // 2. Message updates: only re-fetch messages when someone else sends a message
+            .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'Message' }, (payload: any) => {
+              const newMsg = payload.new;
+              if (!newMsg || !currentUser) return;
+              if (isSameUser(newMsg.SenderUserID, currentUser.id)) return;
+              supabaseDb.fetchConversationsAndMessages(currentUser.id).then(convs => {
+                if (convs) setConversations(convs);
+              });
+            })
+            // 3. Like updates: update video like count directly in memory (ignore own optimistic actions)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'Like' }, (payload: any) => {
+              const actorId = payload.new?.UserID || payload.old?.UserID;
+              if (currentUser && actorId && isSameUser(actorId, currentUser.id)) {
+                // Actor's own like/unlike is already optimistically updated locally in UI
+                return;
+              }
+              const videoId = payload.new?.VideoID || payload.old?.VideoID;
+              if (!videoId) return;
+              const delta = payload.eventType === 'INSERT' ? 1 : payload.eventType === 'DELETE' ? -1 : 0;
+              if (delta !== 0) {
+                setVideos(prev =>
+                  prev.map(v =>
+                    v.id === videoId || toUuid(v.id) === toUuid(videoId)
+                      ? { ...v, likesCount: Math.max(0, (v.likesCount || 0) + delta) }
+                      : v
+                  )
+                );
+              }
+            })
+            // 4. Comment updates: update video comment count directly in memory (ignore own optimistic actions)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'Comment' }, (payload: any) => {
+              const actorId = payload.new?.UserID || payload.old?.UserID;
+              if (currentUser && actorId && isSameUser(actorId, currentUser.id)) {
+                // Actor's own comment is already optimistically updated locally in UI
+                return;
+              }
+              const videoId = payload.new?.VideoID || payload.old?.VideoID;
+              if (!videoId) return;
+              const delta = payload.eventType === 'INSERT' ? 1 : payload.eventType === 'DELETE' ? -1 : 0;
+              if (delta !== 0) {
+                setVideos(prev =>
+                  prev.map(v =>
+                    v.id === videoId || toUuid(v.id) === toUuid(videoId)
+                      ? { ...v, commentsCount: Math.max(0, (v.commentsCount || 0) + delta) }
+                      : v
+                  )
+                );
+              }
+            })
+            // 5. Video updates: handle uploads, deletions, and view count updates without global sync
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'Video' }, (payload: any) => {
+              const eventType = payload.eventType;
+              if (eventType === 'INSERT') {
+                // New video uploaded: fetch video list so other users see it
+                supabaseDb.fetchVideos().then(vids => {
+                  if (vids) setVideos(vids);
+                });
+              } else if (eventType === 'DELETE') {
+                const delId = payload.old?.VideoID;
+                if (delId) {
+                  setVideos(prev => prev.filter(v => v.id !== delId && toUuid(v.id) !== toUuid(delId)));
+                }
+              } else if (eventType === 'UPDATE') {
+                const updatedRow = payload.new;
+                if (!updatedRow) return;
+                // Update video status or viewsCount in place without re-fetching entire table!
+                setVideos(prev =>
+                  prev.map(v => {
+                    if (v.id === updatedRow.VideoID || toUuid(v.id) === toUuid(updatedRow.VideoID)) {
+                      return {
+                        ...v,
+                        viewsCount: updatedRow.ViewCount !== undefined ? String(updatedRow.ViewCount) : v.viewsCount,
+                        status: updatedRow.Status || v.status,
+                        rejectionReason: updatedRow.RejectionReason !== undefined ? updatedRow.RejectionReason : v.rejectionReason,
+                        appealStatus: updatedRow.AppealStatus || v.appealStatus,
+                      };
+                    }
+                    return v;
+                  })
+                );
+              }
+            })
+            // 6. Follow updates: refresh follow relationships
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'Following' }, () => {
+              supabaseDb.fetchFollows().then(f => {
+                if (f) setFollowRelations(f);
+              });
             })
             .subscribe();
         }
@@ -1088,7 +1202,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       return () => {
-        clearInterval(timer);
         window.removeEventListener('focus', onFocus);
         window.removeEventListener('storage', handleStorageEvent);
         if (realtimeChannel) {
@@ -2126,11 +2239,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Session guard to ensure a video view is counted once per session and not on re-renders
+  const viewedVideosSessionRef = React.useRef<Set<string>>(new Set());
+
   // Record Video View (increments view count on video and profile)
   const recordVideoView = (videoId: string) => {
+    if (!videoId) return;
+    if (viewedVideosSessionRef.current.has(videoId)) {
+      return;
+    }
+    viewedVideosSessionRef.current.add(videoId);
+
     setVideos(prev =>
       prev.map(v => {
-        if (v.id === videoId) {
+        if (v.id === videoId || toUuid(v.id) === toUuid(videoId)) {
           const raw = String(v.viewsCount || '0').replace(/[^0-9]/g, '');
           const currentViews = parseInt(raw, 10) || 0;
           const newViews = currentViews + 1;

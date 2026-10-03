@@ -65,10 +65,12 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     )
   );
 
-  // Automatically count view when video card mounts in home feed
+  // Automatically count view when video card becomes active / visible in home feed
   useEffect(() => {
-    recordVideoView(video.id);
-  }, [video.id]);
+    if (isActive) {
+      recordVideoView(video.id);
+    }
+  }, [isActive, video.id]);
 
   // Audio & Playback management strictly tied to isActive state:
   // ONLY the active visible video plays with sound! Other videos are paused.

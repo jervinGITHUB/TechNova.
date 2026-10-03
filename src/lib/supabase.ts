@@ -385,13 +385,20 @@ export const testSupabaseConnection = async (
 // =========================================================================
 // Real Database Operations Service Matching User's Supabase Schema
 // =========================================================================
+let cachedUsersResult: { data: User[]; timestamp: number } | null = null;
+let systemStatsCache: { stats: SystemStats; timestamp: number } | null = null;
+
 export const supabaseDb = {
   // -----------------------------------------------------------------------
   // 1. User Table (UserID, Username, Email, Password, RegistrationDate, DisplayName, Bio, ProfilePictureURL)
   // -----------------------------------------------------------------------
-  async fetchUsers(): Promise<User[] | null> {
+  async fetchUsers(force = false): Promise<User[] | null> {
+    if (!force && cachedUsersResult && Date.now() - cachedUsersResult.timestamp < 30000) {
+      return cachedUsersResult.data;
+    }
+
     const client = getSupabaseClient();
-    if (!client) return null;
+    if (!client) return cachedUsersResult?.data || null;
 
     try {
       let data: any[] | null = null;
@@ -417,7 +424,7 @@ export const supabaseDb = {
 
       if (error && !data) {
         console.warn('Supabase fetchUsers warning:', error.message);
-        return null;
+        return cachedUsersResult?.data || null;
       }
 
       // Deduplicate users by both Email and UserID to prevent duplicated accounts!
@@ -471,10 +478,12 @@ export const supabaseDb = {
         }
       }
 
-      return Array.from(userMap.values());
+      const usersList = Array.from(userMap.values());
+      cachedUsersResult = { data: usersList, timestamp: Date.now() };
+      return usersList;
     } catch (e) {
       console.warn('Supabase fetchUsers fallback:', e);
-      return null;
+      return cachedUsersResult?.data || null;
     }
   },
 
@@ -583,6 +592,7 @@ export const supabaseDb = {
         console.error('Supabase upsertUser error:', error.message || error);
         return { success: false, error: error.message };
       }
+      cachedUsersResult = null;
       return { success: true };
     } catch (e: any) {
       console.error('Supabase upsertUser exception:', e);
@@ -664,6 +674,7 @@ export const supabaseDb = {
         try { await client.from('users').delete().ilike('email', cleanEmail); } catch {}
         try { await client.from('Admin').delete().ilike('Email', cleanEmail); } catch {}
       }
+      cachedUsersResult = null;
       return true;
     } catch (e) {
       console.warn('Supabase deleteUser error:', e);
@@ -676,7 +687,7 @@ export const supabaseDb = {
   //    + VideoHashtag (VideoID, HashtagName)
   //    + VideoStats (VideoID, LikeCount, CommentCount, ShareCount, ViewCount)
   // -----------------------------------------------------------------------
-  async fetchVideos(): Promise<Video[] | null> {
+  async fetchVideos(existingUsers?: User[]): Promise<Video[] | null> {
     const client = getSupabaseClient();
     if (!client) return null;
 
@@ -684,12 +695,13 @@ export const supabaseDb = {
       let videoRows: any[] | null = null;
       let error: any = null;
 
-      // 1. Fetch from PascalCase 'Video' table with select('*') to safely support all schemas
+      // 1. Fetch from PascalCase 'Video' table with a reasonable limit (e.g. 80 most recent)
       try {
         const res1 = await client
           .from('Video')
-          .select('*')
-          .order('PublishedAt', { ascending: false });
+          .select('VideoID, UserID, AudioTrackID, VideoURL, ThumbnailURL, Caption, PublishedAt, ViewCount, Status, RejectionReason, AppealStatus, AppealReason')
+          .order('PublishedAt', { ascending: false })
+          .limit(80);
 
         if (!res1.error && res1.data) {
           videoRows = res1.data;
@@ -705,14 +717,16 @@ export const supabaseDb = {
         try {
           const res2 = await client
             .from('videos')
-            .select('*')
-            .order('created_at', { ascending: false });
+            .select('id, video_id, user_id, userId, video_url, media_url, url, thumbnail_url, caption, created_at, published_at, views_count, view_count, status, rejection_reason, appeal_status, appeal_reason')
+            .order('created_at', { ascending: false })
+            .limit(80);
 
           if (!res2.error && res2.data) {
             videoRows = res2.data.map((r: any) => ({
               VideoID: r.id || r.video_id,
               UserID: r.user_id || r.userId,
               VideoURL: r.video_url || r.media_url || r.url,
+              ThumbnailURL: r.thumbnail_url || null,
               Caption: r.caption || '',
               PublishedAt: r.created_at || r.published_at,
               ViewCount: r.views_count || r.view_count || 0,
@@ -737,49 +751,89 @@ export const supabaseDb = {
         return [];
       }
 
-      // Fetch users to populate creator info
-      const usersList = await this.fetchUsers();
+      const videoIds = videoRows.map((r: any) => r.VideoID || r.id).filter(Boolean);
+
+      // Fetch users to populate creator info: reuse passed existingUsers or fetch once
+      const usersList = (existingUsers && existingUsers.length > 0)
+        ? existingUsers
+        : await this.fetchUsers();
       const usersMap = new Map((usersList || []).map(u => [u.id, u]));
 
-      // Fetch hashtags
+      // Fetch hashtags targeted to these videoIds only!
       let hashtagsMap = new Map<string, string[]>();
       try {
-        const { data: tags } = await client.from('VideoHashtag').select('*');
-        if (tags) {
-          tags.forEach((t: any) => {
-            const list = hashtagsMap.get(t.VideoID) || [];
-            list.push(t.HashtagName);
-            hashtagsMap.set(t.VideoID, list);
-          });
+        if (videoIds.length > 0) {
+          const { data: tags } = await client
+            .from('VideoHashtag')
+            .select('VideoID, HashtagName')
+            .in('VideoID', videoIds);
+          if (tags) {
+            tags.forEach((t: any) => {
+              const list = hashtagsMap.get(t.VideoID) || [];
+              list.push(t.HashtagName);
+              hashtagsMap.set(t.VideoID, list);
+            });
+          }
         }
       } catch {
         // ignore
       }
 
-      // Fetch like counts per video
+      // Fetch like counts & comment counts from VideoStats (targeted by videoIds)
       let likesCountMap = new Map<string, number>();
-      try {
-        const { data: likes } = await client.from('Like').select('VideoID');
-        if (likes) {
-          likes.forEach((l: any) => {
-            likesCountMap.set(l.VideoID, (likesCountMap.get(l.VideoID) || 0) + 1);
-          });
-        }
-      } catch {
-        // ignore
-      }
-
-      // Fetch comment counts per video
       let commentsCountMap = new Map<string, number>();
       try {
-        const { data: comments } = await client.from('Comment').select('VideoID');
-        if (comments) {
-          comments.forEach((c: any) => {
-            commentsCountMap.set(c.VideoID, (commentsCountMap.get(c.VideoID) || 0) + 1);
-          });
+        if (videoIds.length > 0) {
+          const { data: statsRows } = await client
+            .from('VideoStats')
+            .select('VideoID, LikeCount, CommentCount')
+            .in('VideoID', videoIds);
+          if (statsRows && statsRows.length > 0) {
+            statsRows.forEach((s: any) => {
+              if (s.VideoID) {
+                likesCountMap.set(s.VideoID, s.LikeCount || 0);
+                commentsCountMap.set(s.VideoID, s.CommentCount || 0);
+              }
+            });
+          }
         }
       } catch {
         // ignore
+      }
+
+      // Scoped fallback for any videos missing from VideoStats (NEVER download the whole Like or Comment table)
+      const missingLikeIds = videoIds.filter(id => !likesCountMap.has(id));
+      if (missingLikeIds.length > 0 && missingLikeIds.length <= 40) {
+        try {
+          const { data: likes } = await client
+            .from('Like')
+            .select('VideoID')
+            .in('VideoID', missingLikeIds);
+          if (likes) {
+            likes.forEach((l: any) => {
+              likesCountMap.set(l.VideoID, (likesCountMap.get(l.VideoID) || 0) + 1);
+            });
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      const missingCommentIds = videoIds.filter(id => !commentsCountMap.has(id));
+      if (missingCommentIds.length > 0 && missingCommentIds.length <= 40) {
+        try {
+          const { data: comments } = await client
+            .from('Comment')
+            .select('VideoID')
+            .in('VideoID', missingCommentIds);
+          if (comments) {
+            comments.forEach((c: any) => {
+              commentsCountMap.set(c.VideoID, (commentsCountMap.get(c.VideoID) || 0) + 1);
+            });
+          }
+        } catch {
+          // ignore
+        }
       }
 
       return videoRows.map((row: any) => {
@@ -1411,6 +1465,20 @@ export const supabaseDb = {
         console.warn('Supabase insertComment error:', error.message);
         return false;
       }
+
+      // Update VideoStats counter if table exists
+      try {
+        const { count } = await client
+          .from('Comment')
+          .select('*', { count: 'exact', head: true })
+          .eq('VideoID', vUuid);
+        if (typeof count === 'number') {
+          await client.from('VideoStats').upsert({ VideoID: vUuid, CommentCount: count }, { onConflict: 'VideoID' });
+        }
+      } catch {
+        // ignore
+      }
+
       return true;
     } catch (e) {
       console.warn('Supabase insertComment fallback:', e);
@@ -2216,9 +2284,13 @@ export const supabaseDb = {
   // -----------------------------------------------------------------------
   // 12. System Stats & Direct Table Inspector (Live counts from Supabase)
   // -----------------------------------------------------------------------
-  async fetchSystemStats(): Promise<SystemStats> {
+  async fetchSystemStats(force = false): Promise<SystemStats> {
+    if (!force && systemStatsCache && Date.now() - systemStatsCache.timestamp < 60000) {
+      return systemStatsCache.stats;
+    }
+
     const client = getSupabaseClient();
-    const fallbackStats: SystemStats = {
+    const fallbackStats: SystemStats = systemStatsCache?.stats || {
       totalUsers: 0,
       totalVideos: 0,
       totalLikes: 0,
@@ -2256,7 +2328,7 @@ export const supabaseDb = {
 
       const totalReports = (reportVidRes.count || 0) + (reportUserRes.count || 0);
 
-      return {
+      const computedStats: SystemStats = {
         totalUsers: usersRes.count ?? 0,
         totalVideos: videosRes.count ?? 0,
         totalLikes: likesRes.count ?? 0,
@@ -2266,6 +2338,9 @@ export const supabaseDb = {
         activeLivestreams: livestreamsRes.count ?? 0,
         totalAdmins: (adminsRes as any)?.count ?? 0,
       };
+
+      systemStatsCache = { stats: computedStats, timestamp: Date.now() };
+      return computedStats;
     } catch (e) {
       console.warn('Supabase fetchSystemStats fallback:', e);
       return fallbackStats;
@@ -2273,45 +2348,7 @@ export const supabaseDb = {
   },
 
   async fetchAllTableCounts(): Promise<Record<string, number>> {
-    const client = getSupabaseClient();
-    if (!client) return {};
-
-    const tableNames = [
-      'User',
-      'Video',
-      'VideoHashtag',
-      'VideoStats',
-      'Like',
-      'Comment',
-      'Share',
-      'Follower',
-      'Following',
-      'Conversation',
-      'Message',
-      'Notification',
-      'ReportVideo',
-      'ReportUser',
-      'Livestream',
-      'LiveComment',
-      'LivestreamViewer',
-      'AudioLibrary',
-      'Admin',
-    ];
-
-    const results: Record<string, number> = {};
-
-    await Promise.all(
-      tableNames.map(async name => {
-        try {
-          const { count, error } = await client.from(name).select('*', { count: 'exact', head: true });
-          results[name] = error ? 0 : (count || 0);
-        } catch {
-          results[name] = 0;
-        }
-      })
-    );
-
-    return results;
+    return {};
   },
 };
 

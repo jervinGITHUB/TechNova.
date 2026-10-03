@@ -95,7 +95,6 @@ export const AdminDashboardView: React.FC = () => {
     totalAdmins: admins.length || 1,
   });
 
-  const [tableCounts, setTableCounts] = useState<Record<string, number>>({});
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSyncingAll, setIsSyncAll] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -128,17 +127,21 @@ export const AdminDashboardView: React.FC = () => {
       u.email.toLowerCase().includes(userSearch.toLowerCase())
   );
 
-  const loadData = async () => {
+  const loadData = async (force = false) => {
     setIsRefreshing(true);
     try {
       await syncWithSupabase();
-      const [remoteStats, counts, testRes] = await Promise.all([
-        supabaseDb.fetchSystemStats(),
-        supabaseDb.fetchAllTableCounts(),
-        testSupabaseConnection(),
+      
+      const testPromise = connectionLatency === null || force
+        ? testSupabaseConnection()
+        : Promise.resolve({ success: true, message: '', latencyMs: connectionLatency });
+
+      const [remoteStats, testRes] = await Promise.all([
+        supabaseDb.fetchSystemStats(force),
+        testPromise,
       ]);
 
-      if (testRes.latencyMs) {
+      if (testRes.latencyMs !== undefined && testRes.latencyMs !== null) {
         setConnectionLatency(testRes.latencyMs);
       }
 
@@ -152,8 +155,6 @@ export const AdminDashboardView: React.FC = () => {
         activeLivestreams: remoteStats.activeLivestreams,
         totalAdmins: remoteStats.totalAdmins || admins.length || 1,
       });
-
-      setTableCounts(counts);
     } catch (err) {
       console.warn('Failed to load admin stats:', err);
     } finally {
@@ -162,7 +163,7 @@ export const AdminDashboardView: React.FC = () => {
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
   }, []);
 
   const handleSyncAll = async () => {
@@ -294,7 +295,7 @@ export const AdminDashboardView: React.FC = () => {
 
           <button
             type="button"
-            onClick={loadData}
+            onClick={() => loadData(true)}
             disabled={isRefreshing}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
           >
