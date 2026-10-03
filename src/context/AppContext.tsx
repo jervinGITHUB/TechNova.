@@ -231,6 +231,16 @@ interface AppContextType {
   userLikes: Record<string, string[]>;
   getUserLikedVideos: (userId: string) => Video[];
 
+  // User video deletion
+  deleteVideo: (videoId: string) => Promise<boolean>;
+
+  // Admin user role assignment
+  updateUserRoleAdmin: (userId: string, newRole: 'creator' | 'admin' | 'moderator') => Promise<boolean>;
+
+  // Cross-device realtime notification popup
+  activeNotificationPopup: NotificationItem | null;
+  dismissNotificationPopup: () => void;
+
   // Feed refresh & shuffle trigger
   feedRefreshKey: number;
   refreshFeed: () => void;
@@ -293,6 +303,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     storage.get('audioTracks', INITIAL_AUDIO_TRACKS)
   );
 
+  // Helper to ensure we never pass a video file (.mp4, .webm, blob:) as an image coverUrl
+  const isVideoUrl = (url?: string | null): boolean => {
+    if (!url) return false;
+    const lower = url.trim().toLowerCase();
+    return lower.startsWith('blob:') || /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(lower);
+  };
+
   // Combine curated audio tracks + sounds from all uploaded community videos
   const audioTracks = useMemo<AudioTrack[]>(() => {
     const map = new Map<string, AudioTrack>();
@@ -303,19 +320,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // 2. Original sounds from videos (other users' videos audio)
     (videos || []).forEach(v => {
       if (!v || !v.mediaUrl || v.status === 'rejected') return;
+
+      const creatorName = v.creator?.displayName || v.creator?.username || 'Creator';
+      const cleanCaption = (v.caption || '').replace(/#\w+/g, '').trim();
+
+      // Resolve valid image cover: never treat video URL (.mp4, .webm, blob:) as an image!
+      const validCover =
+        v.thumbnailUrl && !isVideoUrl(v.thumbnailUrl)
+          ? v.thumbnailUrl
+          : v.creator?.avatar && !isVideoUrl(v.creator?.avatar)
+          ? v.creator.avatar
+          : '';
+
       if (v.audioTrack && v.audioTrack.id) {
-        map.set(v.audioTrack.id, v.audioTrack);
+        const cleanedTrack: AudioTrack = {
+          ...v.audioTrack,
+          coverUrl:
+            v.audioTrack.coverUrl && !isVideoUrl(v.audioTrack.coverUrl)
+              ? v.audioTrack.coverUrl
+              : validCover,
+          sourceVideoId: v.audioTrack.sourceVideoId || v.id,
+          sourceUsername: v.audioTrack.sourceUsername || v.creator?.username || '',
+        };
+        map.set(v.audioTrack.id, cleanedTrack);
       }
+
       const soundId = `sound_vid_${v.id}`;
       if (!map.has(soundId)) {
-        const creatorName = v.creator?.displayName || v.creator?.username || 'Creator';
-        const cleanCaption = (v.caption || '').replace(/#\w+/g, '').trim();
         map.set(soundId, {
           id: soundId,
           title: v.audioTrack?.title || `Original Sound - @${v.creator?.username || 'creator'}`,
           artist: `${creatorName}${cleanCaption ? ` · "${cleanCaption.slice(0, 24)}"` : ''}`,
           duration: v.audioTrack?.duration || '00:30',
-          coverUrl: v.thumbnailUrl || v.creator?.avatar || '',
+          coverUrl: validCover,
           audioUrl: v.audioTrack?.audioUrl || v.mediaUrl,
           sourceVideoId: v.id,
           sourceUsername: v.creator?.username || '',
@@ -433,6 +470,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [supabaseModalOpen, setSupabaseModalOpen] = useState<boolean>(false);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(() => getSupabaseConfig().isConnected);
 
+  // Active floating notification popup for real-time interactions across devices
+  const [activeNotificationPopup, setActiveNotificationPopup] = useState<NotificationItem | null>(null);
+  const dismissNotificationPopup = () => setActiveNotificationPopup(null);
+  const knownNotificationIdsRef = React.useRef<Set<string>>(new Set());
+  const initialNotifSyncDoneRef = React.useRef<boolean>(false);
+
   // Verify whether the logged in user is an Administrator directly from Supabase / role
   useEffect(() => {
     let isCancelled = false;
@@ -515,12 +558,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!config.isConnected) return;
 
     try {
-      const [remoteUsers, remoteVideos, remoteAdmins, remoteReports, remoteNotifications] = await Promise.all([
+      const convsPromise = currentUser?.id
+        ? supabaseDb.fetchConversationsAndMessages(currentUser.id)
+        : Promise.resolve(null);
+
+      const [
+        remoteUsers,
+        remoteVideos,
+        remoteAdmins,
+        remoteReports,
+        remoteNotifications,
+        remoteFollows,
+        remoteConvs,
+      ] = await Promise.all([
         supabaseDb.fetchUsers(),
         supabaseDb.fetchVideos(),
         supabaseDb.fetchAdmins(),
         supabaseDb.fetchReports(),
         supabaseDb.fetchNotifications(),
+        supabaseDb.fetchFollows(),
+        convsPromise,
       ]);
 
       if (remoteUsers && remoteUsers.length > 0) {
@@ -597,6 +654,94 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
 
+      // Sync Follow relationships across devices
+      if (remoteFollows && remoteFollows.length > 0) {
+        setFollowRelations(prev => {
+          const map = new Map<string, { followerId: string; followingId: string }>();
+          prev.forEach(f => map.set(`${f.followerId}_${f.followingId}`, f));
+          remoteFollows.forEach(f => map.set(`${f.followerId}_${f.followingId}`, f));
+          const merged = Array.from(map.values());
+          storage.set('follow_relations_v2', merged);
+          return merged;
+        });
+      }
+
+      // Sync Conversations and Messages across devices
+      if (remoteConvs && remoteConvs.length > 0 && currentUser) {
+        setConversations(prev => {
+          const convMap = new Map<string, Conversation>();
+          prev.forEach(c => convMap.set(c.id, c));
+
+          for (const rc of remoteConvs) {
+            const partnerId = (rc.userAId === currentUser.id || toUuid(rc.userAId) === toUuid(currentUser.id))
+              ? rc.userBId
+              : rc.userAId;
+
+            const existingConv = convMap.get(rc.id);
+            const partnerUser = users.find(u => u.id === partnerId || toUuid(u.id) === toUuid(partnerId)) || existingConv?.participant || {
+              id: partnerId,
+              username: 'user',
+              displayName: 'User',
+              email: '',
+              avatar: '',
+              bio: '',
+              followingCount: 0,
+              followersCount: 0,
+              likesCount: '0',
+              isPrivate: false,
+              role: 'creator' as const,
+            };
+
+            const rawMessages = rc.rawMessages || [];
+            const parsedMessages: Message[] = rawMessages.map((m: any) => {
+              const isMine = m.SenderUserID === currentUser.id || toUuid(m.SenderUserID) === toUuid(currentUser.id);
+              let msgContent = m.MessageContent || '';
+              let sharedVideoId: string | undefined = undefined;
+
+              if (msgContent.startsWith('[VIDEO_SHARE:')) {
+                const closeIdx = msgContent.indexOf(']');
+                if (closeIdx > 0) {
+                  sharedVideoId = msgContent.substring(13, closeIdx);
+                  msgContent = msgContent.substring(closeIdx + 1).trim();
+                }
+              }
+
+              const matchedSharedVideo = sharedVideoId ? videos.find(v => v.id === sharedVideoId) : undefined;
+
+              return {
+                id: m.MessageID || `msg_${Date.now()}`,
+                conversationId: rc.id,
+                senderId: m.SenderUserID,
+                text: msgContent,
+                timestamp: m.SentAt ? new Date(m.SentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today',
+                isMine,
+                status: 'read' as const,
+                sharedVideo: matchedSharedVideo,
+                sharedVideoId,
+              };
+            });
+
+            const lastM = parsedMessages[parsedMessages.length - 1];
+            const newConv: Conversation = {
+              id: rc.id,
+              participantIds: [currentUser.id, partnerId],
+              participant: partnerUser,
+              lastMessage: lastM ? lastM.text : (existingConv?.lastMessage || 'Started conversation'),
+              lastMessageTime: lastM ? lastM.timestamp : (existingConv?.lastMessageTime || 'Recently'),
+              unreadCount: existingConv ? existingConv.unreadCount : 0,
+              unreadCounts: existingConv ? existingConv.unreadCounts : {},
+              messages: parsedMessages.length > 0 ? parsedMessages : (existingConv?.messages || []),
+              isOnline: true,
+            };
+            convMap.set(rc.id, newConv);
+          }
+
+          const merged = Array.from(convMap.values());
+          storage.set('conversations', merged);
+          return merged;
+        });
+      }
+
       try {
         const remoteAudio = await supabaseDb.fetchAudioTracks();
         if (remoteAudio && remoteAudio.length > 0) {
@@ -646,6 +791,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (remoteNotifications && remoteNotifications.length > 0) {
         const readIds = getReadNotificationIds();
+
+        // Check for new notifications to trigger in-app popup across devices!
+        if (currentUser) {
+          const userRecip = remoteNotifications.filter(n => {
+            const isForMe =
+              n.recipientId === currentUser.id ||
+              toUuid(n.recipientId) === toUuid(currentUser.id) ||
+              (currentUser.email && n.recipientEmail && currentUser.email.toLowerCase() === n.recipientEmail.toLowerCase());
+            const notFromMe = n.actor.id !== currentUser.id && toUuid(n.actor.id) !== toUuid(currentUser.id);
+            return isForMe && notFromMe && n.isUnread;
+          });
+
+          // If initial sync has been performed, any new unread notification that we haven't seen pops up!
+          if (initialNotifSyncDoneRef.current) {
+            for (const n of userRecip) {
+              if (!knownNotificationIdsRef.current.has(n.id)) {
+                setActiveNotificationPopup(n);
+                break;
+              }
+            }
+          }
+
+          // Update known set
+          remoteNotifications.forEach(n => knownNotificationIdsRef.current.add(n.id));
+          initialNotifSyncDoneRef.current = true;
+
+          // Also populate followRequests from incoming follow_request notifications
+          const incomingFollowReqs = remoteNotifications.filter(
+            n =>
+              n.type === 'follow_request' &&
+              (n.recipientId === currentUser.id || toUuid(n.recipientId) === toUuid(currentUser.id)) &&
+              n.requestId &&
+              n.status !== 'accepted' &&
+              n.status !== 'declined'
+          );
+
+          if (incomingFollowReqs.length > 0) {
+            setFollowRequests(prev => {
+              const reqMap = new Map<string, FollowRequest>();
+              prev.forEach(r => reqMap.set(r.id, r));
+              incomingFollowReqs.forEach(n => {
+                if (n.requestId && !reqMap.has(n.requestId)) {
+                  reqMap.set(n.requestId, {
+                    id: n.requestId,
+                    fromUserId: n.actor.id,
+                    toUserId: currentUser.id,
+                    timestamp: n.createdAt || n.timestamp || new Date().toISOString(),
+                  });
+                }
+              });
+              const merged = Array.from(reqMap.values());
+              storage.set('follow_requests_v2', merged);
+              return merged;
+            });
+          }
+        }
+
         setNotifications(prev => {
           const map = new Map<string, NotificationItem>();
           prev.forEach(n => map.set(n.id, n));
@@ -813,8 +1015,81 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (getSupabaseConfig().isConnected) {
       syncWithSupabase();
+
+      // Realtime polling ticker every 3.5 seconds across devices
+      const timer = setInterval(() => {
+        syncWithSupabase();
+      }, 3500);
+
+      // Re-sync on tab/window focus
+      const onFocus = () => syncWithSupabase();
+      window.addEventListener('focus', onFocus);
+
+      // Local cross-tab realtime sync via storage events
+      const handleStorageEvent = (e: StorageEvent) => {
+        if (!currentUser) return;
+        if (e.key === 'notifications' && e.newValue) {
+          try {
+            const parsedNotifs = JSON.parse(e.newValue) as NotificationItem[];
+            if (Array.isArray(parsedNotifs)) {
+              setNotifications(parsedNotifs);
+              const newForMe = parsedNotifs.find(n => {
+                const isForMe =
+                  n.recipientId === currentUser.id || toUuid(n.recipientId) === toUuid(currentUser.id);
+                const notFromMe = n.actor?.id !== currentUser.id;
+                return isForMe && notFromMe && n.isUnread && !knownNotificationIdsRef.current.has(n.id);
+              });
+              if (newForMe) {
+                knownNotificationIdsRef.current.add(newForMe.id);
+                setActiveNotificationPopup(newForMe);
+              }
+            }
+          } catch {}
+        } else if (e.key === 'conversations' && e.newValue) {
+          try {
+            const parsedConvs = JSON.parse(e.newValue);
+            if (Array.isArray(parsedConvs)) setConversations(parsedConvs);
+          } catch {}
+        } else if (e.key === 'follow_requests_v2' && e.newValue) {
+          try {
+            const parsedReqs = JSON.parse(e.newValue);
+            if (Array.isArray(parsedReqs)) setFollowRequests(parsedReqs);
+          } catch {}
+        } else if (e.key === 'follow_relations_v2' && e.newValue) {
+          try {
+            const parsedRels = JSON.parse(e.newValue);
+            if (Array.isArray(parsedRels)) setFollowRelations(parsedRels);
+          } catch {}
+        }
+      };
+      window.addEventListener('storage', handleStorageEvent);
+
+      // Supabase realtime channel listener
+      let realtimeChannel: any = null;
+      try {
+        const client = getSupabaseClient();
+        if (client) {
+          realtimeChannel = client
+            .channel('viralhub_cross_device_sync')
+            .on('postgres_changes', { event: '*', schema: 'public' }, () => {
+              syncWithSupabase();
+            })
+            .subscribe();
+        }
+      } catch (err) {
+        // realtime fallback
+      }
+
+      return () => {
+        clearInterval(timer);
+        window.removeEventListener('focus', onFocus);
+        window.removeEventListener('storage', handleStorageEvent);
+        if (realtimeChannel) {
+          getSupabaseClient()?.removeChannel(realtimeChannel);
+        }
+      };
     }
-  }, []);
+  }, [currentUser?.id]);
 
   // Sync to storage
   useEffect(() => {
@@ -1385,6 +1660,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         storage.set('notifications', next);
         return next;
       });
+      supabaseDb.insertNotification(reqNotif, targetUser.id);
     } else {
       // Public account: Follow immediately
       setFollowRelations(prev => [
@@ -1864,6 +2140,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }): Promise<boolean> => {
     if (!currentUser) return false;
     const videoId = crypto.randomUUID();
+
+    const validThumb =
+      newVideo.thumbnailUrl && !isVideoUrl(newVideo.thumbnailUrl)
+        ? newVideo.thumbnailUrl
+        : currentUser.avatar && !isVideoUrl(currentUser.avatar)
+        ? currentUser.avatar
+        : '';
+
     const created: Video = {
       id: videoId,
       creatorId: currentUser.id,
@@ -1872,7 +2156,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       hashtags: newVideo.hashtags.length > 0 ? newVideo.hashtags : ['#viral', '#fyp'],
       audioTrack: newVideo.audioTrack,
       mediaUrl: newVideo.mediaUrl,
-      thumbnailUrl: newVideo.thumbnailUrl || newVideo.mediaUrl,
+      thumbnailUrl: validThumb,
       likesCount: 0,
       commentsCount: 0,
       sharesCount: 0,
@@ -1904,7 +2188,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       title: newVideo.audioTrack?.title || `Original Sound - @${currentUser.username}`,
       artist: currentUser.displayName || currentUser.username,
       duration: '00:30',
-      coverUrl: created.thumbnailUrl || currentUser.avatar || '',
+      coverUrl: validThumb,
       audioUrl: newVideo.audioTrack?.audioUrl || created.mediaUrl,
       sourceVideoId: videoId,
       sourceUsername: currentUser.username,
@@ -2111,6 +2395,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (currentUser) {
       supabaseDb.insertMessage(convId, currentUser.id, recipientId, remotePayload);
+
+      // Create realtime notification for recipient across devices
+      if (recipientId) {
+        const nowIso = new Date().toISOString();
+        const msgNotif: NotificationItem = {
+          id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          recipientId,
+          type: 'message' as any,
+          actor: {
+            id: currentUser.id,
+            username: currentUser.username,
+            displayName: currentUser.displayName,
+            avatar: currentUser.avatar,
+          },
+          targetText: displayText.length > 50 ? `${displayText.slice(0, 50)}...` : displayText,
+          timestamp: nowIso,
+          createdAt: nowIso,
+          isUnread: true,
+        };
+        setNotifications(prev => {
+          const next = [msgNotif, ...prev];
+          storage.set('notifications', next);
+          return next;
+        });
+        supabaseDb.insertNotification(msgNotif, recipientId);
+      }
     }
   };
 
@@ -2596,9 +2906,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  const deleteVideoAdmin = async (videoId: string): Promise<boolean> => {
-    setVideos(prev => prev.filter(v => v.id !== videoId));
+  const deleteVideo = async (videoId: string): Promise<boolean> => {
+    setVideos(prev => {
+      const next = prev.filter(v => v.id !== videoId);
+      storage.set('videos', next);
+      return next;
+    });
+
+    // Also remove from personal likes map
+    setUserLikes(prev => {
+      const next: Record<string, string[]> = {};
+      Object.keys(prev).forEach(k => {
+        next[k] = (prev[k] || []).filter(id => id !== videoId);
+      });
+      storage.set('user_likes_map', next);
+      return next;
+    });
+
     await supabaseDb.deleteVideo(videoId);
+    return true;
+  };
+
+  const deleteVideoAdmin = async (videoId: string): Promise<boolean> => {
+    return deleteVideo(videoId);
+  };
+
+  const updateUserRoleAdmin = async (
+    userId: string,
+    newRole: 'creator' | 'admin' | 'moderator'
+  ): Promise<boolean> => {
+    setUsers(prev => {
+      const next = prev.map(u => (u.id === userId ? { ...u, role: newRole } : u));
+      storage.set('users', next);
+      return next;
+    });
+
+    if (currentUser && currentUser.id === userId) {
+      const updatedCurr = { ...currentUser, role: newRole };
+      setCurrentUser(updatedCurr);
+      storage.set('currentUser', updatedCurr);
+      setIsAdmin(newRole === 'admin');
+    }
+
+    if (newRole === 'admin') {
+      const targetUser = users.find(u => u.id === userId);
+      if (targetUser) {
+        const adminRec: AdminRecord = {
+          adminId: targetUser.id,
+          userId: targetUser.id,
+          username: targetUser.username,
+          email: targetUser.email || `${targetUser.username}@viralhub.app`,
+          role: 'Admin',
+          permissions: ['manage_users', 'manage_videos', 'manage_reports'],
+          createdAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString(),
+        };
+        setAdmins(prev => {
+          const next = [adminRec, ...prev.filter(a => a.adminId !== targetUser.id && a.userId !== targetUser.id)];
+          storage.set('admins', next);
+          return next;
+        });
+      }
+    } else {
+      setAdmins(prev => {
+        const next = prev.filter(a => a.adminId !== userId && a.userId !== userId);
+        storage.set('admins', next);
+        return next;
+      });
+    }
+
+    await supabaseDb.updateUserRole(userId, newRole);
     return true;
   };
 
@@ -2781,6 +3158,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeAdmin,
         deleteUserAdmin,
         deleteVideoAdmin,
+        deleteVideo,
+        updateUserRoleAdmin,
+        activeNotificationPopup,
+        dismissNotificationPopup,
         approveVideoAdmin,
         rejectVideoAdmin,
         submitVideoAppeal,

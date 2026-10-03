@@ -231,9 +231,11 @@ export const NotificationsView: React.FC = () => {
                               e.stopPropagation();
                               acceptFollowRequest(item.requestId!, false);
                             }}
-                            className="py-1 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs transition-colors cursor-pointer"
+                            className="py-1 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
+                            title="Allow user to follow your private account"
                           >
-                            Confirm
+                            <UserCheck className="w-3.5 h-3.5" />
+                            <span>Accept</span>
                           </button>
                           <button
                             type="button"

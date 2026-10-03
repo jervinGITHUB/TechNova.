@@ -576,6 +576,7 @@ export const supabaseDb = {
           UserID,
           AudioTrackID,
           VideoURL,
+          ThumbnailURL,
           Caption,
           PublishedAt,
           ViewCount,
@@ -597,6 +598,7 @@ export const supabaseDb = {
             UserID,
             AudioTrackID,
             VideoURL,
+            ThumbnailURL,
             Caption,
             PublishedAt,
             ViewCount,
@@ -706,6 +708,21 @@ export const supabaseDb = {
           safeMediaUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
         }
 
+        // Thumbnail must strictly be an image, NEVER a video file (.mp4, .webm, blob:)!
+        const rawThumb = row.ThumbnailURL || row.thumbnail_url || '';
+        const isThumbVid = Boolean(
+          rawThumb &&
+          (rawThumb.startsWith('blob:') || /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(rawThumb))
+        );
+        let safeThumbnailUrl = '';
+        if (rawThumb && !isThumbVid) {
+          safeThumbnailUrl = rawThumb;
+        } else if (creator.avatar && !/\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(creator.avatar)) {
+          safeThumbnailUrl = creator.avatar;
+        } else {
+          safeThumbnailUrl = '';
+        }
+
         return {
           id: row.VideoID,
           creatorId: row.UserID,
@@ -713,7 +730,7 @@ export const supabaseDb = {
           caption: row.Caption || '',
           hashtags,
           mediaUrl: safeMediaUrl,
-          thumbnailUrl: safeMediaUrl,
+          thumbnailUrl: safeThumbnailUrl,
           likesCount,
           commentsCount,
           sharesCount: 0,
@@ -1301,6 +1318,23 @@ export const supabaseDb = {
     }
   },
 
+  async fetchFollows(): Promise<{ followerId: string; followingId: string }[] | null> {
+    const client = getSupabaseClient();
+    if (!client) return null;
+
+    try {
+      const { data, error } = await client.from('Following').select('*');
+      if (error || !data) return null;
+      return data.map((r: any) => ({
+        followerId: r.UserID || r.user_id,
+        followingId: r.FollowingUserID || r.following_user_id,
+      })).filter(f => f.followerId && f.followingId);
+    } catch (e) {
+      console.warn('Supabase fetchFollows fallback:', e);
+      return null;
+    }
+  },
+
   // -----------------------------------------------------------------------
   // 7. Conversation & Message Tables
   //    Conversation: (ConversationID, UserIDA, UserIDB, CreatedAt)
@@ -1349,6 +1383,52 @@ export const supabaseDb = {
     }
   },
 
+  async fetchConversationsAndMessages(currentUserId: string): Promise<any[] | null> {
+    const client = getSupabaseClient();
+    if (!client || !currentUserId) return null;
+
+    try {
+      const currentUuid = toUuid(currentUserId);
+      const { data: convData, error: convError } = await client
+        .from('Conversation')
+        .select('*')
+        .or(`UserIDA.eq.${currentUuid},UserIDB.eq.${currentUuid},UserIDA.eq.${currentUserId},UserIDB.eq.${currentUserId}`);
+
+      if (convError || !convData || convData.length === 0) {
+        return null;
+      }
+
+      const convIds = convData.map((c: any) => c.ConversationID || c.id);
+      const { data: msgData } = await client
+        .from('Message')
+        .select('*')
+        .in('ConversationID', convIds)
+        .order('SentAt', { ascending: true });
+
+      const messagesByConv = new Map<string, any[]>();
+      (msgData || []).forEach((m: any) => {
+        const list = messagesByConv.get(m.ConversationID) || [];
+        list.push(m);
+        messagesByConv.set(m.ConversationID, list);
+      });
+
+      return convData.map((c: any) => {
+        const cId = c.ConversationID || c.id;
+        const rawMsgs = messagesByConv.get(cId) || [];
+        return {
+          id: cId,
+          userAId: c.UserIDA,
+          userBId: c.UserIDB,
+          createdAt: c.CreatedAt,
+          rawMessages: rawMsgs,
+        };
+      });
+    } catch (e) {
+      console.warn('Supabase fetchConversationsAndMessages fallback:', e);
+      return null;
+    }
+  },
+
   // -----------------------------------------------------------------------
   // 8. Notification Table (NotificationID, UserID, NotificationType, NotificationMessage, IsRead, NotificationDate)
   // -----------------------------------------------------------------------
@@ -1360,13 +1440,23 @@ export const supabaseDb = {
       const notifUuid = toUuid(item.id);
       const userUuid = toUuid(recipientId);
 
+      // Serialize rich notification metadata inside NotificationMessage so actor, video, and request IDs are preserved!
+      const payloadString = JSON.stringify({
+        text: item.targetText || '',
+        actor: item.actor,
+        videoId: item.videoId,
+        requestId: item.requestId,
+        status: item.status,
+        appealStatus: item.appealStatus,
+      });
+
       const { error } = await client.from('Notification').insert({
         NotificationID: notifUuid,
         UserID: userUuid,
         NotificationType: item.type,
-        NotificationMessage: `${item.actor.displayName || 'Someone'} ${item.targetText || ''}`,
+        NotificationMessage: payloadString,
         IsRead: !item.isUnread,
-        NotificationDate: item.createdAt || new Date().toISOString(),
+        NotificationDate: item.createdAt || item.timestamp || new Date().toISOString(),
       });
 
       return !error;
@@ -1391,28 +1481,116 @@ export const supabaseDb = {
       const items: NotificationItem[] = data.map((r: any) => {
         const isRevoked = r.NotificationType === 'video_revoked';
         const isAppeal = r.NotificationType === 'appeal_status';
+
+        let targetText = r.NotificationMessage || '';
+        let actor = {
+          id: isRevoked || isAppeal ? 'viralhub_moderation' : 'system',
+          username: isRevoked || isAppeal ? 'moderation' : 'viralhub',
+          displayName: isRevoked || isAppeal ? 'ViralHub Moderation' : 'ViralHub',
+          avatar: '',
+        };
+        let videoId = r.VideoID || undefined;
+        let requestId: string | undefined = undefined;
+        let status: any = undefined;
+        let appealStatus: any = isRevoked ? 'none' : undefined;
+
+        // Attempt to parse JSON payload
+        if (r.NotificationMessage && r.NotificationMessage.trim().startsWith('{')) {
+          try {
+            const parsed = JSON.parse(r.NotificationMessage);
+            if (parsed.actor && parsed.actor.id) actor = parsed.actor;
+            if (parsed.text) targetText = parsed.text;
+            if (parsed.videoId) videoId = parsed.videoId;
+            if (parsed.requestId) requestId = parsed.requestId;
+            if (parsed.status) status = parsed.status;
+            if (parsed.appealStatus) appealStatus = parsed.appealStatus;
+          } catch {
+            // Keep default fallback
+          }
+        }
+
         return {
           id: r.NotificationID,
           recipientId: r.UserID,
           type: (r.NotificationType as any) || 'like',
-          actor: {
-            id: isRevoked || isAppeal ? 'viralhub_moderation' : 'system',
-            username: isRevoked || isAppeal ? 'moderation' : 'viralhub',
-            displayName: isRevoked || isAppeal ? 'ViralHub Moderation' : 'ViralHub',
-            avatar: '',
-          },
-          targetText: r.NotificationMessage || '',
+          actor,
+          targetText,
           timestamp: r.NotificationDate || new Date().toISOString(),
           createdAt: r.NotificationDate || new Date().toISOString(),
           isUnread: !r.IsRead,
-          videoId: r.VideoID || undefined,
-          appealStatus: isRevoked ? 'none' : undefined,
+          videoId,
+          requestId,
+          status,
+          appealStatus,
         };
       });
       return items;
     } catch (e) {
       console.warn('Supabase fetchNotifications fallback:', e);
       return null;
+    }
+  },
+
+  async updateUserRole(userId: string, newRole: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !userId) return false;
+
+    try {
+      const uUuid = toUuid(userId);
+      const cleanRole = newRole.toLowerCase();
+      const isAdminRole = cleanRole === 'admin' || cleanRole === 'super admin' || cleanRole === 'administrator';
+
+      // 1. Update User table
+      let updateRes = await client
+        .from('User')
+        .update({ Role: cleanRole })
+        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
+
+      if (updateRes.error) {
+        // Fallback for snake_case table
+        await client
+          .from('users')
+          .update({ role: cleanRole })
+          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      }
+
+      // 2. Sync Admin table
+      if (isAdminRole) {
+        // Get user details to populate Admin record
+        const { data: dbUser } = await client
+          .from('User')
+          .select('Username, Email, DisplayName')
+          .or(`UserID.eq.${uUuid},UserID.eq.${userId}`)
+          .maybeSingle();
+
+        const username = dbUser?.Username || dbUser?.DisplayName || `admin_${String(userId).slice(0, 6)}`;
+        const email = dbUser?.Email || `${username}@viralhub.app`;
+
+        await client.from('Admin').upsert(
+          {
+            AdminID: uUuid,
+            UserID: uUuid,
+            Username: username,
+            Email: email,
+            Role: 'Admin',
+            Permissions: ['manage_users', 'manage_videos', 'manage_reports'],
+            CreatedAt: new Date().toISOString(),
+            LastLogin: new Date().toISOString(),
+          },
+          { onConflict: 'AdminID' }
+        );
+      } else {
+        // If demoted from admin, remove from Admin table
+        await client
+          .from('Admin')
+          .delete()
+          .or(`AdminID.eq.${uUuid},UserID.eq.${uUuid},UserID.eq.${userId}`);
+      }
+
+      return true;
+    } catch (e) {
+      console.warn('Supabase updateUserRole fallback:', e);
+      return false;
     }
   },
 

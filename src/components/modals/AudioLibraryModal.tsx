@@ -10,6 +10,7 @@ interface AudioLibraryModalProps {
 export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTrack }) => {
   const {
     audioTracks,
+    videos,
     audioLibraryOpen,
     setAudioLibraryOpen,
     onSelectAudioCallback,
@@ -199,7 +200,41 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
         <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 text-left">
           {filteredTracks.map(track => {
             const isPlaying = playingTrackId === track.id;
-            const isVideoSource = Boolean(track.sourceVideoId || track.title.toLowerCase().startsWith('original sound'));
+            const isVideoSource = Boolean(
+              track.sourceVideoId || track.title.toLowerCase().startsWith('original sound')
+            );
+
+            // Lookup source video if present to guarantee high fidelity thumbnail
+            const sourceVid = track.sourceVideoId
+              ? videos.find(v => v.id === track.sourceVideoId)
+              : null;
+
+            const isCoverVid = Boolean(
+              track.coverUrl &&
+                (track.coverUrl.startsWith('blob:') ||
+                  /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(track.coverUrl))
+            );
+
+            let resolvedCover = !isCoverVid && track.coverUrl ? track.coverUrl : '';
+            if (!resolvedCover && sourceVid) {
+              const srcThumb = sourceVid.thumbnailUrl;
+              const srcAvatar = sourceVid.creator?.avatar;
+              if (
+                srcThumb &&
+                !srcThumb.startsWith('blob:') &&
+                !/\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(srcThumb)
+              ) {
+                resolvedCover = srcThumb;
+              } else if (
+                srcAvatar &&
+                !srcAvatar.startsWith('blob:') &&
+                !/\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(srcAvatar)
+              ) {
+                resolvedCover = srcAvatar;
+              }
+            }
+
+            const hasImg = Boolean(resolvedCover);
 
             return (
               <div
@@ -218,21 +253,30 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
                     className="relative w-12 h-12 rounded-xl overflow-hidden shrink-0 cursor-pointer shadow-md group/cover"
                     title={isPlaying ? 'Pause audio preview' : 'Play audio preview'}
                   >
-                    <div className="w-full h-full bg-[#232336] flex items-center justify-center">
-                      {track.coverUrl ? (
+                    <div className="relative w-full h-full bg-[#232336] flex items-center justify-center">
+                      {hasImg ? (
                         <img
-                          src={track.coverUrl}
+                          src={resolvedCover}
                           alt={track.title}
                           className="w-full h-full object-cover"
                           onError={e => {
                             (e.currentTarget as HTMLImageElement).style.display = 'none';
+                            const fallback = e.currentTarget.parentElement?.querySelector('.track-fallback-icon');
+                            if (fallback) (fallback as HTMLElement).style.display = 'flex';
                           }}
                         />
-                      ) : isVideoSource ? (
-                        <Film className="w-5 h-5 text-neutral-400" />
-                      ) : (
-                        <Music className="w-5 h-5 text-neutral-400" />
-                      )}
+                      ) : null}
+                      <div
+                        className={`track-fallback-icon w-full h-full items-center justify-center bg-gradient-to-tr from-[#1f1b2e] to-[#2b2540] ${
+                          hasImg ? 'hidden' : 'flex'
+                        }`}
+                      >
+                        {isVideoSource ? (
+                          <Film className="w-5 h-5 text-cyan-400" />
+                        ) : (
+                          <Music className="w-5 h-5 text-[#ff007a]" />
+                        )}
+                      </div>
                     </div>
 
                     {/* Play/Pause Overlay */}

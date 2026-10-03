@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 
 export const UploadView: React.FC = () => {
-  const { uploadVideo, openAudioLibrary, setActiveTab } = useApp();
+  const { uploadVideo, openAudioLibrary, setActiveTab, videos } = useApp();
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
@@ -556,17 +556,56 @@ export const UploadView: React.FC = () => {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between p-3 rounded-2xl bg-[#12121a] border border-[#ff007a]/40 shadow-sm">
                         <div className="flex items-center gap-2.5 min-w-0">
-                          {selectedAudio.coverUrl ? (
-                            <img
-                              src={selectedAudio.coverUrl}
-                              alt={selectedAudio.title}
-                              className="w-10 h-10 rounded-xl object-cover shrink-0"
-                            />
-                          ) : (
-                            <div className="w-10 h-10 rounded-xl bg-neutral-800 flex items-center justify-center shrink-0">
-                              <Music className="w-5 h-5 text-[#ff007a]" />
-                            </div>
-                          )}
+                          {(() => {
+                            const sourceVid = selectedAudio.sourceVideoId
+                              ? videos.find(v => v.id === selectedAudio.sourceVideoId)
+                              : null;
+
+                            const isVidUrl = Boolean(
+                              selectedAudio.coverUrl &&
+                              (selectedAudio.coverUrl.startsWith('blob:') ||
+                               /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(selectedAudio.coverUrl))
+                            );
+
+                            let resolvedCover = (!isVidUrl && selectedAudio.coverUrl) ? selectedAudio.coverUrl : '';
+                            if (!resolvedCover && sourceVid) {
+                              const sThumb = sourceVid.thumbnailUrl;
+                              const sAvatar = sourceVid.creator?.avatar;
+                              if (sThumb && !sThumb.startsWith('blob:') && !/\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(sThumb)) {
+                                resolvedCover = sThumb;
+                              } else if (sAvatar && !sAvatar.startsWith('blob:') && !/\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(sAvatar)) {
+                                resolvedCover = sAvatar;
+                              }
+                            }
+
+                            const hasCoverImg = Boolean(resolvedCover);
+
+                            return (
+                              <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-gradient-to-br from-[#232338] to-[#12121e] flex items-center justify-center shrink-0 border border-neutral-700/60 shadow-sm">
+                                {hasCoverImg ? (
+                                  <img
+                                    src={resolvedCover}
+                                    alt={selectedAudio.title}
+                                    className="w-full h-full object-cover"
+                                    onError={e => {
+                                      (e.currentTarget as HTMLImageElement).style.display = 'none';
+                                      const fb = e.currentTarget.parentElement?.querySelector('.audio-cover-fallback');
+                                      if (fb) (fb as HTMLElement).style.display = 'flex';
+                                    }}
+                                  />
+                                ) : null}
+                                <div
+                                  className={`audio-cover-fallback w-full h-full items-center justify-center bg-gradient-to-tr from-[#1b172a] to-[#251f38] ${
+                                    hasCoverImg ? 'hidden' : 'flex'
+                                  }`}
+                                >
+                                  <div className="w-7 h-7 rounded-full bg-[#ff007a]/20 border border-[#ff007a]/40 flex items-center justify-center">
+                                    <Music className="w-3.5 h-3.5 text-[#ff007a]" />
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
                           <div className="text-left min-w-0">
                             <div className="text-xs font-bold text-white truncate max-w-[190px] sm:max-w-xs">
                               {selectedAudio.title}

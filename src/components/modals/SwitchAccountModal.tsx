@@ -11,7 +11,8 @@ import {
   ArrowRightLeft,
   Shield,
   Check,
-  Plus
+  Plus,
+  Trash2,
 } from 'lucide-react';
 
 interface SwitchAccountModalProps {
@@ -27,6 +28,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
     currentUser,
     users,
     savedAccounts,
+    removeSavedAccount,
     admins,
     quickLoginAs,
     logout,
@@ -35,62 +37,27 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Build unified list of switchable accounts, guaranteeing admin accounts are always present!
+  // Strictly ONLY accounts logged-in on THIS device (stored in savedAccounts / currentUser)
   const displayAccounts: User[] = (() => {
     const map = new Map<string, User>();
     const emailToId = new Map<string, string>();
 
-    // 1. Saved accounts on this device
+    // 1. Saved accounts that actually logged in on this device
     for (const a of savedAccounts) {
+      if (!a || !a.id) continue;
       const emailKey = a.email ? a.email.trim().toLowerCase() : null;
       map.set(a.id, a);
       if (emailKey) emailToId.set(emailKey, a.id);
     }
 
-    // 2. Administrators from Admin table (guarantee admin account is selectable)
-    for (const admin of admins) {
-      const emailKey = admin.email ? admin.email.trim().toLowerCase() : null;
-      let matchedUserId = admin.userId || admin.adminId;
-      if (emailKey && emailToId.has(emailKey)) {
-        matchedUserId = emailToId.get(emailKey)!;
-      }
-
-      if (map.has(matchedUserId)) {
-        const existing = map.get(matchedUserId)!;
-        map.set(matchedUserId, { ...existing, role: 'admin' });
-      } else {
-        const adminUser: User = {
-          id: matchedUserId,
-          username: admin.username || 'admin',
-          displayName: admin.username || 'Administrator',
-          email: admin.email || '',
-          avatar: '',
-          bio: `Platform ${admin.role || 'Admin'}`,
-          followingCount: 0,
-          followersCount: 0,
-          likesCount: '0',
-          isPrivate: false,
-          role: 'admin',
-        };
-        map.set(matchedUserId, adminUser);
-        if (emailKey) emailToId.set(emailKey, matchedUserId);
-      }
-    }
-
-    // 3. Known users from users list
-    for (const u of users) {
-      const emailKey = u.email ? u.email.trim().toLowerCase() : null;
+    // 2. Ensure current active user is also present
+    if (currentUser && currentUser.id) {
+      const emailKey = currentUser.email ? currentUser.email.trim().toLowerCase() : null;
       if (emailKey && emailToId.has(emailKey)) {
         const existingId = emailToId.get(emailKey)!;
-        const existing = map.get(existingId);
-        if (existing && u.role === 'admin') {
-          existing.role = 'admin';
-        }
-        continue;
-      }
-      if (!map.has(u.id)) {
-        map.set(u.id, u);
-        if (emailKey) emailToId.set(emailKey, u.id);
+        map.set(existingId, currentUser);
+      } else {
+        map.set(currentUser.id, currentUser);
       }
     }
 
@@ -173,17 +140,18 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
               const isAdminAccount = roleLower === 'admin' || roleLower === 'super admin' || roleLower === 'administrator';
 
               return (
-                <button
+                <div
                   key={u.id}
-                  onClick={() => handleSwitchTo(u.id)}
-                  disabled={isCurrent}
-                  className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left cursor-pointer ${
+                  className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
                     isCurrent
-                      ? 'bg-[#181824]/60 border-neutral-800 opacity-60 cursor-default'
+                      ? 'bg-[#181824]/60 border-neutral-800 opacity-80'
                       : 'bg-[#181824] hover:bg-[#202030] border-neutral-800/80 hover:border-neutral-700'
                   }`}
                 >
-                  <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    onClick={() => !isCurrent && handleSwitchTo(u.id)}
+                    className={`flex items-center gap-3 min-w-0 flex-1 ${!isCurrent ? 'cursor-pointer' : ''}`}
+                  >
                     <Avatar
                       src={u.avatar}
                       alt={u.displayName || u.username}
@@ -205,14 +173,34 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                       </div>
                     </div>
                   </div>
-                  {isCurrent ? (
-                    <span className="text-[11px] text-neutral-500 font-medium">Logged in</span>
-                  ) : (
-                    <span className="text-xs font-bold text-[#ff007a] hover:underline">
-                      Switch →
-                    </span>
-                  )}
-                </button>
+
+                  <div className="flex items-center gap-2 shrink-0 ml-2">
+                    {isCurrent ? (
+                      <span className="text-[11px] text-neutral-500 font-medium">Active</span>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleSwitchTo(u.id)}
+                          className="text-xs font-bold text-[#ff007a] hover:underline px-2 py-1 rounded-lg hover:bg-[#ff007a]/10 cursor-pointer"
+                        >
+                          Switch →
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            removeSavedAccount(u.id);
+                          }}
+                          className="p-1.5 rounded-lg text-neutral-500 hover:text-red-400 hover:bg-neutral-800 transition-colors cursor-pointer"
+                          title="Remove from this device"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>

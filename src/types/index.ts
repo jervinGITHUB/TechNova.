@@ -12,7 +12,7 @@ export interface User {
   isFollowing?: boolean;
   isBlocked?: boolean;
   isReported?: boolean;
-  role?: 'creator' | 'viewer' | 'admin';
+  role?: 'creator' | 'viewer' | 'admin' | 'moderator';
 }
 
 export interface AudioTrack {
@@ -122,7 +122,7 @@ export interface NotificationItem {
   id: string;
   recipientId?: string;
   recipientEmail?: string;
-  type: 'like' | 'follow' | 'follow_request' | 'comment' | 'share' | 'video_revoked' | 'appeal_status';
+  type: 'like' | 'follow' | 'follow_request' | 'comment' | 'share' | 'video_revoked' | 'appeal_status' | 'message';
   actor: {
     id: string;
     username: string;

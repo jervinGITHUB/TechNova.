@@ -34,6 +34,7 @@ import {
   Clock,
   LogOut,
   ArrowRightLeft,
+  UserCog,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -46,6 +47,7 @@ export const AdminDashboardView: React.FC = () => {
     addAdmin,
     removeAdmin,
     deleteUserAdmin,
+    updateUserRoleAdmin,
     deleteVideoAdmin,
     approveVideoAdmin,
     rejectVideoAdmin,
@@ -665,15 +667,44 @@ export const AdminDashboardView: React.FC = () => {
                       </td>
                       <td className="py-3 px-3 text-neutral-300 font-mono text-[11px]">{u.email || '—'}</td>
                       <td className="py-3 px-3">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                            u.role === 'admin'
-                              ? 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
-                              : 'bg-neutral-800 text-neutral-300'
-                          }`}
-                        >
-                          {u.role || 'creator'}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={u.role || 'creator'}
+                            onChange={async e => {
+                              const newRole = e.target.value as 'creator' | 'admin' | 'moderator';
+                              if (u.id === currentUser?.id && newRole !== 'admin') {
+                                const confirmSelf = window.confirm(
+                                  'Are you sure you want to demote your own account from Admin? You will lose access to the Admin Dashboard.'
+                                );
+                                if (!confirmSelf) return;
+                              }
+                              await updateUserRoleAdmin(u.id, newRole);
+                              setSyncStatusMsg({
+                                type: 'success',
+                                text: `Role for @${u.username} successfully updated to ${newRole.toUpperCase()}`,
+                              });
+                              setTimeout(() => setSyncStatusMsg(null), 3500);
+                            }}
+                            className={`text-xs font-bold py-1 px-2.5 rounded-xl border outline-none cursor-pointer transition-all ${
+                              u.role === 'admin'
+                                ? 'bg-purple-950/40 text-purple-300 border-purple-500/50 hover:border-purple-400'
+                                : u.role === 'moderator'
+                                ? 'bg-cyan-950/40 text-cyan-300 border-cyan-500/50 hover:border-cyan-400'
+                                : 'bg-[#181824] text-neutral-300 border-neutral-700/80 hover:border-neutral-500'
+                            }`}
+                            title="Admin: Click to change role"
+                          >
+                            <option value="creator" className="bg-[#14141e] text-white">
+                              Creator
+                            </option>
+                            <option value="moderator" className="bg-[#14141e] text-cyan-300">
+                              Moderator
+                            </option>
+                            <option value="admin" className="bg-[#14141e] text-purple-300">
+                              Admin
+                            </option>
+                          </select>
+                        </div>
                       </td>
                       <td className="py-3 px-3 text-neutral-300">{u.followersCount}</td>
                       <td className="py-3 px-3 text-right">

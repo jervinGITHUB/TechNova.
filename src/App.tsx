@@ -20,6 +20,7 @@ import { AudioLibraryModal } from './components/modals/AudioLibraryModal';
 import { SupabaseVercelModal } from './components/modals/SupabaseVercelModal';
 import { SwitchAccountModal } from './components/modals/SwitchAccountModal';
 import { AdminDashboardView } from './components/admin/AdminDashboardView';
+import { InAppNotificationToast } from './components/notifications/InAppNotificationToast';
 import { X } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -47,6 +48,7 @@ const AppContent: React.FC = () => {
         <div className="flex-1 h-full overflow-y-auto">
           <AdminDashboardView />
         </div>
+        <InAppNotificationToast />
         <SupabaseVercelModal
           isOpen={supabaseModalOpen}
           onClose={() => setSupabaseModalOpen(false)}
@@ -161,6 +163,7 @@ const AppContent: React.FC = () => {
       </div>
 
       {/* Global Modals & Drawers */}
+      <InAppNotificationToast />
       <CommentsDrawer />
       <ReportModals />
       <AudioLibraryModal />

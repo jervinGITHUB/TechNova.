@@ -23,6 +23,8 @@ import {
   Heart,
   MessageCircle,
   Share2,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 
 export const ProfileView: React.FC = () => {
@@ -49,12 +51,15 @@ export const ProfileView: React.FC = () => {
     toggleLikeVideo,
     setCommentsVideoId,
     getUserLikedVideos,
+    deleteVideo,
   } = useApp();
 
   const [activeTabSub, setActiveTabSub] = useState<'videos' | 'liked'>('videos');
   const [menuOpen, setMenuOpen] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+  const [deleteConfirmVideoId, setDeleteConfirmVideoId] = useState<string | null>(null);
+  const [isDeletingVideo, setIsDeletingVideo] = useState(false);
 
   // Video Preview & Share states
   const [selectedVideoModal, setSelectedVideoModal] = useState<Video | null>(null);
@@ -547,6 +552,21 @@ export const ProfileView: React.FC = () => {
                     <Play className="w-3 h-3 fill-white" />
                     <span>{video.viewsCount || '0'}</span>
                   </div>
+
+                  {/* Delete button on hover for creator's own video */}
+                  {isSelf && activeTabSub === 'videos' && (
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setDeleteConfirmVideoId(video.id);
+                      }}
+                      className="absolute top-2 right-2 z-20 p-1.5 rounded-xl bg-black/70 hover:bg-red-600 text-neutral-300 hover:text-white transition-all opacity-80 sm:opacity-0 group-hover:opacity-100 shadow-md cursor-pointer border border-white/10 hover:border-red-500"
+                      title="Delete video"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               );
             })
@@ -767,11 +787,29 @@ export const ProfileView: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-fadeIn">
           <div className="absolute inset-0" onClick={() => setSelectedVideoModal(null)} />
           <div className="relative w-full max-w-sm aspect-[9/16] bg-black rounded-3xl overflow-hidden shadow-2xl border border-neutral-800 flex flex-col justify-between z-10">
-            {/* Top Bar: Close Button + Views Count */}
+            {/* Top Bar: Close Button + Views Count + Delete (if own video) */}
             <div className="absolute top-4 left-4 right-4 z-20 flex items-center justify-between">
-              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/50 backdrop-blur-md text-white text-xs font-bold border border-white/10">
-                <Play className="w-3.5 h-3.5 fill-white" />
-                <span>{selectedVideoModal.viewsCount || '1'} views</span>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/50 backdrop-blur-md text-white text-xs font-bold border border-white/10">
+                  <Play className="w-3.5 h-3.5 fill-white" />
+                  <span>{selectedVideoModal.viewsCount || '1'} views</span>
+                </div>
+                {currentUser &&
+                  (selectedVideoModal.creatorId === currentUser.id ||
+                    selectedVideoModal.creator?.id === currentUser.id) && (
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setDeleteConfirmVideoId(selectedVideoModal.id);
+                      }}
+                      className="flex items-center gap-1 px-3 py-1 rounded-full bg-red-500/25 hover:bg-red-500/40 text-red-300 border border-red-500/40 text-xs font-bold transition-all cursor-pointer backdrop-blur-md shadow-sm"
+                      title="Delete your video"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                      <span>Delete</span>
+                    </button>
+                  )}
               </div>
               <button
                 type="button"
@@ -863,6 +901,25 @@ export const ProfileView: React.FC = () => {
                   {formatCount(selectedVideoModal.sharesCount)}
                 </span>
               </div>
+
+              {/* If viewing own video, also provide Delete button on rail */}
+              {currentUser &&
+                (selectedVideoModal.creatorId === currentUser.id ||
+                  selectedVideoModal.creator?.id === currentUser.id) && (
+                  <div className="flex flex-col items-center">
+                    <button
+                      type="button"
+                      onClick={() => setDeleteConfirmVideoId(selectedVideoModal.id)}
+                      className="p-2.5 rounded-full bg-red-500/20 hover:bg-red-500/40 text-red-400 border border-red-500/40 backdrop-blur-md transition-all cursor-pointer hover:scale-105"
+                      title="Delete this video"
+                    >
+                      <Trash2 className="w-6 h-6" />
+                    </button>
+                    <span className="text-[10px] font-semibold text-red-400 mt-1 drop-shadow">
+                      Delete
+                    </span>
+                  </div>
+                )}
             </div>
 
             {/* Bottom Caption Overlay */}
@@ -873,6 +930,53 @@ export const ProfileView: React.FC = () => {
               <p className="text-xs text-neutral-200 mt-1 line-clamp-2">
                 {selectedVideoModal.caption}
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal to Delete Video */}
+      {deleteConfirmVideoId && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn select-none">
+          <div
+            className="absolute inset-0"
+            onClick={() => !isDeletingVideo && setDeleteConfirmVideoId(null)}
+          />
+          <div className="relative w-full max-w-sm bg-[#13131c] border border-neutral-800 rounded-3xl p-6 shadow-2xl z-10 text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/15 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-white font-brand">Delete Video?</h3>
+              <p className="text-xs text-neutral-400 leading-relaxed">
+                Are you sure you want to permanently delete this video? This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingVideo}
+                onClick={() => setDeleteConfirmVideoId(null)}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingVideo}
+                onClick={async () => {
+                  setIsDeletingVideo(true);
+                  await deleteVideo(deleteConfirmVideoId);
+                  setIsDeletingVideo(false);
+                  setDeleteConfirmVideoId(null);
+                  setSelectedVideoModal(null);
+                  setToastMessage('Video deleted successfully.');
+                  setTimeout(() => setToastMessage(''), 3000);
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-colors flex items-center justify-center gap-1.5 shadow-[0_0_15px_rgba(239,68,68,0.4)] cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingVideo ? 'Deleting...' : 'Yes, Delete'}
+              </button>
             </div>
           </div>
         </div>
