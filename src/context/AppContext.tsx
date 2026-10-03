@@ -39,6 +39,18 @@ import {
   toUuid,
 } from '../lib/supabase';
 
+// Persistent set of notification IDs that were marked as read by user
+export const getReadNotificationIds = (): Set<string> => {
+  const ids = storage.get<string[]>('read_notification_ids_v1', []);
+  return new Set(ids);
+};
+
+export const markNotificationIdsReadInStorage = (ids: string[]) => {
+  const current = storage.get<string[]>('read_notification_ids_v1', []);
+  const combined = Array.from(new Set([...current, ...ids]));
+  storage.set('read_notification_ids_v1', combined);
+};
+
 // Ensure any legacy cached sample data in browser localStorage is wiped on boot
 const EMPTY_RESET_KEY = 'viralhub_empty_reset_v9';
 if (!storage.get<boolean>(EMPTY_RESET_KEY, false)) {
@@ -151,7 +163,12 @@ interface AppContextType {
   setMessagesMobileView: (view: 'list' | 'chat') => void;
   openConversation: (convId: string) => void;
   openConversationWithUser: (userId: string) => void;
-  sendMessage: (convId: string, text: string, replyTo?: MessageReplyInfo) => void;
+  sendMessage: (
+    convId: string,
+    text: string,
+    replyTo?: MessageReplyInfo,
+    sharedVideo?: Video
+  ) => void;
   deleteConversation: (convId: string) => void;
   deleteMessage: (convId: string, messageId: string) => void;
   
@@ -291,15 +308,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
     const raw = storage.get<NotificationItem[]>('notifications', INITIAL_NOTIFICATIONS);
+    const readIds = getReadNotificationIds();
     // Sanitize any previous simulated reciprocal notifications or old entries where actor is user_andrea
     return raw
       .filter(n => !n.targetText?.includes('back!') && n.actor?.id !== 'user_andrea')
       .map(n => {
-        if (!n.createdAt && (!n.timestamp || n.timestamp.toLowerCase() === 'just now')) {
-          const nowIso = new Date().toISOString();
-          return { ...n, timestamp: nowIso, createdAt: nowIso };
-        }
-        return n;
+        const isReadLocally = readIds.has(n.id) || (n.id ? readIds.has(toUuid(n.id)) : false);
+        const nowIso = new Date().toISOString();
+        return {
+          ...n,
+          timestamp: n.createdAt || n.timestamp || nowIso,
+          createdAt: n.createdAt || n.timestamp || nowIso,
+          isUnread: isReadLocally ? false : n.isUnread,
+        };
       });
   });
   const [reports, setReports] = useState<ReportItem[]>(() => storage.get('reports', INITIAL_REPORTS));
@@ -526,6 +547,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (remoteNotifications && remoteNotifications.length > 0) {
+        const readIds = getReadNotificationIds();
         setNotifications(prev => {
           const map = new Map<string, NotificationItem>();
           prev.forEach(n => map.set(n.id, n));
@@ -533,15 +555,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const existingKey = Array.from(map.keys()).find(
               k => k === n.id || toUuid(k) === toUuid(n.id)
             );
+            const isReadLocally =
+              readIds.has(n.id) ||
+              (n.id ? readIds.has(toUuid(n.id)) : false) ||
+              (existingKey && map.get(existingKey)?.isUnread === false);
+
             if (existingKey) {
               const existing = map.get(existingKey)!;
               map.set(existingKey, {
                 ...n,
                 ...existing,
-                isUnread: n.isUnread,
+                isUnread: isReadLocally ? false : n.isUnread,
               });
             } else {
-              map.set(n.id, n);
+              map.set(n.id, {
+                ...n,
+                isUnread: isReadLocally ? false : n.isUnread,
+              });
             }
           });
           const merged = Array.from(map.values());
@@ -644,6 +674,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const { data: authSubscription } = client.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_IN') {
         if (session?.user) {
+          const activeStored = storage.get<User | null>('currentUser', null);
+          const isExplicitOAuthRedirect =
+            typeof window !== 'undefined' &&
+            (window.location.hash.includes('access_token') || window.location.search.includes('code='));
+
+          // If there is an active user currently in storage, check if this event belongs to them
+          if (activeStored) {
+            const isSameUser =
+              activeStored.id === session.user.id ||
+              toUuid(activeStored.id) === toUuid(session.user.id) ||
+              (activeStored.email &&
+                session.user.email &&
+                activeStored.email.trim().toLowerCase() === session.user.email.trim().toLowerCase());
+
+            // If the user deliberately switched to a different account (e.g. Account 2),
+            // a background tab-focus / token refresh from Account 1 MUST NOT switch them back!
+            if (!isSameUser && !isExplicitOAuthRedirect) {
+              return;
+            }
+          }
+
           await handleSupabaseUserSession(session.user);
         }
       } else if (event === 'INITIAL_SESSION') {
@@ -1700,7 +1751,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         id: newConvId,
         participantIds: [currentUser.id, targetUserId],
         participant: targetUser,
-        lastMessage: `Shared a video: "${video.caption.slice(0, 30)}"`,
+        lastMessage: `🎥 Shared a video: "${video.caption.slice(0, 25)}"`,
         lastMessageTime: 'Just now',
         unreadCount: 0,
         unreadCounts: { [currentUser.id]: 0, [targetUserId]: 1 },
@@ -1711,12 +1762,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setConversations(prev => [newConv, ...prev]);
     }
 
-    const shareUrl = `${window.location.origin}/video/${video.id}`;
-    const textToSend = note?.trim()
-      ? `${note.trim()}\n🎥 Video by @${video.creator.username}: "${video.caption}"\n${shareUrl}`
-      : `🎥 Check out this video by @${video.creator.username}: "${video.caption}"\n${shareUrl}`;
-
-    sendMessage(targetConvId, textToSend);
+    const noteText = note?.trim() || '';
+    sendMessage(targetConvId, noteText, undefined, video);
     return true;
   };
 
@@ -1885,13 +1932,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveTab('messages');
   };
 
-  const sendMessage = (convId: string, text: string, replyTo?: MessageReplyInfo) => {
-    if (!currentUser || !text.trim()) return;
+  const sendMessage = (
+    convId: string,
+    text: string,
+    replyTo?: MessageReplyInfo,
+    sharedVideo?: Video
+  ) => {
+    if (!currentUser && !sharedVideo) return;
+    if (!text.trim() && !sharedVideo) return;
 
     const conv = conversations.find(c => c.id === convId);
     const recipientId =
-      conv?.participantIds?.find(id => id !== currentUser.id) ||
-      (conv?.participant && conv.participant.id !== currentUser.id ? conv.participant.id : '') ||
+      conv?.participantIds?.find(id => id !== currentUser?.id) ||
+      (conv?.participant && conv.participant.id !== currentUser?.id ? conv.participant.id : '') ||
       '';
 
     // Guard: If recipient is private, cannot message unless friends!
@@ -1900,16 +1953,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
+    const displayText = text.trim() || (sharedVideo ? `Shared a video: "${sharedVideo.caption}"` : '');
     const newMsg: Message = {
       id: `m_${Date.now()}`,
       conversationId: convId,
-      senderId: currentUser.id,
-      text: text.trim(),
+      senderId: currentUser ? currentUser.id : 'unknown',
+      text: displayText,
       timestamp: 'Today, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       isMine: true,
       status: 'sent',
       replyTo,
       deletedForUserIds: [],
+      sharedVideo: sharedVideo,
+      sharedVideoId: sharedVideo?.id,
     };
 
     setConversations(prev =>
@@ -1918,15 +1974,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const currentRecipientUnread = c.unreadCounts?.[recipientId] || 0;
           return {
             ...c,
-            lastMessage: text.trim(),
+            lastMessage: sharedVideo ? `🎥 Shared a video: "${sharedVideo.caption.slice(0, 25)}"` : text.trim(),
             lastMessageTime: 'Today, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             messages: [...c.messages, newMsg],
             deletedForUserIds: (c.deletedForUserIds || []).filter(
-              id => id !== currentUser.id && id !== recipientId
+              id => id !== currentUser?.id && id !== recipientId
             ),
             unreadCounts: {
               ...(c.unreadCounts || {}),
-              [currentUser.id]: 0,
+              [currentUser ? currentUser.id : 'me']: 0,
               [recipientId]: currentRecipientUnread + 1,
             },
           };
@@ -1935,7 +1991,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
 
-    supabaseDb.insertMessage(convId, currentUser.id, recipientId, text.trim());
+    const remotePayload = sharedVideo
+      ? `[VIDEO_SHARE:${sharedVideo.id}] ${text.trim()}`
+      : text.trim();
+
+    if (currentUser) {
+      supabaseDb.insertMessage(convId, currentUser.id, recipientId, remotePayload);
+    }
   };
 
   // Delete whole conversation: ONLY deletes for currentUser's POV!
@@ -1989,20 +2051,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const markAllNotificationsAsRead = () => {
     if (!currentUser) return;
-    setNotifications(prev =>
-      prev.map(n => {
-        if (!n.recipientId || n.recipientId === currentUser.id) {
+    const isRecipient = (n: NotificationItem) =>
+      !n.recipientId ||
+      n.recipientId === currentUser.id ||
+      toUuid(n.recipientId) === toUuid(currentUser.id) ||
+      (currentUser.email && n.recipientId.toLowerCase() === currentUser.email.toLowerCase()) ||
+      (n.recipientEmail && currentUser.email && n.recipientEmail.toLowerCase() === currentUser.email.toLowerCase());
+
+    const readIdsToRecord: string[] = [];
+    setNotifications(prev => {
+      const next = prev.map(n => {
+        if (isRecipient(n)) {
+          readIdsToRecord.push(n.id);
+          if (n.id) readIdsToRecord.push(toUuid(n.id));
           return { ...n, isUnread: false };
         }
         return n;
-      })
-    );
+      });
+      storage.set('notifications', next);
+      return next;
+    });
+
+    if (readIdsToRecord.length > 0) {
+      markNotificationIdsReadInStorage(readIdsToRecord);
+    }
+    supabaseDb.markAllNotificationsAsRead(currentUser.id);
   };
 
   const markNotificationAsRead = (id: string) => {
-    setNotifications(prev =>
-      prev.map(n => (n.id === id ? { ...n, isUnread: false } : n))
-    );
+    setNotifications(prev => {
+      const next = prev.map(n =>
+        n.id === id || toUuid(n.id) === toUuid(id) ? { ...n, isUnread: false } : n
+      );
+      storage.set('notifications', next);
+      return next;
+    });
+    markNotificationIdsReadInStorage([id, toUuid(id)]);
+    supabaseDb.markNotificationAsRead(id);
   };
 
   // Live Stream handling (BR-003, BR-004, BR-010, BR-026, BR-027)

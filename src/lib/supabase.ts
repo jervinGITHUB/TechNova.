@@ -1253,6 +1253,38 @@ export const supabaseDb = {
     }
   },
 
+  async markNotificationAsRead(notificationId: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+    try {
+      const nUuid = toUuid(notificationId);
+      await client
+        .from('Notification')
+        .update({ IsRead: true })
+        .or(`NotificationID.eq.${nUuid},NotificationID.eq.${notificationId}`);
+      return true;
+    } catch (e) {
+      console.warn('Supabase markNotificationAsRead warning:', e);
+      return false;
+    }
+  },
+
+  async markAllNotificationsAsRead(recipientId: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+    try {
+      const uUuid = toUuid(recipientId);
+      await client
+        .from('Notification')
+        .update({ IsRead: true })
+        .or(`UserID.eq.${uUuid},UserID.eq.${recipientId}`);
+      return true;
+    } catch (e) {
+      console.warn('Supabase markAllNotificationsAsRead warning:', e);
+      return false;
+    }
+  },
+
   // -----------------------------------------------------------------------
   // 9. ReportVideo & ReportUser Tables
   //    ReportVideo: (ReportID, ReporterUserID, VideoID, Reason, Status, ReportedDate)

@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Conversation, User, MessageReplyInfo } from '../../types';
+import { Conversation, User, MessageReplyInfo, Message, Video } from '../../types';
 import { Avatar } from '../common/Avatar';
+import { MessageVideoCard } from './MessageVideoCard';
+import { toUuid } from '../../lib/supabase';
 import {
   Search,
   Send,
@@ -19,10 +21,81 @@ import {
   Lock
 } from 'lucide-react';
 
+const resolveSharedVideo = (
+  msg: Message,
+  allVideos: Video[]
+): { isVideo: boolean; video?: Video; note?: string } => {
+  if (msg.sharedVideo) {
+    return { isVideo: true, video: msg.sharedVideo, note: msg.text };
+  }
+
+  // Check marker: [VIDEO_SHARE:<id>] note
+  const markerMatch = (msg.text || '').match(/\[VIDEO_SHARE:([^\]]+)\](?:\s*([\s\S]*))?/);
+  if (markerMatch) {
+    const videoId = markerMatch[1].trim();
+    const note = markerMatch[2]?.trim() || '';
+    const found = allVideos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
+    if (found) {
+      return { isVideo: true, video: found, note };
+    }
+  }
+
+  // Check for video link /video/<id> (e.g. from user screenshot or shared links)
+  const urlMatch = (msg.text || '').match(/(?:https?:\/\/[^\s]+)?\/video\/([a-zA-Z0-9_-]+)/);
+  if (urlMatch) {
+    const videoId = urlMatch[1];
+    let found = allVideos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
+
+    // Extract any personal note prepended or appended
+    let note = msg.text
+      .replace(/https?:\/\/[^\s]*\/video\/[a-zA-Z0-9_-]+/gi, '')
+      .replace(/🎥\s*(?:Check out this video by|Video by)[^\n]*\n?/gi, '')
+      .trim();
+
+    if (!found) {
+      // Extract creator username and caption from message text if available (like in user screenshot)
+      const creatorMatch = msg.text.match(/by\s+@([a-zA-Z0-9_.-]+):?\s*"([^"]*)"/i);
+      const extractedUsername = creatorMatch ? creatorMatch[1] : 'creator';
+      const extractedCaption = creatorMatch ? creatorMatch[2] : 'Shared video';
+
+      found = {
+        id: videoId,
+        creatorId: videoId,
+        creator: {
+          id: videoId,
+          username: extractedUsername,
+          displayName: extractedUsername,
+          email: '',
+          avatar: '',
+          bio: '',
+          followingCount: 0,
+          followersCount: 0,
+          likesCount: '0',
+          isPrivate: false,
+          role: 'creator',
+        },
+        caption: extractedCaption,
+        hashtags: ['#viral', '#fyp'],
+        mediaUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+        thumbnailUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+        likesCount: 1,
+        commentsCount: 0,
+        sharesCount: 1,
+        createdAt: new Date().toISOString(),
+      };
+    }
+
+    return { isVideo: true, video: found, note };
+  }
+
+  return { isVideo: false };
+};
+
 export const MessagesView: React.FC = () => {
   const {
     currentUser,
     users,
+    videos,
     conversations,
     activeConversationId,
     openConversation,
@@ -551,6 +624,7 @@ export const MessagesView: React.FC = () => {
 
                 return visibleMessages.map(msg => {
                   const isMe = currentUser ? msg.senderId === currentUser.id : msg.isMine;
+                  const videoData = resolveSharedVideo(msg, videos);
 
                   return (
                     <div
@@ -559,7 +633,11 @@ export const MessagesView: React.FC = () => {
                     >
                       {/* Bubble */}
                       <div
-                        className={`max-w-[85%] sm:max-w-md px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-medium leading-relaxed shadow-md ${
+                        className={`${
+                          videoData.isVideo
+                            ? 'w-72 sm:w-80 max-w-[90vw] p-2 sm:p-2.5 rounded-2xl shadow-xl'
+                            : 'max-w-[85%] sm:max-w-md px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-medium leading-relaxed shadow-md'
+                        } ${
                           isMe
                             ? 'bg-[#ff007a] text-white rounded-br-xs'
                             : 'bg-[#2a2a38] text-neutral-100 rounded-bl-xs'
@@ -582,7 +660,15 @@ export const MessagesView: React.FC = () => {
                           </div>
                         )}
 
-                        <div>{msg.text}</div>
+                        {videoData.isVideo && videoData.video ? (
+                          <MessageVideoCard
+                            video={videoData.video}
+                            note={videoData.note}
+                            isMe={isMe}
+                          />
+                        ) : (
+                          <div>{msg.text}</div>
+                        )}
                       </div>
 
                       {/* Timestamp, Status & Action Buttons (Reply / Delete on every message) */}

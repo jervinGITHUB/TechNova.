@@ -80,6 +80,8 @@ export interface Message {
   status: 'sent' | 'delivered' | 'read';
   replyTo?: MessageReplyInfo;
   deletedForUserIds?: string[];
+  sharedVideo?: Video;
+  sharedVideoId?: string;
 }
 
 export interface Conversation {
