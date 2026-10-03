@@ -3,7 +3,8 @@ import { useApp } from '../../context/AppContext';
 import { Conversation, User, MessageReplyInfo, Message, Video } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { MessageVideoCard } from './MessageVideoCard';
-import { toUuid } from '../../lib/supabase';
+import { toUuid, isSameUser } from '../../lib/supabase';
+import { storage } from '../../services/storage';
 import {
   Search,
   Send,
@@ -121,10 +122,22 @@ export const MessagesView: React.FC = () => {
   const accountConversations = conversations.filter(conv => {
     if (!currentUser) return false;
     const isPart = conv.participantIds && conv.participantIds.length > 0
-      ? conv.participantIds.includes(currentUser.id)
-      : conv.participant && conv.participant.id !== currentUser.id;
+      ? conv.participantIds.some(id => isSameUser(id, currentUser.id))
+      : conv.participant && !isSameUser(conv.participant.id, currentUser.id);
     if (!isPart) return false;
-    if (conv.deletedForUserIds && conv.deletedForUserIds.includes(currentUser.id)) {
+
+    // Check persistent deleted list for this user (both raw ID and UUID format)
+    const deletedConvKey = `deleted_convs_${currentUser.id}`;
+    const deletedConvKeyUuid = `deleted_convs_${toUuid(currentUser.id)}`;
+    const deletedList = [
+      ...storage.get<string[]>(deletedConvKey, []),
+      ...storage.get<string[]>(deletedConvKeyUuid, []),
+    ];
+    if (deletedList.includes(conv.id) || deletedList.includes(toUuid(conv.id))) {
+      return false;
+    }
+
+    if (conv.deletedForUserIds && conv.deletedForUserIds.some(id => isSameUser(id, currentUser.id))) {
       return false;
     }
     return true;
