@@ -37,7 +37,6 @@ import {
   signUpWithEmail,
   signOutSupabase,
   toUuid,
-  isSameUser,
   recordDeletedUserId,
   isUserIdDeleted,
 } from '../lib/supabase';
@@ -55,7 +54,7 @@ export const markNotificationIdsReadInStorage = (ids: string[]) => {
 };
 
 // Ensure any legacy cached sample data in browser localStorage is wiped on boot
-const EMPTY_RESET_KEY = 'viralhub_empty_reset_v10';
+const EMPTY_RESET_KEY = 'viralhub_empty_reset_v9';
 if (!storage.get<boolean>(EMPTY_RESET_KEY, false)) {
   [
     'currentUser',
@@ -69,9 +68,6 @@ if (!storage.get<boolean>(EMPTY_RESET_KEY, false)) {
     'reports',
     'livestream',
     'video_comments_v2',
-    'saved_accounts_v2',
-    'user_likes_map',
-    'read_notification_ids_v1',
   ].forEach(k => storage.remove(k));
   storage.set(EMPTY_RESET_KEY, true);
 }
@@ -112,7 +108,7 @@ interface AppContextType {
     password?: string
   ) => Promise<{ success: boolean; message?: string; needsEmailConfirmation?: boolean; email?: string }>;
   loginWithGoogle: () => Promise<{ success: boolean; message?: string }>;
-  logout: (saveToDevice?: boolean) => void;
+  logout: () => void;
   quickLoginAs: (userId: string) => void;
 
   // Navigation
@@ -418,12 +414,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Saved accounts list for switching accounts on this device
   const [savedAccounts, setSavedAccounts] = useState<User[]>(() => {
-    const rawSaved = storage.get<User[]>('saved_accounts_v2', []);
-    const saved = rawSaved.filter(a => a && a.id && !isUserIdDeleted(a.id, a.email));
+    const saved = storage.get<User[]>('saved_accounts_v2', []);
     const current = storage.get<User | null>('currentUser', null);
-    if (current && current.id && (current.username || current.displayName) && !isUserIdDeleted(current.id, current.email)) {
+    if (current && current.id && (current.username || current.displayName)) {
       const exists = saved.some(
-        s => isSameUser(s.id, current.id) || (s.email && current.email && s.email.toLowerCase() === current.email.toLowerCase())
+        s => s.id === current.id || (s.email && current.email && s.email.toLowerCase() === current.email.toLowerCase())
       );
       if (!exists) {
         const init = [current, ...saved];
@@ -435,10 +430,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   const recordSavedAccount = (acc: User) => {
-    if (!acc || !acc.id || isUserIdDeleted(acc.id, acc.email)) return;
     setSavedAccounts(prev => {
       const filtered = prev.filter(
-        a => !isSameUser(a.id, acc.id) && (!acc.email || !a.email || a.email.toLowerCase() !== acc.email.toLowerCase())
+        a => a.id !== acc.id && (!acc.email || !a.email || a.email.toLowerCase() !== acc.email.toLowerCase())
       );
       const next = [acc, ...filtered].slice(0, 5); // Device limit of 5 logged-in accounts
       storage.set('saved_accounts_v2', next);
@@ -448,7 +442,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const removeSavedAccount = (userId: string) => {
     setSavedAccounts(prev => {
-      const next = prev.filter(a => !isSameUser(a.id, userId));
+      const next = prev.filter(a => a.id !== userId);
       storage.set('saved_accounts_v2', next);
       return next;
     });
@@ -588,60 +582,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         convsPromise,
       ]);
 
-      // 1. Synchronize Users
-      if (remoteUsers !== null) {
-        if (remoteUsers.length === 0) {
-          // DATABASE WAS EMPTIED! Reset all user-related state on this device
-          setUsers([]);
-          storage.set('users', []);
-          setSavedAccounts([]);
-          storage.set('saved_accounts_v2', []);
-          setVideos([]);
-          storage.set('videos', []);
-          setFollowRelations([]);
-          storage.set('follow_relations_v2', []);
-          setFollowRequests([]);
-          storage.set('follow_requests_v2', []);
-          setNotifications([]);
-          storage.set('notifications', []);
-          setConversations([]);
-          storage.set('conversations', []);
-
-          if (currentUser) {
-            console.warn('Database was cleared. Logging out current session...');
-            logout(false);
+      if (remoteUsers && remoteUsers.length > 0) {
+        // 1. Check if the current client user was deleted by Admin from Supabase!
+        if (currentUser && !isAdmin) {
+          const isDeleted = isUserIdDeleted(currentUser.id, currentUser.email);
+          const stillInDb = remoteUsers.some(
+            u =>
+              u.id === currentUser.id ||
+              toUuid(u.id) === toUuid(currentUser.id) ||
+              (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+          );
+          if (isDeleted || !stillInDb) {
+            console.warn('Current account was deleted by admin. Logging out session...');
+            logout();
+            return;
           }
-        } else {
-          // Database has users:
-          // 1. Check if currentUser still exists in remoteUsers
-          if (currentUser && !isAdmin) {
-            const isDeleted = isUserIdDeleted(currentUser.id, currentUser.email);
-            const stillInDb = remoteUsers.some(
-              u =>
-                isSameUser(u.id, currentUser.id) ||
-                (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+        }
+
+        // 2. Clean up savedAccounts on device if any account was deleted
+        setSavedAccounts(prevAccounts => {
+          const filtered = prevAccounts.filter(a => {
+            if (isUserIdDeleted(a.id, a.email)) return false;
+            return remoteUsers.some(
+              ru =>
+                ru.id === a.id ||
+                toUuid(ru.id) === toUuid(a.id) ||
+                (a.email && ru.email && a.email.toLowerCase() === ru.email.toLowerCase())
             );
-            if (isDeleted || !stillInDb) {
-              console.warn('Current account was deleted from database. Logging out session...');
-              logout(false);
-            }
-          }
-
-          // 2. Clean up savedAccounts to ONLY retain accounts currently existing in remoteUsers
-          setSavedAccounts(prevAccounts => {
-            const filtered = prevAccounts.filter(a => {
-              if (isUserIdDeleted(a.id, a.email)) return false;
-              return remoteUsers.some(
-                ru =>
-                  isSameUser(ru.id, a.id) ||
-                  (a.email && ru.email && a.email.toLowerCase() === ru.email.toLowerCase())
-              );
-            });
-            storage.set('saved_accounts_v2', filtered);
-            return filtered;
           });
+          if (filtered.length !== prevAccounts.length) {
+            storage.set('saved_accounts_v2', filtered);
+          }
+          return filtered;
+        });
 
-          // 3. Set users to remoteUsers (authoritative, deduplicated, excluding any deleted users)
+        // 3. Build active users list, ensuring deleted accounts are never revived
+        setUsers(prev => {
           const userMap = new Map<string, User>();
           const emailMap = new Map<string, string>(); // email -> id
 
@@ -660,129 +636,151 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (emailKey) emailMap.set(emailKey, u.id);
           }
 
+          // Retain only valid non-deleted local accounts
+          for (const u of prev) {
+            if (isUserIdDeleted(u.id, u.email)) continue;
+            const emailKey = u.email ? u.email.trim().toLowerCase() : null;
+            if (emailKey && emailMap.has(emailKey)) continue;
+            if (!userMap.has(u.id)) {
+              userMap.set(u.id, u);
+              if (emailKey) emailMap.set(emailKey, u.id);
+            }
+          }
+
           const nextUsers = Array.from(userMap.values());
-          setUsers(nextUsers);
           storage.set('users', nextUsers);
-        }
+          return nextUsers;
+        });
       }
 
-      // 2. Synchronize Videos (authoritative: Supabase is single source of truth!)
       if (remoteVideos !== null) {
-        if (remoteVideos.length === 0) {
-          setVideos([]);
-          storage.set('videos', []);
-        } else {
-          // Exclude any videos from deleted creators
-          const activeVideos = remoteVideos.filter(v => {
-            const cId = v.creatorId || v.creator?.id;
-            const cEmail = v.creator?.email;
-            return !isUserIdDeleted(cId, cEmail);
+        const storedAppeals = storage.get<Record<string, any>>('video_appeals_v2', {});
+        const patchedRemote = remoteVideos.map(v => {
+          const appeal = storedAppeals[v.id] || storedAppeals[toUuid(v.id)];
+          if (appeal) {
+            return {
+              ...v,
+              appealStatus: appeal.status || v.appealStatus,
+              appealReason: appeal.reason || v.appealReason,
+              status: appeal.status === 'approved' ? 'approved' : v.status,
+            };
+          }
+          return v;
+        });
+
+        setVideos(prev => {
+          const localAppealMap = new Map<string, typeof prev[0]>();
+          prev.forEach(p => {
+            if (p.appealStatus && p.appealStatus !== 'none') {
+              localAppealMap.set(p.id, p);
+              localAppealMap.set(toUuid(p.id), p);
+            }
           });
-          const storedAppeals = storage.get<Record<string, any>>('video_appeals_v2', {});
-          const patchedRemote = activeVideos.map(v => {
-            const appeal = storedAppeals[v.id] || storedAppeals[toUuid(v.id)];
-            if (appeal) {
+
+          const enhanced = patchedRemote.map(r => {
+            const local = localAppealMap.get(r.id) || localAppealMap.get(toUuid(r.id));
+            if (local && (!r.appealStatus || r.appealStatus === 'none')) {
               return {
-                ...v,
-                appealStatus: appeal.status || v.appealStatus,
-                appealReason: appeal.reason || v.appealReason,
-                status: appeal.status === 'approved' ? 'approved' : v.status,
+                ...r,
+                appealStatus: local.appealStatus,
+                appealReason: local.appealReason,
               };
             }
-            return v;
+            return r;
           });
 
-          const merged = deduplicateVideos(patchedRemote);
-          setVideos(merged);
+          const merged = deduplicateVideos([...enhanced, ...prev]);
           storage.set('videos', merged);
-        }
+          return merged;
+        });
       }
 
-      // 3. Sync Follow relationships across devices
-      if (remoteFollows !== null) {
-        setFollowRelations(remoteFollows);
-        storage.set('follow_relations_v2', remoteFollows);
+      // Sync Follow relationships across devices
+      if (remoteFollows && remoteFollows.length > 0) {
+        setFollowRelations(prev => {
+          const map = new Map<string, { followerId: string; followingId: string }>();
+          prev.forEach(f => map.set(`${f.followerId}_${f.followingId}`, f));
+          remoteFollows.forEach(f => map.set(`${f.followerId}_${f.followingId}`, f));
+          const merged = Array.from(map.values());
+          storage.set('follow_relations_v2', merged);
+          return merged;
+        });
       }
 
-      // 4. Sync Conversations and Messages across devices
-      if (remoteConvs !== null) {
-        if (remoteConvs.length === 0) {
-          setConversations([]);
-          storage.set('conversations', []);
-        } else if (currentUser) {
-          setConversations(prev => {
-            const convMap = new Map<string, Conversation>();
-            prev.forEach(c => convMap.set(c.id, c));
+      // Sync Conversations and Messages across devices
+      if (remoteConvs && remoteConvs.length > 0 && currentUser) {
+        setConversations(prev => {
+          const convMap = new Map<string, Conversation>();
+          prev.forEach(c => convMap.set(c.id, c));
 
-            for (const rc of remoteConvs) {
-              const partnerId = (rc.userAId === currentUser.id || toUuid(rc.userAId) === toUuid(currentUser.id))
-                ? rc.userBId
-                : rc.userAId;
+          for (const rc of remoteConvs) {
+            const partnerId = (rc.userAId === currentUser.id || toUuid(rc.userAId) === toUuid(currentUser.id))
+              ? rc.userBId
+              : rc.userAId;
 
-              const existingConv = convMap.get(rc.id);
-              const partnerUser = users.find(u => u.id === partnerId || toUuid(u.id) === toUuid(partnerId)) || existingConv?.participant || {
-                id: partnerId,
-                username: 'user',
-                displayName: 'User',
-                email: '',
-                avatar: '',
-                bio: '',
-                followingCount: 0,
-                followersCount: 0,
-                likesCount: '0',
-                isPrivate: false,
-                role: 'creator' as const,
-              };
+            const existingConv = convMap.get(rc.id);
+            const partnerUser = users.find(u => u.id === partnerId || toUuid(u.id) === toUuid(partnerId)) || existingConv?.participant || {
+              id: partnerId,
+              username: 'user',
+              displayName: 'User',
+              email: '',
+              avatar: '',
+              bio: '',
+              followingCount: 0,
+              followersCount: 0,
+              likesCount: '0',
+              isPrivate: false,
+              role: 'creator' as const,
+            };
 
-              const rawMessages = rc.rawMessages || [];
-              const parsedMessages: Message[] = rawMessages.map((m: any) => {
-                const isMine = m.SenderUserID === currentUser.id || toUuid(m.SenderUserID) === toUuid(currentUser.id);
-                let msgContent = m.MessageContent || '';
-                let sharedVideoId: string | undefined = undefined;
+            const rawMessages = rc.rawMessages || [];
+            const parsedMessages: Message[] = rawMessages.map((m: any) => {
+              const isMine = m.SenderUserID === currentUser.id || toUuid(m.SenderUserID) === toUuid(currentUser.id);
+              let msgContent = m.MessageContent || '';
+              let sharedVideoId: string | undefined = undefined;
 
-                if (msgContent.startsWith('[VIDEO_SHARE:')) {
-                  const closeIdx = msgContent.indexOf(']');
-                  if (closeIdx > 0) {
-                    sharedVideoId = msgContent.substring(13, closeIdx);
-                    msgContent = msgContent.substring(closeIdx + 1).trim();
-                  }
+              if (msgContent.startsWith('[VIDEO_SHARE:')) {
+                const closeIdx = msgContent.indexOf(']');
+                if (closeIdx > 0) {
+                  sharedVideoId = msgContent.substring(13, closeIdx);
+                  msgContent = msgContent.substring(closeIdx + 1).trim();
                 }
+              }
 
-                const matchedSharedVideo = sharedVideoId ? videos.find(v => v.id === sharedVideoId) : undefined;
+              const matchedSharedVideo = sharedVideoId ? videos.find(v => v.id === sharedVideoId) : undefined;
 
-                return {
-                  id: m.MessageID || `msg_${Date.now()}`,
-                  conversationId: rc.id,
-                  senderId: m.SenderUserID,
-                  text: msgContent,
-                  timestamp: m.SentAt ? new Date(m.SentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today',
-                  isMine,
-                  status: 'read' as const,
-                  sharedVideo: matchedSharedVideo,
-                  sharedVideoId,
-                };
-              });
-
-              const lastM = parsedMessages[parsedMessages.length - 1];
-              const newConv: Conversation = {
-                id: rc.id,
-                participantIds: [currentUser.id, partnerId],
-                participant: partnerUser,
-                lastMessage: lastM ? lastM.text : (existingConv?.lastMessage || 'Started conversation'),
-                lastMessageTime: lastM ? lastM.timestamp : (existingConv?.lastMessageTime || 'Recently'),
-                unreadCount: existingConv ? existingConv.unreadCount : 0,
-                unreadCounts: existingConv ? existingConv.unreadCounts : {},
-                messages: parsedMessages.length > 0 ? parsedMessages : (existingConv?.messages || []),
-                isOnline: true,
+              return {
+                id: m.MessageID || `msg_${Date.now()}`,
+                conversationId: rc.id,
+                senderId: m.SenderUserID,
+                text: msgContent,
+                timestamp: m.SentAt ? new Date(m.SentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today',
+                isMine,
+                status: 'read' as const,
+                sharedVideo: matchedSharedVideo,
+                sharedVideoId,
               };
-              convMap.set(rc.id, newConv);
-            }
+            });
 
-            const merged = Array.from(convMap.values());
-            storage.set('conversations', merged);
-            return merged;
-          });
-        }
+            const lastM = parsedMessages[parsedMessages.length - 1];
+            const newConv: Conversation = {
+              id: rc.id,
+              participantIds: [currentUser.id, partnerId],
+              participant: partnerUser,
+              lastMessage: lastM ? lastM.text : (existingConv?.lastMessage || 'Started conversation'),
+              lastMessageTime: lastM ? lastM.timestamp : (existingConv?.lastMessageTime || 'Recently'),
+              unreadCount: existingConv ? existingConv.unreadCount : 0,
+              unreadCounts: existingConv ? existingConv.unreadCounts : {},
+              messages: parsedMessages.length > 0 ? parsedMessages : (existingConv?.messages || []),
+              isOnline: true,
+            };
+            convMap.set(rc.id, newConv);
+          }
+
+          const merged = Array.from(convMap.values());
+          storage.set('conversations', merged);
+          return merged;
+        });
       }
 
       try {
@@ -801,90 +799,126 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // audio sync fallback
       }
 
-      if (remoteAdmins !== null) {
+      if (remoteAdmins && remoteAdmins.length > 0) {
         setAdmins(remoteAdmins);
       }
 
-      if (remoteReports !== null) {
-        setReports(remoteReports);
-        storage.set('reports', remoteReports);
+      if (remoteReports && remoteReports.length > 0) {
+        setReports(prev => {
+          const map = new Map<string, ReportItem>();
+          prev.forEach(r => map.set(r.id, r));
+          remoteReports.forEach(r => {
+            const existingKey = Array.from(map.keys()).find(
+              k => k === r.id || toUuid(k) === toUuid(r.id)
+            );
+            if (existingKey) {
+              const existing = map.get(existingKey)!;
+              map.set(existingKey, {
+                ...existing,
+                status: r.status,
+                targetName: existing.targetName || r.targetName,
+                targetThumbnail: existing.targetThumbnail || r.targetThumbnail,
+                targetSubtitle: existing.targetSubtitle || r.targetSubtitle,
+              });
+            } else {
+              map.set(r.id, r);
+            }
+          });
+          const merged = Array.from(map.values());
+          storage.set('reports', merged);
+          return merged;
+        });
       }
 
-      // 5. Synchronize Notifications
-      if (remoteNotifications !== null) {
-        if (remoteNotifications.length === 0) {
-          setNotifications([]);
-          storage.set('notifications', []);
-          setFollowRequests([]);
-          storage.set('follow_requests_v2', []);
-        } else {
-          const readIds = getReadNotificationIds();
+      if (remoteNotifications && remoteNotifications.length > 0) {
+        const readIds = getReadNotificationIds();
 
-          // Check for new notifications to trigger in-app popup across devices!
-          if (currentUser) {
-            const userRecip = remoteNotifications.filter(n => {
-              const isForMe =
-                n.recipientId === currentUser.id ||
-                toUuid(n.recipientId) === toUuid(currentUser.id) ||
-                (currentUser.email && n.recipientEmail && currentUser.email.toLowerCase() === n.recipientEmail.toLowerCase());
-              const notFromMe = n.actor.id !== currentUser.id && toUuid(n.actor.id) !== toUuid(currentUser.id);
-              return isForMe && notFromMe && n.isUnread;
-            });
+        // Check for new notifications to trigger in-app popup across devices!
+        if (currentUser) {
+          const userRecip = remoteNotifications.filter(n => {
+            const isForMe =
+              n.recipientId === currentUser.id ||
+              toUuid(n.recipientId) === toUuid(currentUser.id) ||
+              (currentUser.email && n.recipientEmail && currentUser.email.toLowerCase() === n.recipientEmail.toLowerCase());
+            const notFromMe = n.actor.id !== currentUser.id && toUuid(n.actor.id) !== toUuid(currentUser.id);
+            return isForMe && notFromMe && n.isUnread;
+          });
 
-            // If initial sync has been performed, any new unread notification that we haven't seen pops up!
-            if (initialNotifSyncDoneRef.current) {
-              for (const n of userRecip) {
-                if (!knownNotificationIdsRef.current.has(n.id)) {
-                  setActiveNotificationPopup(n);
-                  break;
-                }
+          // If initial sync has been performed, any new unread notification that we haven't seen pops up!
+          if (initialNotifSyncDoneRef.current) {
+            for (const n of userRecip) {
+              if (!knownNotificationIdsRef.current.has(n.id)) {
+                setActiveNotificationPopup(n);
+                break;
               }
             }
-
-            // Update known set
-            remoteNotifications.forEach(n => knownNotificationIdsRef.current.add(n.id));
-            initialNotifSyncDoneRef.current = true;
-
-            // Also populate followRequests from incoming follow_request notifications
-            const incomingFollowReqs = remoteNotifications.filter(
-              n =>
-                n.type === 'follow_request' &&
-                (isSameUser(n.recipientId, currentUser.id) || (currentUser.email && n.recipientEmail && currentUser.email.toLowerCase() === n.recipientEmail.toLowerCase())) &&
-                n.requestId &&
-                n.status !== 'accepted' &&
-                n.status !== 'confirmed' &&
-                n.status !== 'declined' &&
-                !n.targetText?.includes('friends') &&
-                !n.targetText?.includes('is now following you')
-            );
-
-            setFollowRequests(incomingFollowReqs.map(n => ({
-              id: n.requestId!,
-              fromUserId: n.actor.id,
-              toUserId: currentUser.id,
-              timestamp: n.createdAt || n.timestamp || new Date().toISOString(),
-            })));
-            storage.set('follow_requests_v2', incomingFollowReqs);
           }
 
-          const mappedNotifs = remoteNotifications.map(n => {
-            const isReadLocally = readIds.has(n.id) || (n.id ? readIds.has(toUuid(n.id)) : false);
-            return {
-              ...n,
-              isUnread: isReadLocally ? false : n.isUnread,
-            };
-          });
+          // Update known set
+          remoteNotifications.forEach(n => knownNotificationIdsRef.current.add(n.id));
+          initialNotifSyncDoneRef.current = true;
 
-          // Ensure notifications are strictly sorted newest on top
-          const sortedNotifs = [...mappedNotifs].sort((a, b) => {
-            const timeA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
-            const timeB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
-            return timeB - timeA;
-          });
+          // Also populate followRequests from incoming follow_request notifications
+          const incomingFollowReqs = remoteNotifications.filter(
+            n =>
+              n.type === 'follow_request' &&
+              (n.recipientId === currentUser.id || toUuid(n.recipientId) === toUuid(currentUser.id)) &&
+              n.requestId &&
+              n.status !== 'accepted' &&
+              n.status !== 'declined'
+          );
 
-          setNotifications(sortedNotifs);
-          storage.set('notifications', sortedNotifs);
+          if (incomingFollowReqs.length > 0) {
+            setFollowRequests(prev => {
+              const reqMap = new Map<string, FollowRequest>();
+              prev.forEach(r => reqMap.set(r.id, r));
+              incomingFollowReqs.forEach(n => {
+                if (n.requestId && !reqMap.has(n.requestId)) {
+                  reqMap.set(n.requestId, {
+                    id: n.requestId,
+                    fromUserId: n.actor.id,
+                    toUserId: currentUser.id,
+                    timestamp: n.createdAt || n.timestamp || new Date().toISOString(),
+                  });
+                }
+              });
+              const merged = Array.from(reqMap.values());
+              storage.set('follow_requests_v2', merged);
+              return merged;
+            });
+          }
         }
+
+        setNotifications(prev => {
+          const map = new Map<string, NotificationItem>();
+          prev.forEach(n => map.set(n.id, n));
+          remoteNotifications.forEach(n => {
+            const existingKey = Array.from(map.keys()).find(
+              k => k === n.id || toUuid(k) === toUuid(n.id)
+            );
+            const isReadLocally =
+              readIds.has(n.id) ||
+              (n.id ? readIds.has(toUuid(n.id)) : false) ||
+              (existingKey && map.get(existingKey)?.isUnread === false);
+
+            if (existingKey) {
+              const existing = map.get(existingKey)!;
+              map.set(existingKey, {
+                ...n,
+                ...existing,
+                isUnread: isReadLocally ? false : n.isUnread,
+              });
+            } else {
+              map.set(n.id, {
+                ...n,
+                isUnread: isReadLocally ? false : n.isUnread,
+              });
+            }
+          });
+          const merged = Array.from(map.values());
+          storage.set('notifications', merged);
+          return merged;
+        });
       }
     } catch (err) {
       console.warn('Initial Supabase sync fallback:', err);
@@ -1452,23 +1486,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const logout = async (saveToDevice = true) => {
-    // Only save to device if explicitly requested AND user is not recorded as deleted
-    if (saveToDevice && currentUser) {
-      if (!isUserIdDeleted(currentUser.id, currentUser.email)) {
-        recordSavedAccount(currentUser);
-      }
-    } else if (!saveToDevice && currentUser) {
-      removeSavedAccount(currentUser.id);
-      if (currentUser.email) {
-        setSavedAccounts(prev => {
-          const next = prev.filter(
-            a => !isSameUser(a.id, currentUser.id) && (!a.email || a.email.toLowerCase() !== currentUser.email.toLowerCase())
-          );
-          storage.set('saved_accounts_v2', next);
-          return next;
-        });
-      }
+  const logout = async () => {
+    // Ensure current active account is saved in the device's logged-in accounts list
+    if (currentUser) {
+      recordSavedAccount(currentUser);
     }
 
     try {
@@ -1477,7 +1498,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // ignore
     }
 
-    // Clear active session
+    // Retain logged-in accounts on device so the user can easily select an account on the login page!
     setCurrentUser(null);
     storage.remove('currentUser');
     setActiveConversationId(null);
@@ -1581,17 +1602,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const isTargetFollowingMe = (targetUserId: string): boolean => {
     if (!currentUser) return false;
     return followRelations.some(
-      f => isSameUser(f.followerId, targetUserId) && isSameUser(f.followingId, currentUser.id)
+      f => f.followerId === targetUserId && f.followingId === currentUser.id
     );
   };
 
   const getFollowStatus = (targetUserId: string): FollowStatus => {
-    if (!currentUser || isSameUser(currentUser.id, targetUserId)) return 'none';
+    if (!currentUser || currentUser.id === targetUserId) return 'none';
     const currFollowsTarget = followRelations.some(
-      f => isSameUser(f.followerId, currentUser.id) && isSameUser(f.followingId, targetUserId)
+      f => f.followerId === currentUser.id && f.followingId === targetUserId
     );
     const targetFollowsCurr = followRelations.some(
-      f => isSameUser(f.followerId, targetUserId) && isSameUser(f.followingId, currentUser.id)
+      f => f.followerId === targetUserId && f.followingId === currentUser.id
     );
 
     if (currFollowsTarget && targetFollowsCurr) {
@@ -1601,7 +1622,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return 'following';
     }
     const hasPendingRequest = followRequests.some(
-      r => isSameUser(r.fromUserId, currentUser.id) && isSameUser(r.toUserId, targetUserId)
+      r => r.fromUserId === currentUser.id && r.toUserId === targetUserId
     );
     if (hasPendingRequest) {
       return 'requested';
@@ -1610,8 +1631,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const toggleFollowUser = (userId: string) => {
-    if (!currentUser || isSameUser(currentUser.id, userId)) return;
-    const targetUser = users.find(u => isSameUser(u.id, userId));
+    if (!currentUser || currentUser.id === userId) return;
+    const targetUser = users.find(u => u.id === userId);
     if (!targetUser) return;
 
     const currentStatus = getFollowStatus(userId);
@@ -1619,15 +1640,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Case 1: Already Friends or Following -> Unfollow
     if (currentStatus === 'friends' || currentStatus === 'following') {
       setFollowRelations(prev =>
-        prev.filter(f => !(isSameUser(f.followerId, currentUser.id) && isSameUser(f.followingId, userId)))
+        prev.filter(f => !(f.followerId === currentUser.id && f.followingId === userId))
       );
 
       setUsers(prev =>
         prev.map(u => {
-          if (isSameUser(u.id, userId)) {
+          if (u.id === userId) {
             return { ...u, followersCount: Math.max(0, u.followersCount - 1) };
           }
-          if (isSameUser(u.id, currentUser.id)) {
+          if (u.id === currentUser.id) {
             return { ...u, followingCount: Math.max(0, u.followingCount - 1) };
           }
           return u;
@@ -1644,11 +1665,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Case 2: Request is pending -> Cancel request
     if (currentStatus === 'requested') {
       setFollowRequests(prev =>
-        prev.filter(r => !(isSameUser(r.fromUserId, currentUser.id) && isSameUser(r.toUserId, userId)))
+        prev.filter(r => !(r.fromUserId === currentUser.id && r.toUserId === userId))
       );
       setNotifications(prev =>
         prev.filter(
-          n => !(isSameUser(n.recipientId, userId) && isSameUser(n.actor.id, currentUser.id) && n.type === 'follow_request')
+          n => !(n.recipientId === userId && n.actor.id === currentUser.id && n.type === 'follow_request')
         )
       );
       return;
@@ -1663,22 +1684,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (targetFollowsMe || !targetUser.isPrivate) {
       // Follow immediately!
       setFollowRelations(prev => {
-        const exists = prev.some(f => isSameUser(f.followerId, currentUser.id) && isSameUser(f.followingId, targetUser.id));
+        const exists = prev.some(f => f.followerId === currentUser.id && f.followingId === targetUser.id);
         if (exists) return prev;
         return [...prev, { followerId: currentUser.id, followingId: targetUser.id }];
       });
 
-      // Clear any pending follow requests between these users
+      // Clear any pending follow requests from this user
       setFollowRequests(prev =>
-        prev.filter(r => !(isSameUser(r.fromUserId, userId) && isSameUser(r.toUserId, currentUser.id)) && !(isSameUser(r.fromUserId, currentUser.id) && isSameUser(r.toUserId, userId)))
+        prev.filter(r => !(r.fromUserId === userId && r.toUserId === currentUser.id) && !(r.fromUserId === currentUser.id && r.toUserId === userId))
       );
 
       setUsers(prev =>
         prev.map(u => {
-          if (isSameUser(u.id, targetUser.id)) {
+          if (u.id === targetUser.id) {
             return { ...u, followersCount: u.followersCount + 1 };
           }
-          if (isSameUser(u.id, currentUser.id)) {
+          if (u.id === currentUser.id) {
             return { ...u, followingCount: u.followingCount + 1 };
           }
           return u;
@@ -1789,10 +1810,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // Mutual follows (Friends): Requester follows currentUser AND currentUser follows requester back
         setFollowRelations(prev => {
           const next = [...prev];
-          if (!next.some(f => isSameUser(f.followerId, requesterId) && isSameUser(f.followingId, currentUser.id))) {
+          if (!next.some(f => f.followerId === requesterId && f.followingId === currentUser.id)) {
             next.push({ followerId: requesterId, followingId: currentUser.id });
           }
-          if (!next.some(f => isSameUser(f.followerId, currentUser.id) && isSameUser(f.followingId, requesterId))) {
+          if (!next.some(f => f.followerId === currentUser.id && f.followingId === requesterId)) {
             next.push({ followerId: currentUser.id, followingId: requesterId });
           }
           return next;
@@ -1834,7 +1855,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         // When currentUser visits requester's profile, currentUser will see "Follow Back"!
         setFollowRelations(prev => {
           const next = [...prev];
-          if (!next.some(f => isSameUser(f.followerId, requesterId) && isSameUser(f.followingId, currentUser.id))) {
+          if (!next.some(f => f.followerId === requesterId && f.followingId === currentUser.id)) {
             next.push({ followerId: requesterId, followingId: currentUser.id });
           }
           return next;
@@ -1874,7 +1895,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Remove request from pending follow requests thoroughly
     setFollowRequests(prev =>
-      prev.filter(r => r.id !== requestId && !(requesterId && isSameUser(r.fromUserId, requesterId) && isSameUser(r.toUserId, currentUser.id)))
+      prev.filter(r => r.id !== requestId && !(requesterId && r.fromUserId === requesterId && r.toUserId === currentUser.id))
     );
 
     // Update currentUser notification in inbox
@@ -1883,7 +1904,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (
           n.requestId === requestId ||
           n.id === requestId ||
-          (requesterId && isSameUser(n.recipientId, currentUser.id) && isSameUser(n.actor.id, requesterId) && n.type === 'follow_request')
+          (requesterId && n.recipientId === currentUser.id && n.actor.id === requesterId && n.type === 'follow_request')
         ) {
           return {
             ...n,
@@ -1903,7 +1924,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const requesterId = req?.fromUserId || matchingNotif?.actor?.id;
 
     setFollowRequests(prev =>
-      prev.filter(r => r.id !== requestId && !(requesterId && isSameUser(r.fromUserId, requesterId) && isSameUser(r.toUserId, currentUser?.id)))
+      prev.filter(r => r.id !== requestId && !(requesterId && r.fromUserId === requesterId && r.toUserId === currentUser?.id))
     );
     setNotifications(prev =>
       prev.map(n =>
@@ -1926,16 +1947,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const getUserFollowers = (userId: string): User[] => {
     const followerIds = followRelations
-      .filter(f => isSameUser(f.followingId, userId))
+      .filter(f => f.followingId === userId)
       .map(f => f.followerId);
-    return users.filter(u => followerIds.some(fid => isSameUser(fid, u.id)));
+    return users.filter(u => followerIds.includes(u.id));
   };
 
   const getUserFollowing = (userId: string): User[] => {
     const followingIds = followRelations
-      .filter(f => isSameUser(f.followerId, userId))
+      .filter(f => f.followerId === userId)
       .map(f => f.followingId);
-    return users.filter(u => followingIds.some(fid => isSameUser(fid, u.id)));
+    return users.filter(u => followingIds.includes(u.id));
   };
 
   const canMessageUser = (targetUserId: string): boolean => {
@@ -2965,71 +2986,68 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteUserAdmin = async (userId: string): Promise<boolean> => {
-    const targetUser = users.find(u => isSameUser(u.id, userId));
+    const targetUser = users.find(u => u.id === userId || toUuid(u.id) === toUuid(userId));
     const targetEmail = targetUser?.email;
 
-    // 1. Record in deleted accounts registry so all devices / tabs log them out immediately
-    recordDeletedUserId(userId, targetEmail);
-
-    // 2. Remove from local users list
+    // 1. Remove from local users list
     setUsers(prev => {
-      const next = prev.filter(u => !isSameUser(u.id, userId));
+      const next = prev.filter(u => u.id !== userId && toUuid(u.id) !== toUuid(userId));
       storage.set('users', next);
       return next;
     });
 
-    // 3. Remove from saved accounts on this device (even if logged in on this device!)
+    // 2. Remove from saved accounts on this device (even if logged in on this device!)
     removeSavedAccount(userId);
-    setSavedAccounts(prev => {
-      const next = prev.filter(
-        a => !isSameUser(a.id, userId) && (!targetEmail || !a.email || a.email.toLowerCase() !== targetEmail.toLowerCase())
-      );
-      storage.set('saved_accounts_v2', next);
-      return next;
-    });
-
-    // 4. If current active user on this device is this deleted user, log out immediately
-    if (currentUser && (isSameUser(currentUser.id, userId) || (targetEmail && currentUser.email && currentUser.email.toLowerCase() === targetEmail.toLowerCase()))) {
-      logout(false);
+    if (targetEmail) {
+      setSavedAccounts(prev => {
+        const next = prev.filter(
+          a => a.id !== userId && (!a.email || a.email.toLowerCase() !== targetEmail.toLowerCase())
+        );
+        storage.set('saved_accounts_v2', next);
+        return next;
+      });
     }
 
-    // 5. Remove all videos belonging to this user from local state and storage
+    // 3. Remove all videos belonging to this user from local state and storage
     const userVideos = videos.filter(
-      v => isSameUser(v.creatorId, userId) || isSameUser(v.creator?.id, userId)
+      v => v.creatorId === userId || toUuid(v.creatorId) === toUuid(userId) || v.creator?.id === userId || toUuid(v.creator?.id) === toUuid(userId)
     );
     setVideos(prev => {
       const next = prev.filter(
-        v => !isSameUser(v.creatorId, userId) && !isSameUser(v.creator?.id, userId)
+        v => v.creatorId !== userId && toUuid(v.creatorId) !== toUuid(userId) && v.creator?.id !== userId && toUuid(v.creator?.id) !== toUuid(userId)
       );
       storage.set('videos', next);
       return next;
     });
 
-    // 6. Remove all storage bucket files for user's videos
+    // 4. Remove all storage bucket files for user's videos
     for (const v of userVideos) {
       if (v.mediaUrl) {
         supabaseDb.deleteVideoFileFromStorage(v.mediaUrl).catch(() => {});
       }
     }
 
-    // 7. Remove follows, requests, notifications, conversations
+    // 5. Remove follows, requests, notifications, conversations
     setFollowRelations(prev =>
-      prev.filter(f => !isSameUser(f.followerId, userId) && !isSameUser(f.followingId, userId))
+      prev.filter(f => f.followerId !== userId && f.followingId !== userId && toUuid(f.followerId) !== toUuid(userId) && toUuid(f.followingId) !== toUuid(userId))
     );
     setFollowRequests(prev =>
-      prev.filter(r => !isSameUser(r.fromUserId, userId) && !isSameUser(r.toUserId, userId))
+      prev.filter(r => r.fromUserId !== userId && r.toUserId !== userId && toUuid(r.fromUserId) !== toUuid(userId) && toUuid(r.toUserId) !== toUuid(userId))
     );
     setNotifications(prev =>
-      prev.filter(n => !isSameUser(n.recipientId, userId) && !isSameUser(n.actor?.id, userId))
+      prev.filter(n => n.recipientId !== userId && n.actor?.id !== userId && toUuid(n.recipientId) !== toUuid(userId) && toUuid(n.actor?.id) !== toUuid(userId))
     );
     setConversations(prev =>
-      prev.filter(c => !c.participantIds?.some(pid => isSameUser(pid, userId)) && !isSameUser(c.participant?.id, userId))
+      prev.filter(c => !c.participantIds?.includes(userId) && c.participant?.id !== userId)
     );
 
-    // 8. Delete from Supabase Database & cascade child tables & storage bucket
-    const res = await supabaseDb.deleteUser(userId, targetEmail);
+    // 6. Record in deleted accounts registry so all devices / tabs log them out immediately
+    recordDeletedUserId(userId, targetEmail);
 
-    // 9. Broadcast account deleted event to other local tabs
+    // 7. Delete from Supabase Database & cascade child tables
+    const res = await supabaseDb.deleteUser(userId);
+
+    // 8. Broadcast account deleted event to other local tabs
     storage.set('viralhub_account_deleted_event', { userId, email: targetEmail, timestamp: Date.now() });
 
     return res;

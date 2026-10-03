@@ -5,7 +5,6 @@ import {
   supabaseDb,
   getSupabaseConfig,
   testSupabaseConnection,
-  isSameUser,
 } from '../../lib/supabase';
 import { AdminRecord, SystemStats } from '../../types';
 import {
@@ -721,7 +720,7 @@ export const AdminDashboardView: React.FC = () => {
                           <button
                             onClick={async () => {
                               const isTargetClientOnThisDevice = (savedAccounts || []).some(
-                                a => isSameUser(a.id, u.id) || (a.email && u.email && a.email.toLowerCase() === u.email.toLowerCase())
+                                a => a.id === u.id || (a.email && u.email && a.email.toLowerCase() === u.email.toLowerCase())
                               );
                               const confirmPrompt = window.confirm(
                                 `Are you sure you want to permanently delete user @${u.username} (${u.displayName})?\n\n` +
@@ -740,9 +739,9 @@ export const AdminDashboardView: React.FC = () => {
                                 await loadData();
                               }
                             }}
-                            disabled={isSameUser(u.id, currentUser?.id)}
+                            disabled={u.id === currentUser?.id}
                             className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer disabled:opacity-30"
-                            title={isSameUser(u.id, currentUser?.id) ? 'Cannot delete active Admin session' : 'Permanently Delete User'}
+                            title={u.id === currentUser?.id ? 'Cannot delete active Admin session' : 'Permanently Delete User'}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>

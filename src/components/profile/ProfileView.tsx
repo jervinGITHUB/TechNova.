@@ -26,7 +26,6 @@ import {
   Trash2,
   AlertTriangle,
 } from 'lucide-react';
-import { isSameUser } from '../../lib/supabase';
 
 export const ProfileView: React.FC = () => {
   const {
@@ -73,18 +72,18 @@ export const ProfileView: React.FC = () => {
   const [followSearchQuery, setFollowSearchQuery] = useState('');
 
   // Identify target profile: either selected user or current user
-  const isSelf = !selectedUserId || (currentUser && isSameUser(selectedUserId, currentUser.id));
+  const isSelf = !selectedUserId || (currentUser && selectedUserId === currentUser.id);
   const targetUser = isSelf
-    ? (users.find(u => isSameUser(u.id, currentUser?.id)) || currentUser || DEFAULT_USER)
-    : (users.find(u => isSameUser(u.id, selectedUserId)) || currentUser || DEFAULT_USER);
+    ? (users.find(u => u.id === currentUser?.id) || currentUser || DEFAULT_USER)
+    : (users.find(u => u.id === selectedUserId) || currentUser || DEFAULT_USER);
 
   if (!targetUser) {
     return <div className="p-8 text-neutral-400">User not found</div>;
   }
 
-  // Videos associated with this user (matched reliably by UUID or string)
+  // Videos associated with this user
   const userVideos = videos.filter(v => {
-    if (!isSameUser(v.creatorId || v.creator?.id, targetUser.id)) return false;
+    if (v.creatorId !== targetUser.id) return false;
     if (!isSelf && (v.status === 'pending' || v.status === 'rejected')) return false;
     return true;
   });
@@ -123,7 +122,7 @@ export const ProfileView: React.FC = () => {
 
   // Pending incoming request from targetUser to currentUser (if currentUser is private)
   const incomingRequest = followRequests.find(
-    r => isSameUser(r.fromUserId, targetUser.id) && isSameUser(r.toUserId, currentUser?.id)
+    r => r.fromUserId === targetUser.id && r.toUserId === currentUser?.id
   );
 
   const handleMessageUser = () => {

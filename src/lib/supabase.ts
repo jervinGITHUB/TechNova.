@@ -56,18 +56,6 @@ export const toUuid = (input?: string | null): string => {
   return `${p1}-${p2}-${p3}-${p4}-${p5}`.toLowerCase();
 };
 
-/**
- * Robust User ID comparator that safely matches IDs regardless of whether
- * one is a PostgreSQL UUID string, standard ID, or case differences.
- */
-export const isSameUser = (id1?: string | null, id2?: string | null): boolean => {
-  if (!id1 || !id2) return false;
-  const s1 = String(id1).trim();
-  const s2 = String(id2).trim();
-  if (s1.toLowerCase() === s2.toLowerCase()) return true;
-  return toUuid(s1) === toUuid(s2);
-};
-
 // =========================================================================
 // Deleted Users Registry (ensures immediate logout across all devices)
 // =========================================================================
@@ -590,25 +578,19 @@ export const supabaseDb = {
     }
   },
 
-  async deleteUser(userId: string, email?: string | null): Promise<boolean> {
+  async deleteUser(userId: string): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;
 
     try {
       const targetUuid = toUuid(userId);
-      const cleanEmail = email ? email.trim().toLowerCase() : null;
-
-      // Record in local deleted IDs cache immediately
-      recordDeletedUserId(userId, cleanEmail);
 
       // 1. Fetch user videos and delete their media files from Supabase Storage bucket
       try {
-        let videoQuery = client
+        const { data: userVideos } = await client
           .from('Video')
           .select('VideoID, VideoURL')
           .or(`UserID.eq.${targetUuid},UserID.eq.${userId}`);
-
-        const { data: userVideos } = await videoQuery;
 
         if (userVideos && userVideos.length > 0) {
           for (const uv of userVideos) {
@@ -656,13 +638,10 @@ export const supabaseDb = {
       try { await client.from('Message').delete().or(`SenderUserID.eq.${targetUuid},SenderUserID.eq.${userId}`); } catch {}
       try { await client.from('Admin').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
 
-      // 3. Delete from User table (PascalCase and snake_case) by ID and Email
-      await client.from('User').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`);
-      await client.from('users').delete().or(`id.eq.${targetUuid},id.eq.${userId}`);
-      if (cleanEmail) {
-        try { await client.from('User').delete().ilike('Email', cleanEmail); } catch {}
-        try { await client.from('users').delete().ilike('email', cleanEmail); } catch {}
-        try { await client.from('Admin').delete().ilike('Email', cleanEmail); } catch {}
+      // 3. Delete from User table (PascalCase and snake_case)
+      const res1 = await client.from('User').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`);
+      if (res1.error) {
+        await client.from('users').delete().or(`id.eq.${targetUuid},id.eq.${userId}`);
       }
       return true;
     } catch (e) {
@@ -684,32 +663,52 @@ export const supabaseDb = {
       let videoRows: any[] | null = null;
       let error: any = null;
 
-      // 1. Fetch from PascalCase 'Video' table with select('*') to safely support all schemas
-      try {
-        const res1 = await client
+      // 1. Try fetching with Status, RejectionReason, AppealStatus & AppealReason columns
+      const res1 = await client
+        .from('Video')
+        .select(`
+          VideoID,
+          UserID,
+          AudioTrackID,
+          VideoURL,
+          ThumbnailURL,
+          Caption,
+          PublishedAt,
+          ViewCount,
+          Status,
+          RejectionReason,
+          AppealStatus,
+          AppealReason
+        `)
+        .order('PublishedAt', { ascending: false });
+
+      if (!res1.error && res1.data) {
+        videoRows = res1.data;
+      } else {
+        // 2. Retry without AppealStatus / AppealReason if columns don't exist yet
+        const res2 = await client
           .from('Video')
-          .select('*')
+          .select(`
+            VideoID,
+            UserID,
+            AudioTrackID,
+            VideoURL,
+            ThumbnailURL,
+            Caption,
+            PublishedAt,
+            ViewCount,
+            Status,
+            RejectionReason
+          `)
           .order('PublishedAt', { ascending: false });
 
-        if (!res1.error && res1.data) {
-          videoRows = res1.data;
+        if (!res2.error && res2.data) {
+          videoRows = res2.data;
         } else {
-          error = res1.error;
-        }
-      } catch (err: any) {
-        error = err;
-      }
-
-      // 2. If 'Video' table failed or doesn't exist, try lowercase 'videos' table
-      if (videoRows === null) {
-        try {
-          const res2 = await client
-            .from('videos')
-            .select('*')
-            .order('created_at', { ascending: false });
-
-          if (!res2.error && res2.data) {
-            videoRows = res2.data.map((r: any) => ({
+          // 3. Try lowercase 'videos' table if PascalCase 'Video' doesn't exist
+          const res3 = await client.from('videos').select('*').order('created_at', { ascending: false });
+          if (!res3.error && res3.data) {
+            videoRows = res3.data.map((r: any) => ({
               VideoID: r.id || r.video_id,
               UserID: r.user_id || r.userId,
               VideoURL: r.video_url || r.media_url || r.url,
@@ -717,14 +716,10 @@ export const supabaseDb = {
               PublishedAt: r.created_at || r.published_at,
               ViewCount: r.views_count || r.view_count || 0,
               Status: r.status || 'approved',
-              RejectionReason: r.rejection_reason || null,
-              AppealStatus: r.appeal_status || 'none',
-              AppealReason: r.appeal_reason || null,
             }));
-            error = null;
+          } else {
+            error = res1.error || res2.error || res3.error;
           }
-        } catch {
-          // ignore
         }
       }
 
