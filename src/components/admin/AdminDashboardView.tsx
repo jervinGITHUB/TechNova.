@@ -6,9 +6,7 @@ import {
   getSupabaseConfig,
   testSupabaseConnection,
   isSameUser,
-  toUuid,
 } from '../../lib/supabase';
-import { formatRealtimeAgo } from '../../utils/time';
 import { AdminRecord, SystemStats } from '../../types';
 import {
   Shield,
@@ -52,7 +50,6 @@ export const AdminDashboardView: React.FC = () => {
     deleteUserAdmin,
     updateUserRoleAdmin,
     deleteVideoAdmin,
-    deleteCommentAdmin,
     approveVideoAdmin,
     rejectVideoAdmin,
     reviewVideoAppeal,
@@ -67,111 +64,8 @@ export const AdminDashboardView: React.FC = () => {
   } = useApp();
 
   const [activeAdminTab, setActiveAdminTab] = useState<
-    'overview' | 'users' | 'videos' | 'reports' | 'comments' | 'admins'
+    'overview' | 'users' | 'videos' | 'reports' | 'admins'
   >('overview');
-
-  const [toastMessage, setToastMessage] = useState<string>('');
-
-  // Comments Moderation state
-  const [commentSearchQuery, setCommentSearchQuery] = useState('');
-  const [commentFilterVideoId, setCommentFilterVideoId] = useState<string>('all');
-  const [commentsMap, setCommentsMap] = useState<Record<string, any[]>>(() => {
-    try {
-      const saved = localStorage.getItem('viralhub_video_comments_v2');
-      return saved ? JSON.parse(saved) : {};
-    } catch {
-      return {};
-    }
-  });
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('viralhub_video_comments_v2');
-      if (saved) {
-        setCommentsMap(JSON.parse(saved));
-      }
-    } catch {}
-  }, [activeAdminTab]);
-
-  const allComments = React.useMemo(() => {
-    const list: {
-      id: string;
-      videoId: string;
-      video?: typeof videos[0];
-      name: string;
-      avatar: string;
-      text: string;
-      timestamp?: string;
-      likesCount?: number;
-    }[] = [];
-
-    Object.entries(commentsMap).forEach(([vId, cList]) => {
-      const matchedVideo = videos.find(v => v.id === vId || toUuid(v.id) === toUuid(vId));
-      if (Array.isArray(cList)) {
-        cList.forEach((c: any) => {
-          list.push({
-            id: c.id,
-            videoId: vId,
-            video: matchedVideo,
-            name: c.name || 'User',
-            avatar: c.avatar || '',
-            text: c.text || '',
-            timestamp: c.timestamp,
-            likesCount: c.likesCount || 0,
-          });
-          if (Array.isArray(c.replies)) {
-            c.replies.forEach((r: any) => {
-              list.push({
-                id: r.id,
-                videoId: vId,
-                video: matchedVideo,
-                name: r.name || 'User',
-                avatar: r.avatar || '',
-                text: r.text || '',
-                timestamp: r.timestamp,
-                likesCount: 0,
-              });
-            });
-          }
-        });
-      }
-    });
-
-    return list.sort((a, b) => {
-      const timeA = new Date(a.timestamp || 0).getTime() || 0;
-      const timeB = new Date(b.timestamp || 0).getTime() || 0;
-      return timeB - timeA;
-    });
-  }, [commentsMap, videos]);
-
-  const filteredComments = React.useMemo(() => {
-    return allComments.filter(c => {
-      if (commentFilterVideoId !== 'all' && c.videoId !== commentFilterVideoId) {
-        return false;
-      }
-      if (commentSearchQuery.trim()) {
-        const q = commentSearchQuery.toLowerCase();
-        const textMatch = c.text.toLowerCase().includes(q);
-        const nameMatch = c.name.toLowerCase().includes(q);
-        const videoMatch = c.video?.caption?.toLowerCase().includes(q) || false;
-        return textMatch || nameMatch || videoMatch;
-      }
-      return true;
-    });
-  }, [allComments, commentFilterVideoId, commentSearchQuery]);
-
-  const handleDeleteCommentAdmin = async (videoId: string, commentId: string) => {
-    await deleteCommentAdmin(videoId, commentId);
-    setCommentsMap(prev => {
-      const updated = { ...prev };
-      if (updated[videoId]) {
-        updated[videoId] = updated[videoId].filter((c: any) => c.id !== commentId && toUuid(c.id) !== toUuid(commentId));
-      }
-      return updated;
-    });
-    setToastMessage('Comment deleted from video and database.');
-    setTimeout(() => setToastMessage(''), 3000);
-  };
 
   // Deduplicate users so that even if database had duplicate rows for an email, each unique user account displays once!
   const uniqueUsers = React.useMemo(() => {
@@ -553,14 +447,6 @@ export const AdminDashboardView: React.FC = () => {
         </div>
       </div>
 
-      {/* Toast Alert */}
-      {toastMessage && (
-        <div className="fixed top-20 right-6 z-50 bg-[#1e1e2c] border border-neutral-700 text-white text-xs px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2 animate-bounce">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-          <span>{toastMessage}</span>
-        </div>
-      )}
-
       {/* Navigation Sub-Tabs */}
       <div className="flex items-center gap-1.5 border-b border-neutral-800 pb-2 overflow-x-auto no-scrollbar">
         {[
@@ -577,11 +463,6 @@ export const AdminDashboardView: React.FC = () => {
             label: pendingReportsCount > 0 ? `Reports (${reports.length}) · ${pendingReportsCount} Pending` : `Reports (${reports.length})`,
             icon: <AlertTriangle className="w-4 h-4" />,
             highlight: pendingReportsCount > 0,
-          },
-          {
-            id: 'comments',
-            label: allComments.length > 0 ? `Comments (${allComments.length})` : 'Comments',
-            icon: <MessageSquare className="w-4 h-4" />,
           },
           { id: 'admins', label: `Admin Team (${admins.length || 1})`, icon: <Shield className="w-4 h-4" /> },
         ].map(tab => (
@@ -1069,16 +950,9 @@ export const AdminDashboardView: React.FC = () => {
                         <span className="flex items-center gap-1">
                           <Heart className="w-3.5 h-3.5 text-red-400" /> {video.likesCount}
                         </span>
-                        <button
-                          onClick={() => {
-                            setCommentFilterVideoId(video.id);
-                            setActiveAdminTab('comments');
-                          }}
-                          className="flex items-center gap-1 text-neutral-400 hover:text-cyan-400 cursor-pointer transition-colors"
-                          title="Manage comments on this video"
-                        >
+                        <span className="flex items-center gap-1">
                           <MessageSquare className="w-3.5 h-3.5 text-cyan-400" /> {video.commentsCount}
-                        </button>
+                        </span>
                         <span className="flex items-center gap-1">
                           <Eye className="w-3.5 h-3.5 text-amber-400" /> {video.viewsCount || 0}
                         </span>
@@ -1413,128 +1287,6 @@ export const AdminDashboardView: React.FC = () => {
                 Confirm Decline
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* =================================================================== */}
-      {/* TAB 4.5: COMMENTS MODERATION */}
-      {/* =================================================================== */}
-      {activeAdminTab === 'comments' && (
-        <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-5 text-left">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
-            <div>
-              <h3 className="text-base font-bold text-white font-brand flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-[#ff007a]" />
-                <span>Comments Moderation & Clean-up</span>
-              </h3>
-              <p className="text-xs text-neutral-400 mt-0.5">
-                Review and delete user comments across all videos. Deleted comments are immediately removed from feed and database.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="px-3 py-1 rounded-xl bg-neutral-800 text-xs font-semibold text-neutral-300">
-                Total Comments: <strong className="text-white">{allComments.length}</strong>
-              </span>
-            </div>
-          </div>
-
-          {/* Search & Video Filter Toolbar */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <div className="flex-1 relative">
-              <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={commentSearchQuery}
-                onChange={e => setCommentSearchQuery(e.target.value)}
-                placeholder="Search comments by text, author, or video caption..."
-                className="w-full bg-[#181824] text-xs text-white pl-10 pr-4 py-2.5 rounded-xl border border-neutral-800 focus:border-[#ff007a] outline-none"
-              />
-              {commentSearchQuery && (
-                <button
-                  onClick={() => setCommentSearchQuery('')}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white text-xs cursor-pointer"
-                >
-                  ✕
-                </button>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <select
-                value={commentFilterVideoId}
-                onChange={e => setCommentFilterVideoId(e.target.value)}
-                className="bg-[#181824] border border-neutral-800 text-xs text-neutral-200 px-3 py-2.5 rounded-xl outline-none focus:border-[#ff007a]"
-              >
-                <option value="all">All Videos ({allComments.length})</option>
-                {videos.map(v => (
-                  <option key={v.id} value={v.id}>
-                    {v.caption ? (v.caption.length > 30 ? `${v.caption.slice(0, 30)}...` : v.caption) : `Video ${v.id.slice(0, 8)}`} ({v.commentsCount || 0})
-                  </option>
-                ))}
-              </select>
-
-              {commentFilterVideoId !== 'all' && (
-                <button
-                  onClick={() => setCommentFilterVideoId('all')}
-                  className="px-2.5 py-2 rounded-xl bg-neutral-800 text-[11px] text-neutral-300 hover:text-white cursor-pointer"
-                >
-                  Clear filter
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Comments List */}
-          <div className="space-y-3">
-            {filteredComments.length === 0 ? (
-              <div className="py-12 text-center text-xs text-neutral-500 bg-[#161622] rounded-2xl border border-neutral-800">
-                {allComments.length === 0
-                  ? 'No comments currently posted across videos.'
-                  : 'No comments match your search filter.'}
-              </div>
-            ) : (
-              filteredComments.map(comment => (
-                <div
-                  key={`${comment.videoId}_${comment.id}`}
-                  className="p-4 rounded-2xl bg-[#181824] border border-neutral-800 hover:border-neutral-700 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
-                >
-                  <div className="flex items-start gap-3 min-w-0 flex-1">
-                    <Avatar src={comment.avatar} alt={comment.name} size="sm" className="shrink-0 mt-0.5" />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-xs font-bold text-white">{comment.name}</span>
-                        {comment.timestamp && (
-                          <span className="text-[10px] text-neutral-500 font-mono">
-                            {formatRealtimeAgo(comment.timestamp)}
-                          </span>
-                        )}
-                        {comment.video && (
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-neutral-300 border border-neutral-700 truncate max-w-xs">
-                            on "{comment.video.caption ? comment.video.caption.slice(0, 25) : 'Video'}"
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-neutral-200 mt-1 break-words font-sans bg-[#13131c] p-2.5 rounded-xl border border-neutral-800/80">
-                        "{comment.text}"
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Delete Comment Action */}
-                  <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                    <button
-                      onClick={() => handleDeleteCommentAdmin(comment.videoId, comment.id)}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/25 text-red-400 border border-red-500/30 text-xs font-semibold cursor-pointer transition-colors shadow-sm"
-                      title="Permanently delete this comment"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Delete Comment</span>
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
           </div>
         </div>
       )}

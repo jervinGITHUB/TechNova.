@@ -218,7 +218,6 @@ interface AppContextType {
   removeAdmin: (adminId: string) => Promise<boolean>;
   deleteUserAdmin: (userId: string) => Promise<boolean>;
   deleteVideoAdmin: (videoId: string) => Promise<boolean>;
-  deleteCommentAdmin: (videoId: string, commentId: string) => Promise<boolean>;
   approveVideoAdmin: (videoId: string) => Promise<boolean>;
   rejectVideoAdmin: (videoId: string, reason?: string) => Promise<boolean>;
   submitVideoAppeal: (videoId: string, reason: string) => Promise<boolean>;
@@ -738,38 +737,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           storage.set('conversations', []);
         } else if (currentUser) {
           const deletedConvKey = `deleted_convs_${currentUser.id}`;
-          const deletedConvKeyUuid = `deleted_convs_${toUuid(currentUser.id)}`;
-          const deletedSet = new Set([
-            ...storage.get<string[]>(deletedConvKey, []),
-            ...storage.get<string[]>(deletedConvKeyUuid, []),
-          ]);
+          const deletedSet = new Set(storage.get<string[]>(deletedConvKey, []));
 
           setConversations(prev => {
             const convMap = new Map<string, Conversation>();
-            // Keep locally existing non-deleted conversations
-            prev.forEach(c => {
-              if (!deletedSet.has(c.id) && !deletedSet.has(toUuid(c.id))) {
-                convMap.set(c.id, c);
-              }
-            });
+            prev.forEach(c => convMap.set(c.id, c));
 
             for (const rc of remoteConvs) {
-              // If user previously deleted this conversation, DO NOT restore it!
-              if (deletedSet.has(rc.id) || deletedSet.has(toUuid(rc.id))) {
-                continue;
-              }
-
               const partnerId = (rc.userAId === currentUser.id || toUuid(rc.userAId) === toUuid(currentUser.id))
                 ? rc.userBId
                 : rc.userAId;
 
               const existingConv = convMap.get(rc.id) || convMap.get(toUuid(rc.id));
               const isDeletedByMe =
+                deletedSet.has(rc.id) ||
+                deletedSet.has(toUuid(rc.id)) ||
                 Boolean(existingConv?.deletedForUserIds?.some(id => isSameUser(id, currentUser.id)));
-
-              if (isDeletedByMe) {
-                continue;
-              }
 
               const partnerUser = users.find(u => u.id === partnerId || toUuid(u.id) === toUuid(partnerId)) || existingConv?.participant || {
                 id: partnerId,
@@ -1643,18 +1626,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(updated);
     setUsers(prev => prev.map(u => (u.id === currentUser.id ? updated : u)));
     supabaseDb.upsertUser(updated);
-
-    // If avatar was updated and is a local data or blob URL, automatically upload into Supabase Profile Picture bucket!
-    if (updates.avatar && (updates.avatar.startsWith('data:') || updates.avatar.startsWith('blob:'))) {
-      supabaseDb.uploadProfilePictureFile(updates.avatar, currentUser.id).then(res => {
-        if (res.url && res.url !== updates.avatar) {
-          const cloudUpdated = { ...updated, avatar: res.url };
-          setCurrentUser(cloudUpdated);
-          setUsers(prev => prev.map(u => (u.id === currentUser.id ? cloudUpdated : u)));
-          supabaseDb.upsertUser(cloudUpdated);
-        }
-      }).catch(() => {});
-    }
   };
 
   // Follow & Relationship System (BR-011, BR-012, Friends mutual follow, Private requests)
@@ -2576,21 +2547,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const deleteConversation = (convId: string) => {
     if (!currentUser) return;
 
-    // 1. Store in user's persistent deleted conversations set (both raw ID and UUID format)
+    // 1. Store in user's persistent deleted conversations set
     const deletedConvKey = `deleted_convs_${currentUser.id}`;
-    const deletedConvKeyUuid = `deleted_convs_${toUuid(currentUser.id)}`;
-    const deletedSet = new Set([
-      ...storage.get<string[]>(deletedConvKey, []),
-      ...storage.get<string[]>(deletedConvKeyUuid, []),
-    ]);
+    const deletedSet = new Set(storage.get<string[]>(deletedConvKey, []));
     deletedSet.add(convId);
     deletedSet.add(toUuid(convId));
     storage.set(deletedConvKey, Array.from(deletedSet));
-    storage.set(deletedConvKeyUuid, Array.from(deletedSet));
 
-    // 2. Remove conversation immediately from active list
+    // 2. Mark conversation as deleted for this user
     setConversations(prev => {
-      const next = prev.filter(c => c.id !== convId && toUuid(c.id) !== toUuid(convId));
+      const next = prev.map(c => {
+        if (c.id === convId || toUuid(c.id) === toUuid(convId)) {
+          const currentDeleted = c.deletedForUserIds || [];
+          return {
+            ...c,
+            deletedForUserIds: currentDeleted.includes(currentUser.id)
+              ? currentDeleted
+              : [...currentDeleted, currentUser.id],
+            clearedHistoryAt: {
+              ...(c.clearedHistoryAt || {}),
+              [currentUser.id]: Date.now(),
+            },
+          };
+        }
+        return c;
+      });
       storage.set('conversations', next);
       return next;
     });
@@ -3152,46 +3133,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return deleteVideo(videoId);
   };
 
-  // Delete Comment in Admin Panel (persists locally and in Supabase)
-  const deleteCommentAdmin = async (videoId: string, commentId: string): Promise<boolean> => {
-    try {
-      // 1. Remove from localStorage viralhub_video_comments_v2
-      try {
-        const saved = localStorage.getItem('viralhub_video_comments_v2');
-        if (saved) {
-          const commentsMap = JSON.parse(saved);
-          if (commentsMap[videoId]) {
-            commentsMap[videoId] = commentsMap[videoId].filter(
-              (c: any) => c.id !== commentId && toUuid(c.id) !== toUuid(commentId)
-            );
-            localStorage.setItem('viralhub_video_comments_v2', JSON.stringify(commentsMap));
-          }
-        }
-      } catch {}
-
-      // 2. Decrement commentsCount on video in state & storage
-      setVideos(prev => {
-        const next = prev.map(v => {
-          if (v.id === videoId || toUuid(v.id) === toUuid(videoId)) {
-            return {
-              ...v,
-              commentsCount: Math.max(0, (v.commentsCount || 1) - 1),
-            };
-          }
-          return v;
-        });
-        storage.set('videos', next);
-        return next;
-      });
-
-      // 3. Delete from Supabase Comment table
-      await supabaseDb.deleteComment(commentId);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
   const updateUserRoleAdmin = async (
     userId: string,
     newRole: 'creator' | 'admin' | 'moderator'
@@ -3419,7 +3360,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         removeAdmin,
         deleteUserAdmin,
         deleteVideoAdmin,
-        deleteCommentAdmin,
         deleteVideo,
         updateUserRoleAdmin,
         activeNotificationPopup,

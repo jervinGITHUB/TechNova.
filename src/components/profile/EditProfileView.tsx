@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
-import { Camera, Check, ArrowLeft, Info, Loader2 } from 'lucide-react';
+import { Camera, Check, ArrowLeft, Info } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
-import { supabaseDb } from '../../lib/supabase';
 
 export const EditProfileView: React.FC = () => {
   const { currentUser, updateUserProfile, setActiveTab } = useApp();
@@ -12,57 +11,24 @@ export const EditProfileView: React.FC = () => {
   const [bio, setBio] = useState(currentUser?.bio || '');
   const [isPrivate, setIsPrivate] = useState<boolean>(currentUser?.isPrivate || false);
   const [avatarUrl, setAvatarUrl] = useState(currentUser?.avatar || '');
-  const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  const handleAvatarChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      setAvatarFile(file);
       setAvatarUrl(URL.createObjectURL(file));
-      setIsUploadingAvatar(true);
-      try {
-        const uploadRes = await supabaseDb.uploadProfilePictureFile(file, currentUser?.id);
-        if (uploadRes.url) {
-          setAvatarUrl(uploadRes.url);
-        }
-      } catch (err) {
-        console.warn('Profile picture upload note:', err);
-      } finally {
-        setIsUploadingAvatar(false);
-      }
     }
   };
 
-  const handleSave = async (e: React.FormEvent) => {
+  const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
-    let finalAvatar = avatarUrl || currentUser?.avatar || '';
-
-    // If avatar was selected and not yet resolved to remote URL, upload directly to Supabase 'profile picture' bucket
-    if (avatarFile && (!finalAvatar || finalAvatar.startsWith('blob:') || finalAvatar.startsWith('data:'))) {
-      setIsUploadingAvatar(true);
-      try {
-        const uploadRes = await supabaseDb.uploadProfilePictureFile(avatarFile, currentUser?.id);
-        if (uploadRes.url) {
-          finalAvatar = uploadRes.url;
-          setAvatarUrl(uploadRes.url);
-        }
-      } catch (err) {
-        console.warn('Profile picture upload note:', err);
-      } finally {
-        setIsUploadingAvatar(false);
-      }
-    }
-
     updateUserProfile({
       username: username.trim(),
       displayName: displayName.trim(),
       bio: bio.trim(),
       isPrivate: isPrivate,
-      avatar: finalAvatar,
+      avatar: avatarUrl || currentUser?.avatar,
     });
-
     setSavedSuccess(true);
     setTimeout(() => {
       setSavedSuccess(false);
@@ -206,19 +172,9 @@ export const EditProfileView: React.FC = () => {
         <div className="pt-4 flex items-center gap-4">
           <button
             type="submit"
-            disabled={isUploadingAvatar}
-            className="py-3 px-8 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-extrabold text-sm shadow-[0_0_20px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95 disabled:opacity-60 flex items-center gap-2"
+            className="py-3 px-8 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-extrabold text-sm shadow-[0_0_20px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95"
           >
-            {isUploadingAvatar ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Uploading Profile Picture...</span>
-              </>
-            ) : savedSuccess ? (
-              'Saved Successfully!'
-            ) : (
-              'Save Changes'
-            )}
+            {savedSuccess ? 'Saved Successfully!' : 'Save Changes'}
           </button>
 
           {savedSuccess && (

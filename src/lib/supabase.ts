@@ -758,105 +758,80 @@ export const supabaseDb = {
       // 3. Storage Bucket Auto-Discovery & Recovery:
       // If user uploaded directly to bucket (e.g. 'videos' bucket has files),
       // ensure every uploaded video file has a row and shows up in the feed!
-      const usersList = await this.fetchUsers();
-      const usersMap = new Map((usersList || []).map(u => [u.id, u]));
-      const usersUuidMap = new Map((usersList || []).map(u => [toUuid(u.id), u]));
-
       try {
-        let candidateBucketNames: string[] = ['videos', 'Videos', 'video', 'media', 'uploads', 'posts', 'files', 'public'];
-        try {
-          const { data: allBuckets } = await client.storage.listBuckets();
-          if (allBuckets && allBuckets.length > 0) {
-            const discovered = allBuckets.map(b => b.name || b.id).filter(Boolean);
-            candidateBucketNames = Array.from(new Set([...discovered, ...candidateBucketNames]));
-          }
-        } catch {}
+        const bucketNames = ['videos', 'video', 'media', 'uploads'];
+        for (const bName of bucketNames) {
+          const { data: bucketFiles } = await client.storage.from(bName).list('', {
+            limit: 50,
+            sortBy: { column: 'created_at', order: 'desc' },
+          });
 
-        for (const bName of candidateBucketNames) {
-          // Check root and subfolder 'uploads'
-          const folders = ['', 'uploads'];
-          for (const folder of folders) {
-            const { data: bucketFiles } = await client.storage.from(bName).list(folder, {
-              limit: 100,
-              sortBy: { column: 'created_at', order: 'desc' },
-            });
+          if (bucketFiles && bucketFiles.length > 0) {
+            if (!videoRows) videoRows = [];
 
-            if (bucketFiles && bucketFiles.length > 0) {
-              if (!videoRows) videoRows = [];
+            for (const file of bucketFiles) {
+              if (!file.name || file.name.startsWith('.')) continue;
+              const isVideo =
+                /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(file.name) ||
+                file.metadata?.mimetype?.startsWith('video/');
+              if (!isVideo) continue;
 
-              for (const file of bucketFiles) {
-                if (!file.name || file.name.startsWith('.')) continue;
-                const isVideo =
-                  /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(file.name) ||
-                  file.metadata?.mimetype?.startsWith('video/');
-                if (!isVideo) continue;
+              const { data: pubData } = client.storage.from(bName).getPublicUrl(file.name);
+              const fileUrl = pubData?.publicUrl;
+              if (!fileUrl) continue;
 
-                const fullFilePath = folder ? `${folder}/${file.name}` : file.name;
-                const { data: pubData } = client.storage.from(bName).getPublicUrl(fullFilePath);
-                const fileUrl = pubData?.publicUrl;
-                if (!fileUrl) continue;
+              const existsInRows = videoRows.some((r: any) => {
+                const existingUrl = r.VideoURL || r.video_url || r.media_url || r.url || '';
+                return existingUrl === fileUrl || existingUrl.includes(file.name);
+              });
 
-                const existsInRows = videoRows.some((r: any) => {
-                  const existingUrl = r.VideoURL || r.video_url || r.media_url || r.url || '';
-                  return existingUrl === fileUrl || existingUrl.includes(file.name);
-                });
+              if (!existsInRows) {
+                const recoveredId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+                const recRow = {
+                  VideoID: recoveredId,
+                  UserID: 'creator_recovered',
+                  VideoURL: fileUrl,
+                  Caption: 'Viral Moment 🔥',
+                  PublishedAt: file.created_at || new Date().toISOString(),
+                  ViewCount: 1,
+                  Status: 'approved',
+                  RejectionReason: null,
+                  AppealStatus: 'none',
+                  AppealReason: null,
+                  ThumbnailURL: fileUrl,
+                };
+                videoRows.unshift(recRow);
 
-                if (!existsInRows) {
-                  const recoveredId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-                  const primaryUser = (usersList && usersList.length > 0) ? usersList[0] : null;
-                  const creatorIdToUse = primaryUser ? primaryUser.id : 'creator_recovered';
-                  const cleanCaption = file.name
-                    .replace(/\.[^/.]+$/, '')
-                    .replace(/^[0-9_-]+/, '')
-                    .replace(/[_-]/g, ' ')
-                    .trim() || 'Viral Moment 🔥';
-
-                  const recRow = {
-                    VideoID: recoveredId,
-                    UserID: creatorIdToUse,
-                    VideoURL: fileUrl,
-                    Caption: cleanCaption.charAt(0).toUpperCase() + cleanCaption.slice(1),
-                    PublishedAt: file.created_at || new Date().toISOString(),
-                    ViewCount: 1,
-                    Status: 'approved',
-                    RejectionReason: null,
-                    AppealStatus: 'none',
-                    AppealReason: null,
-                    ThumbnailURL: fileUrl,
-                  };
-                  videoRows.unshift(recRow);
-
-                  // Persist recovered video into database so other users & devices see it permanently
-                  this.insertVideo({
-                    id: recoveredId,
-                    creatorId: creatorIdToUse,
-                    creator: primaryUser || {
-                      id: 'creator_recovered',
-                      username: 'creator',
-                      displayName: 'Creator',
-                      avatar: '',
-                      email: '',
-                      bio: '',
-                      followingCount: 0,
-                      followersCount: 0,
-                      likesCount: '0',
-                      isPrivate: false,
-                      role: 'creator',
-                    },
-                    caption: recRow.Caption,
-                    hashtags: ['#viral', '#fyp'],
-                    mediaUrl: fileUrl,
-                    thumbnailUrl: fileUrl,
-                    likesCount: 0,
-                    commentsCount: 0,
-                    sharesCount: 0,
-                    viewsCount: '1',
-                    isLiked: false,
-                    createdAt: recRow.PublishedAt,
-                    status: 'approved',
-                    appealStatus: 'none',
-                  }).catch(() => {});
-                }
+                // Persist recovered video into database so other users & devices see it permanently
+                this.insertVideo({
+                  id: recoveredId,
+                  creatorId: 'creator_recovered',
+                  creator: {
+                    id: 'creator_recovered',
+                    username: 'creator',
+                    displayName: 'Creator',
+                    avatar: '',
+                    email: '',
+                    bio: '',
+                    followingCount: 0,
+                    followersCount: 0,
+                    likesCount: '0',
+                    isPrivate: false,
+                    role: 'creator',
+                  },
+                  caption: recRow.Caption,
+                  hashtags: ['#viral', '#fyp'],
+                  mediaUrl: fileUrl,
+                  thumbnailUrl: fileUrl,
+                  likesCount: 0,
+                  commentsCount: 0,
+                  sharesCount: 0,
+                  viewsCount: '1',
+                  isLiked: false,
+                  createdAt: recRow.PublishedAt,
+                  status: 'approved',
+                  appealStatus: 'none',
+                }).catch(() => {});
               }
             }
           }
@@ -873,6 +848,11 @@ export const supabaseDb = {
       if (!videoRows || videoRows.length === 0) {
         return [];
       }
+
+      // Fetch users to populate creator info
+      const usersList = await this.fetchUsers();
+      const usersMap = new Map((usersList || []).map(u => [u.id, u]));
+      const usersUuidMap = new Map((usersList || []).map(u => [toUuid(u.id), u]));
 
       // Fetch hashtags
       let hashtagsMap = new Map<string, string[]>();
@@ -1395,108 +1375,6 @@ export const supabaseDb = {
     }
   },
 
-  async uploadProfilePictureFile(fileInput: File | Blob | string, userId?: string): Promise<{ url: string | null; error?: string }> {
-    const client = getSupabaseClient();
-    if (!client) return { url: null, error: 'Supabase client is not connected' };
-
-    try {
-      let file: File | Blob;
-      let ext = 'jpg';
-      let mimeType = 'image/jpeg';
-
-      if (typeof fileInput === 'string') {
-        if (fileInput.startsWith('data:')) {
-          const parts = fileInput.split(',');
-          mimeType = parts[0].match(/:(.*?);/)?.[1] || 'image/jpeg';
-          ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
-          const bstr = atob(parts[1]);
-          let n = bstr.length;
-          const u8arr = new Uint8Array(n);
-          while (n--) {
-            u8arr[n] = bstr.charCodeAt(n);
-          }
-          file = new Blob([u8arr], { type: mimeType });
-        } else {
-          try {
-            const res = await fetch(fileInput);
-            file = await res.blob();
-            mimeType = file.type || 'image/jpeg';
-            ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
-          } catch {
-            return { url: null, error: 'Failed to read avatar source' };
-          }
-        }
-      } else {
-        file = fileInput;
-        ext = (file as any).name?.split('.').pop()?.toLowerCase() || 'jpg';
-        mimeType = file.type || 'image/jpeg';
-      }
-
-      const cleanFileName = `avatar_${userId ? toUuid(userId) : Date.now()}_${Date.now()}.${ext}`;
-
-      // 1. Inspect existing buckets - prioritize user's exact 'profile picture' bucket
-      let candidateBuckets: string[] = [
-        'Profile Picture',
-        'profile picture',
-        'profile-picture',
-        'profile_picture',
-        'profile pictures',
-        'Profile Pictures',
-        'avatars',
-        'avatar',
-        'public',
-      ];
-      try {
-        const { data: bucketList } = await client.storage.listBuckets();
-        if (bucketList && bucketList.length > 0) {
-          const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
-          // Find any bucket matching 'profile picture' case-insensitively
-          const matchingExact = discovered.filter(b => {
-            const normalized = b.toLowerCase().replace(/[-_]/g, ' ');
-            return normalized.includes('profile picture') || normalized.includes('avatar');
-          });
-          candidateBuckets = Array.from(new Set([...matchingExact, ...discovered, ...candidateBuckets]));
-        }
-      } catch {
-        // ignore listBuckets failure
-      }
-
-      let lastError: any = null;
-
-      // 2. Upload to candidate bucket
-      for (const bucket of candidateBuckets) {
-        const tryPaths = [cleanFileName, `avatars/${cleanFileName}`, `uploads/${cleanFileName}`];
-        for (const targetPath of tryPaths) {
-          try {
-            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
-              contentType: mimeType,
-              cacheControl: '3600',
-              upsert: true,
-            });
-
-            if (!error && data?.path) {
-              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
-              if (pubData?.publicUrl) {
-                return { url: pubData.publicUrl };
-              }
-            }
-            if (error) {
-              lastError = error;
-            }
-          } catch (err: any) {
-            lastError = err;
-          }
-        }
-      }
-
-      console.warn('Supabase storage avatar upload note:', lastError?.message || 'Bucket upload failed');
-      return { url: null, error: lastError?.message || 'Failed to upload profile picture to bucket.' };
-    } catch (e: any) {
-      console.warn('Supabase uploadProfilePictureFile exception:', e);
-      return { url: null, error: e?.message || 'Profile picture upload failed' };
-    }
-  },
-
   async deleteVideoFileFromStorage(mediaUrl?: string | null): Promise<boolean> {
     if (!mediaUrl) return false;
     const client = getSupabaseClient();
@@ -1705,19 +1583,12 @@ export const supabaseDb = {
 
   async deleteComment(commentId: string): Promise<boolean> {
     const client = getSupabaseClient();
-    if (!client || !commentId) return false;
+    if (!client) return false;
 
     try {
       const cUuid = toUuid(commentId);
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(commentId);
-      await client.from('Comment').delete().eq('CommentID', cUuid);
-      if (isUuid && commentId !== cUuid) {
-        await client.from('Comment').delete().eq('CommentID', commentId);
-      }
-      try {
-        await client.from('comments').delete().eq('id', cUuid);
-      } catch {}
-      return true;
+      const { error } = await client.from('Comment').delete().eq('CommentID', cUuid);
+      return !error;
     } catch (e) {
       console.warn('Supabase deleteComment error:', e);
       return false;
@@ -1893,27 +1764,17 @@ export const supabaseDb = {
     if (!client || !conversationId) return false;
 
     try {
-      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(conversationId);
       const convUuid = toUuid(conversationId);
-
       // Delete messages belonging to conversation
-      await client.from('Message').delete().eq('ConversationID', convUuid);
-      if (isUuid && conversationId !== convUuid) {
-        await client.from('Message').delete().eq('ConversationID', conversationId);
-      }
-
+      await client
+        .from('Message')
+        .delete()
+        .or(`ConversationID.eq.${convUuid},ConversationID.eq.${conversationId}`);
       // Delete conversation entry
-      await client.from('Conversation').delete().eq('ConversationID', convUuid);
-      if (isUuid && conversationId !== convUuid) {
-        await client.from('Conversation').delete().eq('ConversationID', conversationId);
-      }
-
-      // Also try lowercase table 'conversations' / 'messages'
-      try {
-        await client.from('messages').delete().eq('conversation_id', convUuid);
-        await client.from('conversations').delete().eq('id', convUuid);
-      } catch {}
-
+      await client
+        .from('Conversation')
+        .delete()
+        .or(`ConversationID.eq.${convUuid},ConversationID.eq.${conversationId}`);
       return true;
     } catch (e) {
       console.warn('Supabase deleteConversation fallback:', e);
@@ -2775,20 +2636,16 @@ BEGIN
   CREATE POLICY "Public all access on Admin" ON public."Admin" FOR ALL USING (true) WITH CHECK (true);
 END $$;
 
--- 5. STORAGE BUCKET FOR VIDEOS & PROFILE PICTURES (Public access so media streams on any device)
+-- 5. STORAGE BUCKET FOR VIDEOS (Public access so videos stream on any device)
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('videos', 'videos', true)
-ON CONFLICT (id) DO NOTHING;
-
-INSERT INTO storage.buckets (id, name, public)
-VALUES ('profile-pictures', 'profile-pictures', true)
 ON CONFLICT (id) DO NOTHING;
 
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'storage' AND tablename = 'objects') THEN
     DROP POLICY IF EXISTS "Public Videos Access" ON storage.objects;
-    CREATE POLICY "Public Videos Access" ON storage.objects FOR ALL USING (bucket_id IN ('videos', 'profile-pictures', 'profile picture')) WITH CHECK (bucket_id IN ('videos', 'profile-pictures', 'profile picture'));
+    CREATE POLICY "Public Videos Access" ON storage.objects FOR ALL USING (bucket_id = 'videos') WITH CHECK (bucket_id = 'videos');
   END IF;
 END $$;
 `;

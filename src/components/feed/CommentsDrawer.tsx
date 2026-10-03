@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
-import { X, Send, Heart, ChevronUp, ChevronDown, MessageSquare, Trash2 } from 'lucide-react';
+import { X, Send, Heart, ChevronUp, ChevronDown, MessageSquare } from 'lucide-react';
 import { formatRealtimeAgo } from '../../utils/time';
 
 interface CommentEntry {
@@ -25,15 +25,7 @@ interface CommentEntry {
 const DEFAULT_VIDEO_COMMENTS: Record<string, CommentEntry[]> = {};
 
 export const CommentsDrawer: React.FC = () => {
-  const {
-    commentsVideoId,
-    setCommentsVideoId,
-    currentUser,
-    addCommentToVideo,
-    deleteCommentAdmin,
-    isAdmin,
-    videos,
-  } = useApp();
+  const { commentsVideoId, setCommentsVideoId, currentUser, addCommentToVideo, videos } = useApp();
 
   // Bottom-sheet height state (starts at 50% = half of video)
   const [heightPercent, setHeightPercent] = useState<number>(50);
@@ -51,18 +43,6 @@ export const CommentsDrawer: React.FC = () => {
 
   const [inputVal, setInputVal] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
-
-  const handleDeleteComment = async (commentId: string) => {
-    if (!commentsVideoId) return;
-    await deleteCommentAdmin(commentsVideoId, commentId);
-    setCommentsMap(prev => {
-      const list = prev[commentsVideoId] || [];
-      return {
-        ...prev,
-        [commentsVideoId]: list.filter(c => c.id !== commentId),
-      };
-    });
-  };
 
   // Drag tracking refs
   const dragStartY = useRef<number>(0);
@@ -354,29 +334,16 @@ export const CommentsDrawer: React.FC = () => {
                       {comment.text}
                     </p>
 
-                    <div className="flex items-center gap-3 mt-1">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setReplyingTo(comment.id);
-                          setInputVal(`@${comment.name} `);
-                        }}
-                        className="text-[11px] text-neutral-400 hover:text-[#ff007a] font-semibold cursor-pointer"
-                      >
-                        reply
-                      </button>
-                      {(isAdmin || comment.name === currentUser?.displayName) && (
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteComment(comment.id)}
-                          className="text-[11px] text-neutral-500 hover:text-red-400 flex items-center gap-1 cursor-pointer transition-colors"
-                          title="Delete comment"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>delete</span>
-                        </button>
-                      )}
-                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReplyingTo(comment.id);
+                        setInputVal(`@${comment.name} `);
+                      }}
+                      className="text-[11px] text-neutral-400 hover:text-[#ff007a] font-semibold mt-1 cursor-pointer"
+                    >
+                      reply
+                    </button>
                   </div>
                 </div>
 
