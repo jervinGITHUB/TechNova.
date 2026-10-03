@@ -101,22 +101,16 @@ export const NotificationsView: React.FC = () => {
     }
   };
 
-  // Notifications page ONLY displays liked, comment, share, follow (and follow requests/moderation)
-  // Direct messages must NEVER appear on this page!
-  const pageNotifications = React.useMemo(() => {
-    return notifications.filter(n => n.type !== 'message');
-  }, [notifications]);
-
-  const unreadCount = pageNotifications.filter(n => n.isUnread).length;
+  const unreadCount = notifications.filter(n => n.isUnread).length;
 
   // Ensure new notifications are strictly on top across all devices
   const sortedNotifications = React.useMemo(() => {
-    return [...pageNotifications].sort((a, b) => {
+    return [...notifications].sort((a, b) => {
       const timeA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
       const timeB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
       return timeB - timeA;
     });
-  }, [pageNotifications]);
+  }, [notifications]);
 
   return (
     <div className="flex-1 p-4 sm:p-8 max-w-3xl mx-auto w-full select-none text-left">

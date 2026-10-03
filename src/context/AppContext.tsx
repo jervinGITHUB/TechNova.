@@ -669,18 +669,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // 2. Synchronize Videos (authoritative: Supabase is single source of truth!)
       if (remoteVideos !== null) {
         if (remoteVideos.length === 0) {
-          // If local device has uploaded videos, don't wipe them out! Sync them to Supabase
-          setVideos(prev => {
-            if (prev.length > 0) {
-              prev.forEach(v => {
-                if (v && v.mediaUrl && !v.mediaUrl.startsWith('blob:')) {
-                  supabaseDb.insertVideo(v).catch(() => {});
-                }
-              });
-              return prev;
-            }
-            return [];
-          });
+          setVideos([]);
+          storage.set('videos', []);
         } else {
           // Exclude any videos from deleted creators
           const activeVideos = remoteVideos.filter(v => {
@@ -702,25 +692,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return v;
           });
 
-          setVideos(prev => {
-            const remoteMap = new Map<string, Video>();
-            patchedRemote.forEach(rv => {
-              remoteMap.set(rv.id, rv);
-              remoteMap.set(toUuid(rv.id), rv);
-            });
-
-            // Keep locally uploaded videos that might not be in remote yet
-            const pendingLocal = prev.filter(lv => !remoteMap.has(lv.id) && !remoteMap.has(toUuid(lv.id)));
-            pendingLocal.forEach(lv => {
-              if (lv && lv.mediaUrl && !lv.mediaUrl.startsWith('blob:')) {
-                supabaseDb.insertVideo(lv).catch(() => {});
-              }
-            });
-
-            const merged = deduplicateVideos([...pendingLocal, ...patchedRemote]);
-            storage.set('videos', merged);
-            return merged;
-          });
+          const merged = deduplicateVideos(patchedRemote);
+          setVideos(merged);
+          storage.set('videos', merged);
         }
       }
 
@@ -736,9 +710,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setConversations([]);
           storage.set('conversations', []);
         } else if (currentUser) {
-          const deletedConvKey = `deleted_convs_${currentUser.id}`;
-          const deletedSet = new Set(storage.get<string[]>(deletedConvKey, []));
-
           setConversations(prev => {
             const convMap = new Map<string, Conversation>();
             prev.forEach(c => convMap.set(c.id, c));
@@ -748,12 +719,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 ? rc.userBId
                 : rc.userAId;
 
-              const existingConv = convMap.get(rc.id) || convMap.get(toUuid(rc.id));
-              const isDeletedByMe =
-                deletedSet.has(rc.id) ||
-                deletedSet.has(toUuid(rc.id)) ||
-                Boolean(existingConv?.deletedForUserIds?.some(id => isSameUser(id, currentUser.id)));
-
+              const existingConv = convMap.get(rc.id);
               const partnerUser = users.find(u => u.id === partnerId || toUuid(u.id) === toUuid(partnerId)) || existingConv?.participant || {
                 id: partnerId,
                 username: 'user',
@@ -807,10 +773,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 unreadCount: existingConv ? existingConv.unreadCount : 0,
                 unreadCounts: existingConv ? existingConv.unreadCounts : {},
                 messages: parsedMessages.length > 0 ? parsedMessages : (existingConv?.messages || []),
-                deletedForUserIds: isDeletedByMe
-                  ? Array.from(new Set([...(existingConv?.deletedForUserIds || []), currentUser.id]))
-                  : (existingConv?.deletedForUserIds || []),
-                clearedHistoryAt: existingConv?.clearedHistoryAt || {},
                 isOnline: true,
               };
               convMap.set(rc.id, newConv);
@@ -1177,19 +1139,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const userConversations = conversations.filter(c => {
     if (!currentUser) return false;
     const isParticipant = (c.participantIds && c.participantIds.length > 0)
-      ? c.participantIds.some(id => isSameUser(id, currentUser.id))
-      : !isSameUser(c.participant?.id, currentUser.id);
+      ? c.participantIds.includes(currentUser.id)
+      : c.participant.id !== currentUser.id;
     if (!isParticipant) return false;
 
-    // Check persistent deleted conversations list
-    const deletedConvKey = `deleted_convs_${currentUser.id}`;
-    const deletedSet = new Set(storage.get<string[]>(deletedConvKey, []));
-    if (deletedSet.has(c.id) || deletedSet.has(toUuid(c.id))) {
-      return false;
-    }
-
     // If currentUser deleted this conversation, hide it from currentUser
-    if (c.deletedForUserIds && c.deletedForUserIds.some(id => isSameUser(id, currentUser.id))) {
+    if (c.deletedForUserIds && c.deletedForUserIds.includes(currentUser.id)) {
       return false;
     }
     return true;
@@ -1205,16 +1160,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, 0);
 
   // User's own notifications inbox: interactions addressed to currentUser (strictly sorted newest first)
-  // Direct messages only show as a popup toast, NEVER in the notifications page!
   const userNotifications = useMemo(() => {
     return notifications
       .filter(n => {
         if (!currentUser) return false;
-
-        // Direct messages must NEVER be placed in the notification page!
-        if (n.type === 'message') {
-          return false;
-        }
 
         // Check if notification is addressed to currentUser (by direct ID, email, or UUID equivalence)
         const isRecipient =
@@ -2060,12 +2009,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // 4. Send notification ONLY to the VIDEO CREATOR (if not currentUser)
-    const creatorId = video.creatorId || video.creator?.id;
-    if (willLike && creatorId && !isSameUser(creatorId, currentUser.id)) {
+    if (willLike && video.creatorId !== currentUser.id) {
       const nowIso = new Date().toISOString();
       const newNotif: NotificationItem = {
-        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        recipientId: creatorId,
+        id: `notif_${Date.now()}`,
+        recipientId: video.creatorId, // Targeted to video creator!
         type: 'like',
         actor: {
           id: currentUser.id,
@@ -2084,7 +2032,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         storage.set('notifications', next);
         return next;
       });
-      supabaseDb.insertNotification(newNotif, creatorId);
+      supabaseDb.insertNotification(newNotif, video.creatorId);
     }
 
     supabaseDb.toggleVideoLike(videoId, currentUser.id, willLike);
@@ -2107,12 +2055,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Trigger notification to the VIDEO CREATOR (NOT currentUser)
     const video = videos.find(v => v.id === videoId);
-    const creatorId = video?.creatorId || video?.creator?.id;
-    if (video && creatorId && !isSameUser(creatorId, currentUser.id)) {
+    if (video && video.creatorId !== currentUser.id) {
       const nowIso = new Date().toISOString();
       const newNotif: NotificationItem = {
-        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        recipientId: creatorId,
+        id: `notif_${Date.now()}`,
+        recipientId: video.creatorId, // Recipient is the VIDEO CREATOR!
         type: 'comment',
         actor: {
           id: currentUser.id,
@@ -2120,7 +2067,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           displayName: currentUser.displayName,
           avatar: currentUser.avatar,
         },
-        targetText: `commented on your video: "${text.slice(0, 35)}"`,
+        targetText: `commented to your video: "${text.slice(0, 35)}"`,
         timestamp: nowIso,
         createdAt: nowIso,
         isUnread: true,
@@ -2131,7 +2078,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         storage.set('notifications', next);
         return next;
       });
-      supabaseDb.insertNotification(newNotif, creatorId);
+      supabaseDb.insertNotification(newNotif, video.creatorId);
     }
   };
 
@@ -2152,12 +2099,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Trigger notification to the VIDEO CREATOR (NOT currentUser)
     const video = videos.find(v => v.id === videoId);
-    const creatorId = video?.creatorId || video?.creator?.id;
-    if (video && currentUser && creatorId && !isSameUser(creatorId, currentUser.id)) {
+    if (video && currentUser && video.creatorId !== currentUser.id) {
       const nowIso = new Date().toISOString();
       const newNotif: NotificationItem = {
-        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-        recipientId: creatorId,
+        id: `notif_${Date.now()}`,
+        recipientId: video.creatorId, // Recipient is the VIDEO CREATOR!
         type: 'share',
         actor: {
           id: currentUser.id,
@@ -2176,7 +2122,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         storage.set('notifications', next);
         return next;
       });
-      supabaseDb.insertNotification(newNotif, creatorId);
+      supabaseDb.insertNotification(newNotif, video.creatorId);
     }
   };
 
@@ -2543,21 +2489,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Delete whole conversation: ONLY deletes for currentUser's POV!
-  // Persistently remembered so it NEVER comes back automatically on re-sync!
+  // The other user still sees the conversation and its full history!
   const deleteConversation = (convId: string) => {
     if (!currentUser) return;
-
-    // 1. Store in user's persistent deleted conversations set
-    const deletedConvKey = `deleted_convs_${currentUser.id}`;
-    const deletedSet = new Set(storage.get<string[]>(deletedConvKey, []));
-    deletedSet.add(convId);
-    deletedSet.add(toUuid(convId));
-    storage.set(deletedConvKey, Array.from(deletedSet));
-
-    // 2. Mark conversation as deleted for this user
-    setConversations(prev => {
-      const next = prev.map(c => {
-        if (c.id === convId || toUuid(c.id) === toUuid(convId)) {
+    setConversations(prev =>
+      prev.map(c => {
+        if (c.id === convId) {
           const currentDeleted = c.deletedForUserIds || [];
           return {
             ...c,
@@ -2571,18 +2508,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
         }
         return c;
-      });
-      storage.set('conversations', next);
-      return next;
-    });
-
-    if (activeConversationId === convId || toUuid(activeConversationId || '') === toUuid(convId)) {
+      })
+    );
+    if (activeConversationId === convId) {
       setActiveConversationId(null);
       setMessagesMobileView('list');
     }
-
-    // 3. Sync deletion to cloud database
-    supabaseDb.deleteConversation(convId, currentUser.id).catch(() => {});
   };
 
   // Delete message: Deleted for BOTH users' POVs (deleted / unsent for everyone)

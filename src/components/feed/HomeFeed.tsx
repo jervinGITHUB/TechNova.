@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
-import { isSameUser } from '../../lib/supabase';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { Avatar } from '../common/Avatar';
 import {
@@ -563,12 +562,12 @@ export const HomeFeed: React.FC = () => {
     }
   }, [feedRefreshKey]);
 
-  // Filter: Public feed shows approved videos (or pending videos to their creator)
+  // Filter: Public feed only shows approved videos (or pending videos to their creator)
   const visibleApprovedVideos = useMemo(() => {
     return deduplicateVideos(videos).filter(v => {
       if (v.status === 'rejected') return false;
       if (v.status === 'pending') {
-        return currentUser && (isSameUser(v.creatorId, currentUser.id) || isSameUser(v.creator?.id, currentUser.id));
+        return currentUser && v.creatorId === currentUser.id;
       }
       return true;
     });

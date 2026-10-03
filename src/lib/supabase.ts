@@ -684,7 +684,7 @@ export const supabaseDb = {
       let videoRows: any[] | null = null;
       let error: any = null;
 
-      // 1. Fetch from PascalCase 'Video' table with safe multi-tier ordering
+      // 1. Fetch from PascalCase 'Video' table with select('*') to safely support all schemas
       try {
         const res1 = await client
           .from('Video')
@@ -693,14 +693,6 @@ export const supabaseDb = {
 
         if (!res1.error && res1.data) {
           videoRows = res1.data;
-        } else if (res1.error && (res1.error.code === '42703' || res1.error.message?.includes('PublishedAt'))) {
-          // Retry ordering by created_at or without order if PublishedAt column does not exist
-          const resRetry = await client.from('Video').select('*');
-          if (!resRetry.error && resRetry.data) {
-            videoRows = resRetry.data;
-          } else {
-            error = resRetry.error;
-          }
         } else {
           error = res1.error;
         }
@@ -728,119 +720,15 @@ export const supabaseDb = {
               RejectionReason: r.rejection_reason || null,
               AppealStatus: r.appeal_status || 'none',
               AppealReason: r.appeal_reason || null,
-              ThumbnailURL: r.thumbnail_url || r.thumbnail || '',
             }));
             error = null;
-          } else {
-            const res2NoOrder = await client.from('videos').select('*');
-            if (!res2NoOrder.error && res2NoOrder.data) {
-              videoRows = res2NoOrder.data.map((r: any) => ({
-                VideoID: r.id || r.video_id,
-                UserID: r.user_id || r.userId,
-                VideoURL: r.video_url || r.media_url || r.url,
-                Caption: r.caption || '',
-                PublishedAt: r.created_at || r.published_at,
-                ViewCount: r.views_count || r.view_count || 0,
-                Status: r.status || 'approved',
-                RejectionReason: r.rejection_reason || null,
-                AppealStatus: r.appeal_status || 'none',
-                AppealReason: r.appeal_reason || null,
-                ThumbnailURL: r.thumbnail_url || r.thumbnail || '',
-              }));
-              error = null;
-            }
           }
         } catch {
           // ignore
         }
       }
 
-      // 3. Storage Bucket Auto-Discovery & Recovery:
-      // If user uploaded directly to bucket (e.g. 'videos' bucket has files),
-      // ensure every uploaded video file has a row and shows up in the feed!
-      try {
-        const bucketNames = ['videos', 'video', 'media', 'uploads'];
-        for (const bName of bucketNames) {
-          const { data: bucketFiles } = await client.storage.from(bName).list('', {
-            limit: 50,
-            sortBy: { column: 'created_at', order: 'desc' },
-          });
-
-          if (bucketFiles && bucketFiles.length > 0) {
-            if (!videoRows) videoRows = [];
-
-            for (const file of bucketFiles) {
-              if (!file.name || file.name.startsWith('.')) continue;
-              const isVideo =
-                /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(file.name) ||
-                file.metadata?.mimetype?.startsWith('video/');
-              if (!isVideo) continue;
-
-              const { data: pubData } = client.storage.from(bName).getPublicUrl(file.name);
-              const fileUrl = pubData?.publicUrl;
-              if (!fileUrl) continue;
-
-              const existsInRows = videoRows.some((r: any) => {
-                const existingUrl = r.VideoURL || r.video_url || r.media_url || r.url || '';
-                return existingUrl === fileUrl || existingUrl.includes(file.name);
-              });
-
-              if (!existsInRows) {
-                const recoveredId = `rec_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-                const recRow = {
-                  VideoID: recoveredId,
-                  UserID: 'creator_recovered',
-                  VideoURL: fileUrl,
-                  Caption: 'Viral Moment 🔥',
-                  PublishedAt: file.created_at || new Date().toISOString(),
-                  ViewCount: 1,
-                  Status: 'approved',
-                  RejectionReason: null,
-                  AppealStatus: 'none',
-                  AppealReason: null,
-                  ThumbnailURL: fileUrl,
-                };
-                videoRows.unshift(recRow);
-
-                // Persist recovered video into database so other users & devices see it permanently
-                this.insertVideo({
-                  id: recoveredId,
-                  creatorId: 'creator_recovered',
-                  creator: {
-                    id: 'creator_recovered',
-                    username: 'creator',
-                    displayName: 'Creator',
-                    avatar: '',
-                    email: '',
-                    bio: '',
-                    followingCount: 0,
-                    followersCount: 0,
-                    likesCount: '0',
-                    isPrivate: false,
-                    role: 'creator',
-                  },
-                  caption: recRow.Caption,
-                  hashtags: ['#viral', '#fyp'],
-                  mediaUrl: fileUrl,
-                  thumbnailUrl: fileUrl,
-                  likesCount: 0,
-                  commentsCount: 0,
-                  sharesCount: 0,
-                  viewsCount: '1',
-                  isLiked: false,
-                  createdAt: recRow.PublishedAt,
-                  status: 'approved',
-                  appealStatus: 'none',
-                }).catch(() => {});
-              }
-            }
-          }
-        }
-      } catch {
-        // Storage recovery is non-blocking
-      }
-
-      if (error && (!videoRows || videoRows.length === 0)) {
+      if (error && !videoRows) {
         console.warn('Supabase fetchVideos error:', error.message);
         return null;
       }
@@ -852,7 +740,6 @@ export const supabaseDb = {
       // Fetch users to populate creator info
       const usersList = await this.fetchUsers();
       const usersMap = new Map((usersList || []).map(u => [u.id, u]));
-      const usersUuidMap = new Map((usersList || []).map(u => [toUuid(u.id), u]));
 
       // Fetch hashtags
       let hashtagsMap = new Map<string, string[]>();
@@ -860,10 +747,9 @@ export const supabaseDb = {
         const { data: tags } = await client.from('VideoHashtag').select('*');
         if (tags) {
           tags.forEach((t: any) => {
-            const vId = t.VideoID || t.video_id;
-            const list = hashtagsMap.get(vId) || [];
-            list.push(t.HashtagName || t.hashtag_name);
-            hashtagsMap.set(vId, list);
+            const list = hashtagsMap.get(t.VideoID) || [];
+            list.push(t.HashtagName);
+            hashtagsMap.set(t.VideoID, list);
           });
         }
       } catch {
@@ -876,8 +762,7 @@ export const supabaseDb = {
         const { data: likes } = await client.from('Like').select('VideoID');
         if (likes) {
           likes.forEach((l: any) => {
-            const vId = l.VideoID || l.video_id;
-            likesCountMap.set(vId, (likesCountMap.get(vId) || 0) + 1);
+            likesCountMap.set(l.VideoID, (likesCountMap.get(l.VideoID) || 0) + 1);
           });
         }
       } catch {
@@ -890,8 +775,7 @@ export const supabaseDb = {
         const { data: comments } = await client.from('Comment').select('VideoID');
         if (comments) {
           comments.forEach((c: any) => {
-            const vId = c.VideoID || c.video_id;
-            commentsCountMap.set(vId, (commentsCountMap.get(vId) || 0) + 1);
+            commentsCountMap.set(c.VideoID, (commentsCountMap.get(c.VideoID) || 0) + 1);
           });
         }
       } catch {
@@ -899,61 +783,36 @@ export const supabaseDb = {
       }
 
       return videoRows.map((row: any) => {
-        const rowVidId = row.VideoID || row.videoid || row.id || row.video_id || `vid_${Math.random().toString(36).slice(2, 9)}`;
-        const rowUserId = row.UserID || row.userid || row.user_id || row.userId || 'creator';
+        const creator = usersMap.get(row.UserID) || {
+          id: row.UserID,
+          username: 'creator',
+          displayName: 'Creator',
+          avatar: '',
+          email: '',
+          bio: '',
+          followingCount: 0,
+          followersCount: 0,
+          likesCount: '0',
+          isPrivate: false,
+          role: 'creator' as const,
+        };
 
-        const creator =
-          usersMap.get(rowUserId) ||
-          usersUuidMap.get(toUuid(rowUserId)) ||
-          usersList?.find(u => isSameUser(u.id, rowUserId)) || {
-            id: rowUserId,
-            username: 'creator',
-            displayName: 'Creator',
-            avatar: '',
-            email: '',
-            bio: '',
-            followingCount: 0,
-            followersCount: 0,
-            likesCount: '0',
-            isPrivate: false,
-            role: 'creator' as const,
-          };
+        const hashtags = hashtagsMap.get(row.VideoID) || ['#viral', '#fyp'];
+        const likesCount = likesCountMap.get(row.VideoID) || 0;
+        const commentsCount = commentsCountMap.get(row.VideoID) || 0;
 
-        const hashtags =
-          hashtagsMap.get(rowVidId) ||
-          hashtagsMap.get(toUuid(rowVidId)) ||
-          ['#viral', '#fyp'];
-        const likesCount =
-          likesCountMap.get(rowVidId) ||
-          likesCountMap.get(toUuid(rowVidId)) ||
-          0;
-        const commentsCount =
-          commentsCountMap.get(rowVidId) ||
-          commentsCountMap.get(toUuid(rowVidId)) ||
-          0;
-
-        let safeMediaUrl =
-          row.VideoURL ||
-          row.video_url ||
-          row.videourl ||
-          row.media_url ||
-          row.url ||
-          row.MediaURL ||
-          '';
-
+        // If mediaUrl is a local blob (which is invalid across devices or after refresh),
+        // provide a high-performance streaming video fallback so it never renders as a black box!
+        let safeMediaUrl = row.VideoURL || '';
         if (!safeMediaUrl || safeMediaUrl.startsWith('blob:')) {
-          safeMediaUrl =
-            'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
+          safeMediaUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4';
         }
 
-        const rawThumb =
-          row.ThumbnailURL ||
-          row.thumbnail_url ||
-          row.thumbnail ||
-          '';
+        // Thumbnail must strictly be an image, NEVER a video file (.mp4, .webm, blob:)!
+        const rawThumb = row.ThumbnailURL || row.thumbnail_url || '';
         const isThumbVid = Boolean(
           rawThumb &&
-            (rawThumb.startsWith('blob:') || /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(rawThumb))
+          (rawThumb.startsWith('blob:') || /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(rawThumb))
         );
         let safeThumbnailUrl = '';
         if (rawThumb && !isThumbVid) {
@@ -964,30 +823,22 @@ export const supabaseDb = {
           safeThumbnailUrl = '';
         }
 
-        const rawStatus = row.Status || row.status;
-        const status = rawStatus ? String(rawStatus).toLowerCase() : 'approved';
-
         return {
-          id: rowVidId,
-          creatorId: rowUserId,
+          id: row.VideoID,
+          creatorId: row.UserID,
           creator,
-          caption: row.Caption || row.caption || row.text || '',
+          caption: row.Caption || '',
           hashtags,
           mediaUrl: safeMediaUrl,
           thumbnailUrl: safeThumbnailUrl,
           likesCount,
           commentsCount,
           sharesCount: 0,
-          viewsCount: String(row.ViewCount || row.view_count || row.views_count || 0),
+          viewsCount: String(row.ViewCount || 0),
           isLiked: false,
-          createdAt:
-            row.PublishedAt ||
-            row.published_at ||
-            row.created_at ||
-            row.CreatedAt ||
-            new Date().toISOString(),
-          status: status === 'rejected' ? 'rejected' : status === 'pending' ? 'pending' : 'approved',
-          rejectionReason: row.RejectionReason || row.rejection_reason || undefined,
+          createdAt: row.PublishedAt || new Date().toISOString(),
+          status: (row.Status as any) || 'approved',
+          rejectionReason: row.RejectionReason || undefined,
           appealStatus: (row.AppealStatus as any) || (row.appeal_status as any) || 'none',
           appealReason: row.AppealReason || row.appeal_reason || undefined,
         };
@@ -1008,7 +859,7 @@ export const supabaseDb = {
 
       // 1. Ensure creator exists in User table and resolve true UserID
       if (video.creator) {
-        await this.upsertUser(video.creator).catch(() => {});
+        await this.upsertUser(video.creator);
         if (video.creator.email) {
           try {
             const { data: dbUser } = await client
@@ -1024,72 +875,58 @@ export const supabaseDb = {
         }
       }
 
-      // 2. Prepare payload without columns that may not exist in the database
-      const payloadPascal: Record<string, any> = {
+      // 2. Prepare payload
+      const payload: Record<string, any> = {
         VideoID: videoUuid,
         UserID: userUuid,
+        AudioTrackID: null, // Avoid foreign key violations on unseeded AudioTrack table
         VideoURL: video.mediaUrl,
         Caption: video.caption || '',
-        PublishedAt: video.createdAt || new Date().toISOString(),
+        PublishedAt: new Date().toISOString(),
         ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
         Status: video.status || 'approved',
         RejectionReason: video.rejectionReason || null,
+        AppealStatus: video.appealStatus || 'none',
+        AppealReason: video.appealReason || null,
       };
 
       // 3. Upsert into Video table
-      let { error } = await client.from('Video').upsert(payloadPascal, { onConflict: 'VideoID' });
+      let { error } = await client.from('Video').upsert(payload, { onConflict: 'VideoID' });
 
       // Fallback 1: Column 'Status' or 'RejectionReason' does not exist
-      if (error && (error.code === '42703' || error.message?.includes('column') || error.message?.includes('Status'))) {
-        const { Status: _, RejectionReason: __, ...basicPayload } = payloadPascal;
+      if (error && (error.code === '42703' || error.message?.includes('Status') || error.message?.includes('column'))) {
+        const { Status: _, RejectionReason: __, ...basicPayload } = payload;
         const retry1 = await client.from('Video').upsert(basicPayload, { onConflict: 'VideoID' });
         error = retry1.error;
       }
 
-      // Fallback 2: Try plain insert if onConflict fails or has constraint mismatch
-      if (error && (error.code === '42P10' || error.message?.includes('conflict') || error.message?.includes('constraint'))) {
-        const insertRes = await client.from('Video').insert(payloadPascal);
-        error = insertRes.error;
-      }
-
-      // Fallback 3: Foreign key violation on UserID
+      // Fallback 2: Foreign key violation on AudioTrackID or UserID
       if (error && (error.code === '23503' || error.message?.includes('foreign key'))) {
-        // Create minimal user row to satisfy foreign key
-        try {
-          await client.from('User').insert({
-            UserID: userUuid,
-            Username: video.creator?.username || `user_${userUuid.slice(0, 8)}`,
-            Email: video.creator?.email || `user_${userUuid.slice(0, 8)}@viralhub.app`,
-            DisplayName: video.creator?.displayName || 'User',
-            Password: 'user_secret',
-            RegistrationDate: new Date().toISOString(),
-          });
-          const retryUser = await client.from('Video').upsert(payloadPascal, { onConflict: 'VideoID' });
-          error = retryUser.error;
-        } catch {}
+        const strippedPayload = {
+          VideoID: videoUuid,
+          UserID: userUuid,
+          VideoURL: video.mediaUrl,
+          Caption: video.caption || '',
+          PublishedAt: new Date().toISOString(),
+          ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
+        };
+        const retry2 = await client.from('Video').upsert(strippedPayload, { onConflict: 'VideoID' });
+        error = retry2.error;
       }
 
-      // Fallback 4: Try lowercase 'videos' table (snake_case schema)
+      // Fallback 3: Try lowercase 'videos' table
       if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
-        const snakePayload: Record<string, any> = {
+        const snakePayload = {
           id: videoUuid,
           user_id: userUuid,
           video_url: video.mediaUrl,
           caption: video.caption || '',
-          created_at: video.createdAt || new Date().toISOString(),
+          created_at: new Date().toISOString(),
           views_count: parseInt(video.viewsCount || '0', 10) || 0,
           status: video.status || 'approved',
         };
-        let retrySnake = await client.from('videos').upsert(snakePayload, { onConflict: 'id' });
-        if (retrySnake.error && (retrySnake.error.code === '42703' || retrySnake.error.message?.includes('column'))) {
-          const { status: _, ...basicSnake } = snakePayload;
-          retrySnake = await client.from('videos').upsert(basicSnake, { onConflict: 'id' });
-        }
-        if (retrySnake.error) {
-          // Try plain insert
-          retrySnake = await client.from('videos').insert(snakePayload);
-        }
-        error = retrySnake.error;
+        const retry3 = await client.from('videos').upsert(snakePayload, { onConflict: 'id' });
+        error = retry3.error;
       }
 
       if (error) {
@@ -1759,29 +1596,6 @@ export const supabaseDb = {
     }
   },
 
-  async deleteConversation(conversationId: string, userId?: string): Promise<boolean> {
-    const client = getSupabaseClient();
-    if (!client || !conversationId) return false;
-
-    try {
-      const convUuid = toUuid(conversationId);
-      // Delete messages belonging to conversation
-      await client
-        .from('Message')
-        .delete()
-        .or(`ConversationID.eq.${convUuid},ConversationID.eq.${conversationId}`);
-      // Delete conversation entry
-      await client
-        .from('Conversation')
-        .delete()
-        .or(`ConversationID.eq.${convUuid},ConversationID.eq.${conversationId}`);
-      return true;
-    } catch (e) {
-      console.warn('Supabase deleteConversation fallback:', e);
-      return false;
-    }
-  },
-
   // -----------------------------------------------------------------------
   // 8. Notification Table (NotificationID, UserID, NotificationType, NotificationMessage, IsRead, NotificationDate)
   // -----------------------------------------------------------------------
@@ -1803,7 +1617,7 @@ export const supabaseDb = {
         appealStatus: item.appealStatus,
       });
 
-      let { error } = await client.from('Notification').insert({
+      const { error } = await client.from('Notification').insert({
         NotificationID: notifUuid,
         UserID: userUuid,
         NotificationType: item.type,
@@ -1811,19 +1625,6 @@ export const supabaseDb = {
         IsRead: !item.isUnread,
         NotificationDate: item.createdAt || item.timestamp || new Date().toISOString(),
       });
-
-      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
-        // Fallback for snake_case table
-        const resSnake = await client.from('notifications').insert({
-          id: notifUuid,
-          user_id: userUuid,
-          type: item.type,
-          content: payloadString,
-          is_read: !item.isUnread,
-          created_at: item.createdAt || item.timestamp || new Date().toISOString(),
-        });
-        error = resSnake.error;
-      }
 
       return !error;
     } catch (e) {
