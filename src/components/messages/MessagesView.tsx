@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useApp, deduplicateConversations } from '../../context/AppContext';
+import { useApp, deduplicateConversations, getConversationClearedTimestamp } from '../../context/AppContext';
 import { Conversation, User, MessageReplyInfo, Message, Video } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { MessageVideoCard } from './MessageVideoCard';
@@ -352,6 +352,31 @@ export const MessagesView: React.FC = () => {
               const unread = getUnreadCount(conv);
               const isSelected = activeConv?.id === conv.id;
 
+              const convClearTime = Math.max(
+                getConversationClearedTimestamp(conv.id, currentUser?.id),
+                conv.clearedHistoryAt?.[currentUser?.id || ''] || 0,
+                conv.clearedHistoryAt?.[toUuid(currentUser?.id || '')] || 0
+              );
+
+              const convVisibleMsgs = (conv.messages || []).filter(m => {
+                if (currentUser && m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
+                if (convClearTime > 0) {
+                  if (m.sentAt && new Date(m.sentAt).getTime() <= convClearTime) return false;
+                  if (typeof m.id === 'string' && m.id.startsWith('m_')) {
+                    const parts = m.id.split('_');
+                    const t = parseInt(parts[1], 10);
+                    if (t > 0 && t <= convClearTime) return false;
+                  }
+                }
+                return true;
+              });
+
+              const lastVisible = convVisibleMsgs[convVisibleMsgs.length - 1];
+              const displayLastMessage = lastVisible
+                ? (lastVisible.sharedVideo ? `🎥 Shared a video` : lastVisible.text)
+                : 'Started a new conversation';
+              const displayLastTime = lastVisible ? lastVisible.timestamp : conv.lastMessageTime;
+
               return (
                 <div
                   key={conv.id}
@@ -380,7 +405,7 @@ export const MessagesView: React.FC = () => {
                         {participant.displayName}
                       </div>
                       <div className="text-[11px] text-neutral-400 truncate mt-0.5">
-                        {conv.lastMessage}
+                        {displayLastMessage}
                       </div>
                     </div>
                   </div>
@@ -388,7 +413,7 @@ export const MessagesView: React.FC = () => {
                   {/* Right side: Timestamp, Unread Badge, and Delete Conversation */}
                   <div className="flex flex-col items-end shrink-0 ml-2">
                     <div className="text-[10px] text-neutral-500 font-medium">
-                      {conv.lastMessageTime}
+                      {displayLastTime}
                     </div>
 
                     <div className="mt-1 flex items-center gap-1.5">
@@ -615,14 +640,26 @@ export const MessagesView: React.FC = () => {
             {/* Messages Bubbles Stream */}
             <div className="flex-1 overflow-y-auto py-4 space-y-4 pr-1 text-left min-h-0">
               {(() => {
-                const userClearedTimestamp = activeConv.clearedHistoryAt?.[currentUser?.id || ''] || 0;
-                const visibleMessages = activeConv.messages.filter(msg => {
+                const userClearedTimestamp = Math.max(
+                  getConversationClearedTimestamp(activeConv.id, currentUser?.id),
+                  activeConv.clearedHistoryAt?.[currentUser?.id || ''] || 0,
+                  activeConv.clearedHistoryAt?.[toUuid(currentUser?.id || '')] || 0
+                );
+                const visibleMessages = (activeConv.messages || []).filter(msg => {
+                  // Hide if explicitly marked deleted for this user
+                  if (currentUser && msg.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) {
+                    return false;
+                  }
+                  // Hide if created on or before the conversation was cleared for this user
                   if (userClearedTimestamp > 0) {
-                    const msgTime = typeof msg.id === 'string' && msg.id.startsWith('m_')
-                      ? parseInt(msg.id.replace('m_', ''), 10)
-                      : 0;
-                    if (msgTime > 0 && msgTime <= userClearedTimestamp) {
-                      return false;
+                    if (msg.sentAt) {
+                      const t = new Date(msg.sentAt).getTime();
+                      if (t > 0 && t <= userClearedTimestamp) return false;
+                    }
+                    if (typeof msg.id === 'string' && msg.id.startsWith('m_')) {
+                      const parts = msg.id.split('_');
+                      const t = parseInt(parts[1], 10);
+                      if (t > 0 && t <= userClearedTimestamp) return false;
                     }
                   }
                   return true;

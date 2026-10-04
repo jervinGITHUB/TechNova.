@@ -103,6 +103,7 @@ export interface Message {
   senderId: string;
   text: string;
   timestamp: string;
+  sentAt?: string;
   isMine: boolean;
   status: 'sent' | 'delivered' | 'read';
   replyTo?: MessageReplyInfo;

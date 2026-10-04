@@ -108,6 +108,11 @@ export const deduplicateConversations = (
         ...(c.unreadCounts || {}),
       };
 
+      const combinedClearedHistoryAt = {
+        ...(existing.clearedHistoryAt || {}),
+        ...(c.clearedHistoryAt || {}),
+      };
+
       partnerMap.set(canonicalKey, {
         ...existing,
         id: canonicalId,
@@ -119,6 +124,7 @@ export const deduplicateConversations = (
         unreadCount: Math.max(existing.unreadCount || 0, c.unreadCount || 0),
         unreadCounts: combinedUnreadCounts,
         deletedForUserIds: Array.from(new Set([...(existing.deletedForUserIds || []), ...(c.deletedForUserIds || [])])),
+        clearedHistoryAt: combinedClearedHistoryAt,
       });
     } else {
       const canonicalId = (currentUserId && partnerId)
@@ -136,6 +142,23 @@ export const deduplicateConversations = (
   }
 
   return Array.from(partnerMap.values());
+};
+
+export const getConversationClearedTimestamp = (convId: string, userId?: string | null): number => {
+  if (!convId || !userId) return 0;
+  const canonicalId = toUuid(convId);
+  const uUuid = toUuid(userId);
+  const key1 = `cleared_conv_${canonicalId}_${uUuid}`;
+  const key2 = `cleared_conv_${convId}_${userId}`;
+  return storage.get<number>(key1, 0) || storage.get<number>(key2, 0) || 0;
+};
+
+export const setConversationClearedTimestamp = (convId: string, userId: string, timestamp: number) => {
+  if (!convId || !userId) return;
+  const canonicalId = toUuid(convId);
+  const uUuid = toUuid(userId);
+  storage.set(`cleared_conv_${canonicalId}_${uUuid}`, timestamp);
+  storage.set(`cleared_conv_${convId}_${userId}`, timestamp);
 };
 
 // Persistent set of notification IDs that were marked as read by user
@@ -887,6 +910,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   role: 'creator' as const,
                 };
 
+              const clearTime = Math.max(
+                getConversationClearedTimestamp(rc.id, currentUser.id),
+                existingConv?.clearedHistoryAt?.[currentUser.id] || 0,
+                existingConv?.clearedHistoryAt?.[toUuid(currentUser.id)] || 0
+              );
+
               const rawMessages = rc.rawMessages || [];
               const parsedMessages: Message[] = rawMessages.map((m: any) => {
                 const isMine = isSameUser(m.SenderUserID, currentUser.id);
@@ -903,16 +932,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
                 const matchedSharedVideo = sharedVideoId ? videos.find(v => v.id === sharedVideoId || toUuid(v.id) === toUuid(sharedVideoId)) : undefined;
 
+                const matchedExistingMsg = existingConv?.messages?.find(
+                  em => em.id === m.MessageID || (em.text === msgContent && em.timestamp)
+                );
+                let deletedFor = [...(matchedExistingMsg?.deletedForUserIds || [])];
+
+                // If conversation was cleared before or at this message's sentAt time, hide it for currentUser
+                if (clearTime > 0 && m.SentAt) {
+                  const sentTime = new Date(m.SentAt).getTime();
+                  if (sentTime > 0 && sentTime <= clearTime) {
+                    if (!deletedFor.some(id => isSameUser(id, currentUser.id))) {
+                      deletedFor.push(currentUser.id);
+                    }
+                  }
+                }
+
                 return {
                   id: m.MessageID || `msg_${Date.now()}`,
                   conversationId: rc.id,
                   senderId: m.SenderUserID,
                   text: msgContent,
                   timestamp: m.SentAt ? new Date(m.SentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today',
+                  sentAt: m.SentAt,
                   isMine,
                   status: 'read' as const,
                   sharedVideo: matchedSharedVideo,
                   sharedVideoId,
+                  deletedForUserIds: deletedFor,
                 };
               });
 
@@ -934,6 +980,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 messages: allMsgs,
                 isOnline: true,
                 deletedForUserIds: existingConv?.deletedForUserIds || [],
+                clearedHistoryAt: existingConv?.clearedHistoryAt || {},
               };
             });
 
@@ -2731,16 +2778,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (existing) {
       if (existing.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) {
-        setConversations(prev =>
-          prev.map(c =>
-            c.id === existing.id || toUuid(c.id) === toUuid(existing.id)
-              ? {
-                  ...c,
-                  deletedForUserIds: (c.deletedForUserIds || []).filter(id => !isSameUser(id, currentUser.id)),
-                }
-              : c
-          )
-        );
+        setConversations(prev => {
+          const next = prev.map(c => {
+            if (c.id === existing.id || toUuid(c.id) === toUuid(existing.id)) {
+              // Mark all prior messages as deleted for currentUser so past messages never show up
+              const updatedMessages = (c.messages || []).map(m => {
+                const mDeleted = m.deletedForUserIds || [];
+                return mDeleted.some(id => isSameUser(id, currentUser.id))
+                  ? m
+                  : { ...m, deletedForUserIds: [...mDeleted, currentUser.id] };
+              });
+
+              return {
+                ...c,
+                deletedForUserIds: (c.deletedForUserIds || []).filter(id => !isSameUser(id, currentUser.id)),
+                messages: updatedMessages,
+                lastMessage: 'Started a new conversation',
+                lastMessageTime: 'Just now',
+              };
+            }
+            return c;
+          });
+          storage.set('conversations', next);
+          return next;
+        });
       }
       openConversation(existing.id);
       setMessagesMobileView('chat');
@@ -2887,25 +2948,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // The other user still sees the conversation and its full history!
   const deleteConversation = (convId: string) => {
     if (!currentUser) return;
-    setConversations(prev =>
-      prev.map(c => {
-        if (c.id === convId) {
+    const now = Date.now();
+    setConversationClearedTimestamp(convId, currentUser.id, now);
+
+    setConversations(prev => {
+      const next = prev.map(c => {
+        if (c.id === convId || toUuid(c.id) === toUuid(convId)) {
           const currentDeleted = c.deletedForUserIds || [];
+          const updatedMessages = (c.messages || []).map(m => {
+            const mDeleted = m.deletedForUserIds || [];
+            return mDeleted.some(id => isSameUser(id, currentUser.id))
+              ? m
+              : { ...m, deletedForUserIds: [...mDeleted, currentUser.id] };
+          });
+
           return {
             ...c,
-            deletedForUserIds: currentDeleted.includes(currentUser.id)
+            deletedForUserIds: currentDeleted.some(id => isSameUser(id, currentUser.id))
               ? currentDeleted
               : [...currentDeleted, currentUser.id],
             clearedHistoryAt: {
               ...(c.clearedHistoryAt || {}),
-              [currentUser.id]: Date.now(),
+              [currentUser.id]: now,
+              [toUuid(currentUser.id)]: now,
             },
+            messages: updatedMessages,
+            lastMessage: 'Started a new conversation',
+            lastMessageTime: 'Just now',
+            unreadCounts: {
+              ...(c.unreadCounts || {}),
+              [currentUser.id]: 0,
+            },
+            unreadCount: 0,
           };
         }
         return c;
-      })
-    );
-    if (activeConversationId === convId) {
+      });
+      storage.set('conversations', next);
+      return next;
+    });
+
+    if (activeConversationId === convId || toUuid(activeConversationId || '') === toUuid(convId)) {
       setActiveConversationId(null);
       setMessagesMobileView('list');
     }
@@ -2914,10 +2997,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Delete message: Deleted for BOTH users' POVs (deleted / unsent for everyone)
   const deleteMessage = (convId: string, messageId: string) => {
     if (!currentUser) return;
-    setConversations(prev =>
-      prev.map(c => {
-        if (c.id === convId) {
-          const remainingMessages = c.messages.filter(m => m.id !== messageId);
+    setConversations(prev => {
+      const next = prev.map(c => {
+        if (c.id === convId || toUuid(c.id) === toUuid(convId)) {
+          const remainingMessages = c.messages.filter(m => m.id !== messageId && toUuid(m.id) !== toUuid(messageId));
           const last = remainingMessages[remainingMessages.length - 1];
 
           return {
@@ -2928,8 +3011,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
         }
         return c;
-      })
-    );
+      });
+      storage.set('conversations', next);
+      return next;
+    });
   };
 
   const markAllNotificationsAsRead = () => {
