@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import { ViralHubLogo } from '../common/ViralHubLogo';
@@ -32,6 +32,12 @@ export const BannedAccountView: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // When BannedAccountView is displayed on any device, automatically check Supabase once
+  // so if the ban was lifted or appeal was approved on another device, this device immediately unlocks!
+  useEffect(() => {
+    syncWithSupabase();
+  }, []);
 
   if (!currentUser) return null;
 

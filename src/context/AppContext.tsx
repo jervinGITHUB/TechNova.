@@ -959,28 +959,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase()) ||
                 (currentUser.username && u.username && u.username.toLowerCase() === currentUser.username.toLowerCase())
             );
-            const banInfo = checkIsUserBanned(
-              currentUser.id,
-              currentUser.email,
-              currentUser.isBanned ? currentUser : (freshMe || currentUser)
-            );
+            // Supabase is the single authoritative source of truth for ban and unban status!
+            let finalIsBanned = false;
+            let finalAppealStatus: 'none' | 'pending' | 'approved' | 'declined' = 'none';
+            let finalBanReason: string | undefined = undefined;
+            let finalBannedAt: string | undefined = undefined;
 
-            // Once banned, a user CANNOT be unbanned by background sync unless an appeal was approved or admin explicitly unbanned them
-            const finalIsBanned = currentUser.isBanned
-              ? (banInfo.appealStatus === 'approved' || freshMe?.appealStatus === 'approved' ? false : true)
-              : banInfo.isBanned;
+            if (freshMe) {
+              // User exists in remote database: trust database status directly!
+              finalIsBanned = Boolean(freshMe.isBanned) && freshMe.appealStatus !== 'approved';
+              finalAppealStatus = (freshMe.appealStatus as any) || (finalIsBanned ? 'none' : 'approved');
+              finalBanReason = finalIsBanned ? (freshMe.banReason || 'Violation of Community Guidelines') : undefined;
+              finalBannedAt = finalIsBanned ? freshMe.bannedAt : undefined;
+            } else {
+              const banInfo = checkIsUserBanned(
+                currentUser.id,
+                currentUser.email,
+                currentUser
+              );
+              finalIsBanned = banInfo.isBanned;
+              finalAppealStatus = banInfo.appealStatus;
+              finalBanReason = banInfo.isBanned ? banInfo.banReason : undefined;
+              finalBannedAt = banInfo.isBanned ? banInfo.bannedAt : undefined;
+            }
 
-            const finalBanReason = finalIsBanned
-              ? (banInfo.banReason || currentUser.banReason || freshMe?.banReason || 'Violation of Community Guidelines')
-              : undefined;
-
-            const finalBannedAt = finalIsBanned
-              ? (banInfo.bannedAt || currentUser.bannedAt || freshMe?.bannedAt || new Date().toISOString())
-              : undefined;
+            if (!finalIsBanned) {
+              recordUserUnban(currentUser.id, currentUser.email, currentUser.username);
+            }
 
             if (
               finalIsBanned !== currentUser.isBanned ||
-              banInfo.appealStatus !== currentUser.appealStatus ||
+              finalAppealStatus !== currentUser.appealStatus ||
               (freshMe && (freshMe.displayName !== currentUser.displayName || freshMe.avatar !== currentUser.avatar))
             ) {
               const updatedCurr: User = {
@@ -989,9 +998,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 isBanned: finalIsBanned,
                 banReason: finalBanReason,
                 bannedAt: finalBannedAt,
-                appealStatus: banInfo.appealStatus,
-                appealReason: banInfo.appealReason,
-                appealSubmittedAt: banInfo.appealSubmittedAt,
+                appealStatus: finalAppealStatus,
+                appealReason: freshMe?.appealReason || (finalIsBanned ? currentUser.appealReason : undefined),
+                appealSubmittedAt: freshMe?.appealSubmittedAt || (finalIsBanned ? currentUser.appealSubmittedAt : undefined),
               };
               setCurrentUser(updatedCurr);
               storage.set('currentUser', updatedCurr);
@@ -1354,18 +1363,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Always re-use existing UserID if this email already has an account!
     const finalUserId = existingUser?.id || sbUser.id;
-    const activeStored = storage.get<User | null>('currentUser', null);
-    const wasBanned = activeStored?.isBanned || existingUser?.isBanned;
-
-    const banInfo = checkIsUserBanned(
-      finalUserId,
-      sbUser.email || email,
-      wasBanned ? (activeStored?.isBanned ? activeStored : existingUser) : existingUser
-    );
-
-    const isBannedFinal = wasBanned
-      ? (banInfo.appealStatus === 'approved' ? false : true)
+    const banInfo = checkIsUserBanned(finalUserId, sbUser.email || email, existingUser);
+    // Determine ban status authoritatively from database record (existingUser)
+    const isBannedFinal = existingUser
+      ? Boolean(existingUser.isBanned) && existingUser.appealStatus !== 'approved'
       : banInfo.isBanned;
+
+    if (!isBannedFinal) {
+      recordUserUnban(finalUserId, sbUser.email || email, existingUser?.username || username);
+    }
 
     const finalUser: User = {
       id: finalUserId,
@@ -1380,11 +1386,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       isPrivate: existingUser?.isPrivate || false,
       role: isAdminRole ? 'admin' : (existingUser?.role || 'creator'),
       isBanned: isBannedFinal,
-      banReason: isBannedFinal ? (banInfo.banReason || activeStored?.banReason || existingUser?.banReason || 'Violation of Community Guidelines') : undefined,
-      bannedAt: isBannedFinal ? (banInfo.bannedAt || activeStored?.bannedAt || existingUser?.bannedAt || new Date().toISOString()) : undefined,
-      appealStatus: banInfo.appealStatus,
-      appealReason: banInfo.appealReason,
-      appealSubmittedAt: banInfo.appealSubmittedAt,
+      banReason: isBannedFinal ? (existingUser?.banReason || banInfo.banReason || 'Violation of Community Guidelines') : undefined,
+      bannedAt: isBannedFinal ? (existingUser?.bannedAt || banInfo.bannedAt || new Date().toISOString()) : undefined,
+      appealStatus: isBannedFinal ? (existingUser?.appealStatus || banInfo.appealStatus) : 'approved',
+      appealReason: existingUser?.appealReason || banInfo.appealReason,
+      appealSubmittedAt: existingUser?.appealSubmittedAt || banInfo.appealSubmittedAt,
     };
 
     setCurrentUser(finalUser);
@@ -2135,13 +2141,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             const rawRole = String(dbUser.Role || dbUser.role || '').toLowerCase();
             const isAdminRecord = rawRole === 'admin' || rawRole === 'super admin' || rawRole === 'administrator' || rawRole === 'content moderator';
+            const isBannedInDb = Boolean(dbUser.IsBanned || dbUser.is_banned);
+            const appealStatusInDb = dbUser.AppealStatus || dbUser.appeal_status || 'none';
+            const isUserBannedInDb = isBannedInDb && appealStatusInDb !== 'approved';
+
+            if (!isUserBannedInDb) {
+              recordUserUnban(
+                dbUser.UserID || dbUser.id,
+                dbUser.Email || dbUser.email,
+                dbUser.Username || dbUser.username
+              );
+            }
+
             const banInfo = checkIsUserBanned(dbUser.UserID || dbUser.id, dbUser.Email || dbUser.email, {
               id: dbUser.UserID || dbUser.id,
               username: dbUser.Username || dbUser.username,
-              isBanned: Boolean(dbUser.IsBanned || dbUser.is_banned),
-              banReason: dbUser.BanReason || dbUser.ban_reason,
-              bannedAt: dbUser.BannedAt || dbUser.banned_at,
-              appealStatus: dbUser.AppealStatus || dbUser.appeal_status,
+              isBanned: isUserBannedInDb,
+              banReason: isUserBannedInDb ? (dbUser.BanReason || dbUser.ban_reason) : undefined,
+              bannedAt: isUserBannedInDb ? (dbUser.BannedAt || dbUser.banned_at) : undefined,
+              appealStatus: (appealStatusInDb || (isUserBannedInDb ? 'none' : 'approved')) as any,
+              appealReason: dbUser.AppealReason || dbUser.appeal_reason,
+              appealSubmittedAt: dbUser.AppealSubmittedAt || dbUser.appeal_submitted_at,
             });
 
             const loggedInUser: User = {
@@ -2156,12 +2176,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               likesCount: '0',
               isPrivate: dbUser.IsPublic !== undefined ? !dbUser.IsPublic : false,
               role: isAdminRecord ? 'admin' : ((dbUser.Role || 'creator') as any),
-              isBanned: banInfo.isBanned,
-              banReason: banInfo.isBanned ? banInfo.banReason : undefined,
-              bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
-              appealStatus: banInfo.appealStatus,
-              appealReason: banInfo.appealReason,
-              appealSubmittedAt: banInfo.appealSubmittedAt,
+              isBanned: isUserBannedInDb,
+              banReason: isUserBannedInDb ? (dbUser.BanReason || dbUser.ban_reason || 'Violation of Community Guidelines') : undefined,
+              bannedAt: isUserBannedInDb ? (dbUser.BannedAt || dbUser.banned_at) : undefined,
+              appealStatus: (appealStatusInDb || (isUserBannedInDb ? 'none' : 'approved')) as any,
+              appealReason: dbUser.AppealReason || dbUser.appeal_reason,
+              appealSubmittedAt: dbUser.AppealSubmittedAt || dbUser.appeal_submitted_at,
             };
 
             setCurrentUser(loggedInUser);
