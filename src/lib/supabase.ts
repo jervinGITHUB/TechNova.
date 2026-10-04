@@ -1289,6 +1289,78 @@ export const supabaseDb = {
     }
   },
 
+  async uploadProfilePicture(file: File, userId?: string): Promise<{ url: string | null; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { url: null, error: 'Supabase client is not connected' };
+
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const safeUserId = userId ? toUuid(userId).replace(/-/g, '') : Date.now();
+      const cleanFileName = `avatar_${safeUserId}_${Date.now()}.${ext}`;
+      const mimeType = file.type || (ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
+
+      // Candidate buckets - priority given to "profile picture" (matching the user's bucket in Supabase)
+      let candidateBuckets: string[] = [
+        'profile picture',
+        'Profile Picture',
+        'profile-picture',
+        'profile_picture',
+        'profile-pictures',
+        'profile_pictures',
+        'avatars',
+        'images',
+        'public',
+        'videos',
+      ];
+
+      try {
+        const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
+        if (!bucketError && bucketList && bucketList.length > 0) {
+          const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
+          // Prioritize any bucket with "profile", "avatar", or "picture" in the name
+          const profileBuckets = discovered.filter(b => /profile|avatar|picture/i.test(b));
+          const otherDiscovered = discovered.filter(b => !/profile|avatar|picture/i.test(b));
+          candidateBuckets = Array.from(new Set([...profileBuckets, ...candidateBuckets, ...otherDiscovered]));
+        }
+      } catch {
+        // ignore listBuckets failure
+      }
+
+      let lastError: any = null;
+
+      for (const bucket of candidateBuckets) {
+        const tryPaths = [cleanFileName, `avatars/${cleanFileName}`];
+
+        for (const targetPath of tryPaths) {
+          try {
+            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
+              contentType: mimeType,
+              cacheControl: '3600',
+              upsert: true,
+            });
+
+            if (!error && data?.path) {
+              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
+              if (pubData?.publicUrl) {
+                return { url: pubData.publicUrl };
+              }
+            }
+            if (error) {
+              lastError = error;
+            }
+          } catch (err: any) {
+            lastError = err;
+          }
+        }
+      }
+
+      return { url: null, error: lastError?.message || 'Failed to upload profile picture to storage bucket' };
+    } catch (e: any) {
+      console.warn('Supabase uploadProfilePicture exception:', e);
+      return { url: null, error: e?.message || 'Profile picture upload failed' };
+    }
+  },
+
   async deleteVideoFileFromStorage(mediaUrl?: string | null): Promise<boolean> {
     if (!mediaUrl) return false;
     const client = getSupabaseClient();

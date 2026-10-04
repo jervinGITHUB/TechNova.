@@ -279,7 +279,7 @@ interface AppContextType {
   totalUnreadNotifications: number;
 
   // Actions
-  updateUserProfile: (updates: Partial<User>) => void;
+  updateUserProfile: (updates: Partial<User>) => Promise<void>;
   toggleFollowUser: (userId: string) => void;
   toggleLikeVideo: (videoId: string) => void;
   addCommentToVideo: (videoId: string, text: string, replyToCommentId?: string) => Promise<boolean>;
@@ -2143,12 +2143,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Profile update (BR-002)
-  const updateUserProfile = (updates: Partial<User>) => {
+  const updateUserProfile = async (updates: Partial<User>) => {
     if (!currentUser) return;
     const updated = { ...currentUser, ...updates };
     setCurrentUser(updated);
+    storage.set('currentUser', updated);
+    recordSavedAccount(updated);
     setUsers(prev => prev.map(u => (u.id === currentUser.id ? updated : u)));
-    supabaseDb.upsertUser(updated);
+    await supabaseDb.upsertUser(updated);
   };
 
   // Follow & Relationship System (BR-011, BR-012, Friends mutual follow, Private requests)
