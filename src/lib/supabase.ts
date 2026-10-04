@@ -2764,4 +2764,20 @@ BEGIN
     CREATE POLICY "Public Videos Access" ON storage.objects FOR ALL USING (bucket_id = 'videos') WITH CHECK (bucket_id = 'videos');
   END IF;
 END $$;
+
+-- 6. REALTIME REPLICATION (Safe & non-destructive: pushes INSERT events via WebSockets with 0 Disk IO)
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'Message') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public."Message";
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'Conversation') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public."Conversation";
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'Notification') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public."Notification";
+  END IF;
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END $$;
 `;

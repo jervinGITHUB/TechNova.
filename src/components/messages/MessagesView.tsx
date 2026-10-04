@@ -125,9 +125,36 @@ export const MessagesView: React.FC = () => {
         ? conv.participantIds.some(id => isSameUser(id, currentUser.id))
         : conv.participant && !isSameUser(conv.participant.id, currentUser.id);
       if (!isPart) return false;
-      if (conv.deletedForUserIds && conv.deletedForUserIds.some(id => isSameUser(id, currentUser.id))) {
-        return false;
+
+      // Check if user previously marked this conversation as deleted
+      const isMarkedDeleted = conv.deletedForUserIds && conv.deletedForUserIds.some(id => isSameUser(id, currentUser.id));
+      if (isMarkedDeleted) {
+        // If there are new visible messages sent after clear timestamp, automatically unhide!
+        const convClearTime = Math.max(
+          getConversationClearedTimestamp(conv.id, currentUser.id),
+          conv.clearedHistoryAt?.[currentUser.id] || 0,
+          conv.clearedHistoryAt?.[toUuid(currentUser.id)] || 0
+        );
+
+        const hasNewVisibleMsg = (conv.messages || []).some(m => {
+          if (m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
+          if (convClearTime > 0) {
+            const sentTime = m.sentAt ? new Date(m.sentAt).getTime() : 0;
+            if (sentTime > 0 && sentTime <= convClearTime) return false;
+            if (typeof m.id === 'string' && m.id.startsWith('m_')) {
+              const parts = m.id.split('_');
+              const t = parseInt(parts[1], 10);
+              if (t > 0 && t <= convClearTime) return false;
+            }
+          }
+          return true;
+        });
+
+        if (!hasNewVisibleMsg) {
+          return false;
+        }
       }
+
       return true;
     });
 

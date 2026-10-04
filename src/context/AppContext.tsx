@@ -113,6 +113,18 @@ export const deduplicateConversations = (
         ...(c.clearedHistoryAt || {}),
       };
 
+      const clearTime = (currentUserId && combinedClearedHistoryAt)
+        ? (combinedClearedHistoryAt[currentUserId] || combinedClearedHistoryAt[toUuid(currentUserId)] || 0)
+        : 0;
+      const hasNewIncoming = combinedMessages.some(
+        m => !isSameUser(m.senderId, currentUserId) && (!clearTime || (m.sentAt && new Date(m.sentAt).getTime() > clearTime))
+      );
+
+      let mergedDeletedFor = Array.from(new Set([...(existing.deletedForUserIds || []), ...(c.deletedForUserIds || [])]));
+      if (hasNewIncoming && currentUserId) {
+        mergedDeletedFor = mergedDeletedFor.filter(id => !isSameUser(id, currentUserId));
+      }
+
       partnerMap.set(canonicalKey, {
         ...existing,
         id: canonicalId,
@@ -123,7 +135,7 @@ export const deduplicateConversations = (
         messages: combinedMessages,
         unreadCount: Math.max(existing.unreadCount || 0, c.unreadCount || 0),
         unreadCounts: combinedUnreadCounts,
-        deletedForUserIds: Array.from(new Set([...(existing.deletedForUserIds || []), ...(c.deletedForUserIds || [])])),
+        deletedForUserIds: mergedDeletedFor,
         clearedHistoryAt: combinedClearedHistoryAt,
       });
     } else {
@@ -653,6 +665,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const dismissNotificationPopup = () => setActiveNotificationPopup(null);
   const knownNotificationIdsRef = React.useRef<Set<string>>(new Set());
   const initialNotifSyncDoneRef = React.useRef<boolean>(false);
+  const chatBroadcastChannelRef = React.useRef<any>(null);
 
   // Verify whether the logged in user is an Administrator directly from Supabase / role
   useEffect(() => {
@@ -969,6 +982,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const allMsgs = [...parsedMessages, ...localOnlyMsgs];
               const lastM = allMsgs[allMsgs.length - 1];
 
+              // Check if any incoming message from the partner arrived after clearTime (auto-unhide)
+              const hasNewIncomingMsg = allMsgs.some(pm =>
+                !isSameUser(pm.senderId, currentUser.id) &&
+                (!clearTime || (pm.sentAt && new Date(pm.sentAt).getTime() > clearTime))
+              );
+
+              let convDeletedForUserIds = [...(existingConv?.deletedForUserIds || [])];
+              if (hasNewIncomingMsg) {
+                convDeletedForUserIds = convDeletedForUserIds.filter(id => !isSameUser(id, currentUser.id));
+              }
+
               return {
                 id: rc.id,
                 participantIds: [currentUser.id, partnerId],
@@ -979,7 +1003,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 unreadCounts: existingConv ? existingConv.unreadCounts : {},
                 messages: allMsgs,
                 isOnline: true,
-                deletedForUserIds: existingConv?.deletedForUserIds || [],
+                deletedForUserIds: convDeletedForUserIds,
                 clearedHistoryAt: existingConv?.clearedHistoryAt || {},
               };
             });
@@ -1291,6 +1315,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Targeted Supabase Realtime channel listeners (avoids downloading all tables on every change)
       let realtimeChannel: any = null;
+      let chatBroadcastChannel: any = null;
       try {
         const client = getSupabaseClient();
         if (client) {
@@ -1395,6 +1420,132 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               });
             })
             .subscribe();
+
+          // Shared Realtime Broadcast channel for instant cross-device messaging (0 Disk IO!)
+          chatBroadcastChannel = client.channel('viralhub_chat_realtime', {
+            config: { broadcast: { self: false } },
+          });
+
+          chatBroadcastChannel
+            .on('broadcast', { event: 'chat_message' }, ({ payload }: any) => {
+              if (!payload || !currentUser) return;
+              if (!isSameUser(payload.recipientId, currentUser.id)) return;
+
+              const convId = payload.conversationId;
+              const senderId = payload.senderId;
+              const nowTimeStr = 'Today, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+              const incomingMsg: Message = {
+                id: payload.messageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                conversationId: convId,
+                senderId: senderId,
+                text: payload.text,
+                timestamp: payload.timestamp || nowTimeStr,
+                sentAt: payload.sentAt || new Date().toISOString(),
+                isMine: false,
+                status: 'read',
+                sharedVideo: payload.sharedVideo,
+                sharedVideoId: payload.sharedVideo?.id,
+                deletedForUserIds: [],
+              };
+
+              setConversations(prev => {
+                let matched = false;
+                const updated = prev.map(c => {
+                  const isThisConv =
+                    c.id === convId ||
+                    toUuid(c.id) === toUuid(convId) ||
+                    (c.participantIds && c.participantIds.some(id => isSameUser(id, senderId))) ||
+                    (c.participant && isSameUser(c.participant.id, senderId));
+
+                  if (isThisConv) {
+                    matched = true;
+                    const exists = c.messages.some(
+                      m => m.id === incomingMsg.id || (m.text === incomingMsg.text && m.timestamp === incomingMsg.timestamp)
+                    );
+                    const newMessages = exists ? c.messages : [...c.messages, incomingMsg];
+                    const curUnread = c.unreadCounts?.[currentUser.id] || 0;
+
+                    return {
+                      ...c,
+                      lastMessage: payload.text,
+                      lastMessageTime: incomingMsg.timestamp,
+                      messages: newMessages,
+                      // Automatically unhide conversation for recipient!
+                      deletedForUserIds: (c.deletedForUserIds || []).filter(id => !isSameUser(id, currentUser.id)),
+                      unreadCounts: {
+                        ...(c.unreadCounts || {}),
+                        [currentUser.id]: curUnread + 1,
+                      },
+                      unreadCount: curUnread + 1,
+                    };
+                  }
+                  return c;
+                });
+
+                if (!matched) {
+                  const senderUser = users.find(u => isSameUser(u.id, senderId)) || payload.sender || {
+                    id: senderId,
+                    username: `user_${String(senderId).slice(0, 6)}`,
+                    displayName: 'User',
+                    avatar: '',
+                    email: '',
+                    bio: '',
+                    followingCount: 0,
+                    followersCount: 0,
+                    likesCount: '0',
+                    isPrivate: false,
+                    role: 'creator',
+                  };
+
+                  const newConv: Conversation = {
+                    id: convId,
+                    participantIds: [currentUser.id, senderId],
+                    participant: senderUser,
+                    lastMessage: payload.text,
+                    lastMessageTime: incomingMsg.timestamp,
+                    unreadCount: 1,
+                    unreadCounts: { [currentUser.id]: 1, [senderId]: 0 },
+                    messages: [incomingMsg],
+                    isOnline: true,
+                    deletedForUserIds: [],
+                  };
+                  const next = deduplicateConversations([newConv, ...updated], currentUser.id);
+                  storage.set('conversations', next);
+                  return next;
+                }
+
+                const deduped = deduplicateConversations(updated, currentUser.id);
+                storage.set('conversations', deduped);
+                return deduped;
+              });
+
+              // Trigger in-app notification popup for new message
+              const senderUser = users.find(u => isSameUser(u.id, senderId)) || payload.sender || {
+                id: senderId,
+                username: 'user',
+                displayName: 'Someone',
+                avatar: '',
+              };
+              setActiveNotificationPopup({
+                id: `chat_notif_${Date.now()}`,
+                recipientId: currentUser.id,
+                type: 'message',
+                actor: {
+                  id: senderId,
+                  username: senderUser.username || 'user',
+                  displayName: senderUser.displayName || 'User',
+                  avatar: senderUser.avatar || '',
+                },
+                targetText: payload.text.length > 50 ? `${payload.text.slice(0, 50)}...` : payload.text,
+                timestamp: new Date().toISOString(),
+                createdAt: new Date().toISOString(),
+                isUnread: true,
+              });
+            })
+            .subscribe();
+
+          chatBroadcastChannelRef.current = chatBroadcastChannel;
         }
       } catch (err) {
         // realtime fallback
@@ -1406,6 +1557,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (realtimeChannel) {
           getSupabaseClient()?.removeChannel(realtimeChannel);
         }
+        if (chatBroadcastChannel) {
+          getSupabaseClient()?.removeChannel(chatBroadcastChannel);
+        }
+        chatBroadcastChannelRef.current = null;
       };
     }
   }, [currentUser?.id]);
@@ -1456,9 +1611,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         : !isSameUser(c.participant?.id, currentUser.id);
       if (!isParticipant) return false;
 
-      // If currentUser deleted this conversation, hide it from currentUser
-      if (c.deletedForUserIds && c.deletedForUserIds.some(id => isSameUser(id, currentUser.id))) {
-        return false;
+      // If currentUser deleted this conversation, check if new messages arrived
+      const isMarkedDeleted = c.deletedForUserIds && c.deletedForUserIds.some(id => isSameUser(id, currentUser.id));
+      if (isMarkedDeleted) {
+        const convClearTime = Math.max(
+          getConversationClearedTimestamp(c.id, currentUser.id),
+          c.clearedHistoryAt?.[currentUser.id] || 0,
+          c.clearedHistoryAt?.[toUuid(currentUser.id)] || 0
+        );
+
+        const hasNewVisibleMsg = (c.messages || []).some(m => {
+          if (m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
+          if (convClearTime > 0) {
+            const sentTime = m.sentAt ? new Date(m.sentAt).getTime() : 0;
+            if (sentTime > 0 && sentTime <= convClearTime) return false;
+            if (typeof m.id === 'string' && m.id.startsWith('m_')) {
+              const parts = m.id.split('_');
+              const t = parseInt(parts[1], 10);
+              if (t > 0 && t <= convClearTime) return false;
+            }
+          }
+          return true;
+        });
+
+        if (!hasNewVisibleMsg) {
+          return false;
+        }
       }
       return true;
     });
@@ -2915,6 +3093,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (currentUser) {
       supabaseDb.insertMessage(canonicalConvId, currentUser.id, recipientId, remotePayload);
+
+      // Instant WebSocket broadcast directly to other device (<50ms, 0 Disk IO)
+      try {
+        const client = getSupabaseClient();
+        const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+        if (broadcastCh) {
+          broadcastCh.send({
+            type: 'broadcast',
+            event: 'chat_message',
+            payload: {
+              conversationId: canonicalConvId,
+              senderId: currentUser.id,
+              recipientId,
+              messageId: newMsg.id,
+              text: displayText,
+              timestamp: newMsg.timestamp,
+              sentAt: new Date().toISOString(),
+              sharedVideo: sharedVideo ? { id: sharedVideo.id, caption: sharedVideo.caption, mediaUrl: sharedVideo.mediaUrl } : undefined,
+              sender: {
+                id: currentUser.id,
+                username: currentUser.username,
+                displayName: currentUser.displayName,
+                avatar: currentUser.avatar,
+              },
+            },
+          });
+        }
+      } catch (bcErr) {
+        console.warn('Realtime chat broadcast note:', bcErr);
+      }
 
       // Create realtime notification for recipient across devices
       if (recipientId) {
