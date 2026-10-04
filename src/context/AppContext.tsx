@@ -1081,11 +1081,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   role: 'creator' as const,
                 };
 
+              let remoteClearTime = 0;
+              if (rc.clearedHistory) {
+                if (typeof rc.clearedHistory === 'object' && rc.clearedHistory !== null) {
+                  const val = rc.clearedHistory[currentUser.id] || rc.clearedHistory[toUuid(currentUser.id)];
+                  if (val) {
+                    remoteClearTime = typeof val === 'number' ? val : new Date(val).getTime();
+                  }
+                } else if (typeof rc.clearedHistory === 'string') {
+                  remoteClearTime = new Date(rc.clearedHistory).getTime();
+                }
+              }
+
               const clearTime = Math.max(
+                remoteClearTime || 0,
                 getConversationClearedTimestamp(rc.id, currentUser.id),
+                getConversationClearedTimestamp(toUuid(rc.id), currentUser.id),
                 existingConv?.clearedHistoryAt?.[currentUser.id] || 0,
                 existingConv?.clearedHistoryAt?.[toUuid(currentUser.id)] || 0
               );
+
+              // Persist cleared timestamp locally on this device so subsequent loads respect it
+              if (clearTime > 0) {
+                setConversationClearedTimestamp(rc.id, currentUser.id, clearTime);
+                const convCanonical = toUuid(rc.id);
+                if (convCanonical && convCanonical !== rc.id) {
+                  setConversationClearedTimestamp(convCanonical, currentUser.id, clearTime);
+                }
+              }
 
               const rawMessages = rc.rawMessages || [];
               const parsedMessages: Message[] = rawMessages.map((m: any) => {
@@ -1109,9 +1132,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 let deletedFor = [...(matchedExistingMsg?.deletedForUserIds || [])];
 
                 // If conversation was cleared before or at this message's sentAt time, hide it for currentUser
-                if (clearTime > 0 && m.SentAt) {
-                  const sentTime = new Date(m.SentAt).getTime();
-                  if (sentTime > 0 && sentTime <= clearTime) {
+                if (clearTime > 0) {
+                  if (m.SentAt) {
+                    const sentTime = new Date(m.SentAt).getTime();
+                    if (sentTime > 0 && sentTime <= clearTime) {
+                      if (!deletedFor.some(id => isSameUser(id, currentUser.id))) {
+                        deletedFor.push(currentUser.id);
+                      }
+                    }
+                  } else {
                     if (!deletedFor.some(id => isSameUser(id, currentUser.id))) {
                       deletedFor.push(currentUser.id);
                     }
@@ -1138,10 +1167,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 lm => !parsedMessages.some(pm => pm.id === lm.id || (pm.text === lm.text && pm.timestamp === lm.timestamp))
               );
               const allMsgs = [...parsedMessages, ...localOnlyMsgs];
-              const lastM = allMsgs[allMsgs.length - 1];
+
+              // Filter out messages that are deleted for this user
+              const visibleMsgs = allMsgs.filter(m => {
+                if (m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
+                if (clearTime > 0) {
+                  if (m.sentAt && new Date(m.sentAt).getTime() <= clearTime) return false;
+                  if (typeof m.id === 'string' && m.id.startsWith('m_')) {
+                    const parts = m.id.split('_');
+                    const t = parseInt(parts[1], 10);
+                    if (t > 0 && t <= clearTime) return false;
+                  }
+                }
+                return true;
+              });
+
+              const lastVisible = visibleMsgs[visibleMsgs.length - 1];
 
               // Check if any incoming message from the partner arrived after clearTime (auto-unhide)
-              const hasNewIncomingMsg = allMsgs.some(pm =>
+              const hasNewIncomingMsg = visibleMsgs.some(pm =>
                 !isSameUser(pm.senderId, currentUser.id) &&
                 (!clearTime || (pm.sentAt && new Date(pm.sentAt).getTime() > clearTime))
               );
@@ -1155,14 +1199,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 id: rc.id,
                 participantIds: [currentUser.id, partnerId],
                 participant: partnerUser,
-                lastMessage: lastM ? lastM.text : (existingConv?.lastMessage || 'Started conversation'),
-                lastMessageTime: lastM ? lastM.timestamp : (existingConv?.lastMessageTime || 'Recently'),
+                lastMessage: lastVisible
+                  ? (lastVisible.sharedVideo ? '🎥 Shared a video' : lastVisible.text)
+                  : (clearTime > 0 ? 'Started a new conversation' : (existingConv?.lastMessage || 'Started conversation')),
+                lastMessageTime: lastVisible ? lastVisible.timestamp : (existingConv?.lastMessageTime || 'Recently'),
                 unreadCount: existingConv ? existingConv.unreadCount : 0,
                 unreadCounts: existingConv ? existingConv.unreadCounts : {},
                 messages: allMsgs,
                 isOnline: true,
                 deletedForUserIds: convDeletedForUserIds,
-                clearedHistoryAt: existingConv?.clearedHistoryAt || {},
+                clearedHistoryAt: {
+                  ...(existingConv?.clearedHistoryAt || {}),
+                  ...(typeof rc.clearedHistory === 'object' && rc.clearedHistory ? rc.clearedHistory : {}),
+                  ...(clearTime > 0 ? { [currentUser.id]: clearTime, [toUuid(currentUser.id)]: clearTime } : {}),
+                },
               };
             });
 
@@ -1910,6 +1960,90 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 timestamp: new Date().toISOString(),
                 createdAt: new Date().toISOString(),
                 isUnread: true,
+              });
+            })
+            .on('broadcast', { event: 'conversation_deleted' }, ({ payload }: any) => {
+              if (!payload || !currentUser) return;
+              const { conversationId, canonicalId, userId, partnerId, clearedAt } = payload;
+              const clearTimestamp = clearedAt || Date.now();
+
+              // Check if currentUser is a participant in this conversation
+              const isRelevant =
+                isSameUser(userId, currentUser.id) ||
+                isSameUser(partnerId, currentUser.id);
+
+              if (!isRelevant) return;
+
+              if (isSameUser(userId, currentUser.id)) {
+                setConversationClearedTimestamp(conversationId, currentUser.id, clearTimestamp);
+                if (canonicalId) setConversationClearedTimestamp(canonicalId, currentUser.id, clearTimestamp);
+              }
+
+              setConversations(prev => {
+                const next = prev.map(c => {
+                  const match =
+                    c.id === conversationId ||
+                    toUuid(c.id) === toUuid(conversationId) ||
+                    (canonicalId && (c.id === canonicalId || toUuid(c.id) === toUuid(canonicalId))) ||
+                    (partnerId && c.participantIds?.some(id => isSameUser(id, partnerId)));
+
+                  if (match) {
+                    const isDeletingUser = isSameUser(userId, currentUser.id);
+                    const updatedMessages = (c.messages || []).map(m => {
+                      if (!isDeletingUser) return m;
+                      const mDeleted = m.deletedForUserIds || [];
+                      return mDeleted.some(id => isSameUser(id, currentUser.id))
+                        ? m
+                        : { ...m, deletedForUserIds: [...mDeleted, currentUser.id] };
+                    });
+
+                    return {
+                      ...c,
+                      clearedHistoryAt: {
+                        ...(c.clearedHistoryAt || {}),
+                        [userId]: clearTimestamp,
+                        [toUuid(userId)]: clearTimestamp,
+                      },
+                      messages: updatedMessages,
+                      lastMessage: isDeletingUser ? 'Started a new conversation' : c.lastMessage,
+                      lastMessageTime: isDeletingUser ? 'Just now' : c.lastMessageTime,
+                      unreadCount: isDeletingUser ? 0 : c.unreadCount,
+                      unreadCounts: isDeletingUser
+                        ? { ...(c.unreadCounts || {}), [currentUser.id]: 0 }
+                        : c.unreadCounts,
+                    };
+                  }
+                  return c;
+                });
+                storage.set('conversations', next);
+                return next;
+              });
+            })
+            .on('broadcast', { event: 'message_deleted' }, ({ payload }: any) => {
+              if (!payload) return;
+              const { conversationId, messageId } = payload;
+              setConversations(prev => {
+                const next = prev.map(c => {
+                  if (
+                    c.id === conversationId ||
+                    toUuid(c.id) === toUuid(conversationId) ||
+                    c.messages.some(m => m.id === messageId || toUuid(m.id) === toUuid(messageId))
+                  ) {
+                    const remainingMessages = c.messages.filter(
+                      m => m.id !== messageId && toUuid(m.id) !== toUuid(messageId)
+                    );
+                    const last = remainingMessages[remainingMessages.length - 1];
+                    return {
+                      ...c,
+                      messages: remainingMessages,
+                      lastMessage: last ? (last.sharedVideo ? '🎥 Shared a video' : last.text) : 'Started a new conversation',
+                      lastMessageTime: last ? last.timestamp : c.lastMessageTime,
+                    };
+                  }
+                  return c;
+                });
+                storage.set('conversations', next);
+                return next;
               });
             })
             .subscribe();
@@ -3583,16 +3717,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Delete whole conversation: ONLY deletes for currentUser's POV!
-  // The other user still sees the conversation and its full history!
+  // Delete whole conversation: marks history cleared for user, deletes past messages from Supabase, and syncs across devices
   const deleteConversation = (convId: string) => {
     if (!currentUser) return;
     const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+
+    const conv = conversations.find(c => c.id === convId || toUuid(c.id) === toUuid(convId));
+    const partnerId =
+      conv?.participantIds?.find(id => !isSameUser(id, currentUser.id)) ||
+      (conv?.participant && !isSameUser(conv.participant.id, currentUser.id) ? conv.participant.id : undefined);
+    const canonicalConvId = partnerId ? getDirectConversationId(currentUser.id, partnerId) : convId;
+
     setConversationClearedTimestamp(convId, currentUser.id, now);
+    if (conv?.id && conv.id !== convId) {
+      setConversationClearedTimestamp(conv.id, currentUser.id, now);
+    }
+    if (canonicalConvId && canonicalConvId !== convId) {
+      setConversationClearedTimestamp(canonicalConvId, currentUser.id, now);
+    }
 
     setConversations(prev => {
       const next = prev.map(c => {
-        if (c.id === convId || toUuid(c.id) === toUuid(convId)) {
+        if (
+          c.id === convId ||
+          toUuid(c.id) === toUuid(convId) ||
+          c.id === canonicalConvId ||
+          toUuid(c.id) === toUuid(canonicalConvId) ||
+          (partnerId && c.participantIds?.some(id => isSameUser(id, partnerId)))
+        ) {
           const currentDeleted = c.deletedForUserIds || [];
           const updatedMessages = (c.messages || []).map(m => {
             const mDeleted = m.deletedForUserIds || [];
@@ -3627,9 +3780,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    if (activeConversationId === convId || toUuid(activeConversationId || '') === toUuid(convId)) {
+    if (
+      activeConversationId === convId ||
+      toUuid(activeConversationId || '') === toUuid(convId) ||
+      (canonicalConvId && activeConversationId === canonicalConvId)
+    ) {
       setActiveConversationId(null);
       setMessagesMobileView('list');
+    }
+
+    // Persist deletion to Supabase so other devices won't resurrect old deleted messages!
+    supabaseDb.deleteConversationMessages(convId, nowIso, currentUser.id, partnerId);
+
+    // Instant WebSocket broadcast directly to other device (<50ms, 0 Disk IO)
+    try {
+      const client = getSupabaseClient();
+      const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+      if (broadcastCh) {
+        broadcastCh.send({
+          type: 'broadcast',
+          event: 'conversation_deleted',
+          payload: {
+            conversationId: convId,
+            canonicalId: canonicalConvId,
+            userId: currentUser.id,
+            partnerId,
+            clearedAt: now,
+            clearedIso: nowIso,
+          },
+        });
+      }
+    } catch (bcErr) {
+      console.warn('Realtime conversation delete broadcast note:', bcErr);
     }
   };
 
@@ -3654,6 +3836,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       storage.set('conversations', next);
       return next;
     });
+
+    // Delete in Supabase
+    supabaseDb.deleteMessage(messageId);
+
+    // Instant WebSocket broadcast directly to other device (<50ms, 0 Disk IO)
+    try {
+      const client = getSupabaseClient();
+      const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+      if (broadcastCh) {
+        broadcastCh.send({
+          type: 'broadcast',
+          event: 'message_deleted',
+          payload: {
+            conversationId: convId,
+            messageId,
+          },
+        });
+      }
+    } catch {}
   };
 
   const markAllNotificationsAsRead = () => {

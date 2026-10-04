@@ -2620,12 +2620,179 @@ export const supabaseDb = {
           userAId: c.UserIDA,
           userBId: c.UserIDB,
           createdAt: c.CreatedAt,
+          clearedHistory: c.ClearedHistory || {},
           rawMessages: rawMsgs,
         };
       });
     } catch (e) {
       console.warn('Supabase fetchConversationsAndMessages fallback:', e);
       return null;
+    }
+  },
+
+  async deleteMessage(messageId: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !messageId) return false;
+
+    try {
+      const isMsgUuid = isUuid(messageId);
+      const msgUuid = toUuid(messageId);
+
+      const ids = new Set<string>();
+      if (isMsgUuid) ids.add(messageId);
+      if (msgUuid && isUuid(msgUuid)) ids.add(msgUuid);
+
+      const idsList = Array.from(ids);
+      if (idsList.length === 0) return false;
+
+      await client.from('Message').delete().in('MessageID', idsList);
+      return true;
+    } catch (e) {
+      console.warn('Supabase deleteMessage warning:', e);
+      return false;
+    }
+  },
+
+  async deleteConversationMessages(
+    conversationId: string,
+    upToIso?: string,
+    userId?: string,
+    partnerId?: string
+  ): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !conversationId) return false;
+
+    try {
+      const targetTime = upToIso || new Date().toISOString();
+      const candidateIds = new Set<string>();
+
+      if (isUuid(conversationId)) candidateIds.add(conversationId);
+      const convUuid = toUuid(conversationId);
+      if (convUuid && isUuid(convUuid)) candidateIds.add(convUuid);
+
+      if (userId && partnerId) {
+        const canonical = getDirectConversationId(userId, partnerId);
+        if (canonical && isUuid(canonical)) candidateIds.add(canonical);
+
+        const u1 = toUuid(userId);
+        const u2 = toUuid(partnerId);
+        if (isUuid(u1) && isUuid(u2)) {
+          try {
+            const { data: convRows } = await client
+              .from('Conversation')
+              .select('ConversationID')
+              .or(`and(UserIDA.eq.${u1},UserIDB.eq.${u2}),and(UserIDA.eq.${u2},UserIDB.eq.${u1})`);
+            (convRows || []).forEach((r: any) => {
+              if (r.ConversationID && isUuid(r.ConversationID)) {
+                candidateIds.add(r.ConversationID);
+              }
+            });
+          } catch {}
+        }
+      } else if (isUuid(convUuid)) {
+        try {
+          const { data: convRows } = await client
+            .from('Conversation')
+            .select('ConversationID')
+            .eq('ConversationID', convUuid);
+          (convRows || []).forEach((r: any) => {
+            if (r.ConversationID && isUuid(r.ConversationID)) {
+              candidateIds.add(r.ConversationID);
+            }
+          });
+        } catch {}
+      }
+
+      const idsList = Array.from(candidateIds);
+      if (idsList.length === 0) return false;
+
+      // 1. Record ClearedHistory on Conversation table for this user ONLY
+      let bothCleared = false;
+      let purgeTime = targetTime;
+
+      if (userId) {
+        const uUuid = toUuid(userId);
+        const partnerUuid = partnerId ? toUuid(partnerId) : undefined;
+
+        for (const cid of idsList) {
+          try {
+            const { data: cRow } = await client
+              .from('Conversation')
+              .select('ClearedHistory')
+              .eq('ConversationID', cid)
+              .maybeSingle();
+
+            const existingCleared =
+              cRow && typeof cRow.ClearedHistory === 'object' && cRow.ClearedHistory !== null
+                ? cRow.ClearedHistory
+                : {};
+
+            const updatedCleared = {
+              ...existingCleared,
+              [userId]: targetTime,
+              [uUuid]: targetTime,
+            };
+
+            await client
+              .from('Conversation')
+              .update({ ClearedHistory: updatedCleared })
+              .eq('ConversationID', cid);
+
+            // Check if partner has ALSO deleted/cleared this conversation
+            if (partnerId) {
+              const partnerClearedIso =
+                existingCleared[partnerId] ||
+                (partnerUuid ? existingCleared[partnerUuid] : undefined);
+
+              if (partnerClearedIso) {
+                bothCleared = true;
+                purgeTime =
+                  new Date(targetTime).getTime() <= new Date(partnerClearedIso).getTime()
+                    ? targetTime
+                    : partnerClearedIso;
+              }
+            }
+          } catch {}
+        }
+      }
+
+      // 2. ONLY purge from Message table if BOTH users have deleted the conversation!
+      // If only one user deleted it, the other user that they are chatting with MUST still see their messages!
+      if (bothCleared) {
+        try {
+          let deleteQuery = client.from('Message').delete().in('ConversationID', idsList);
+          if (purgeTime) {
+            deleteQuery = deleteQuery.lte('SentAt', purgeTime);
+          }
+          await deleteQuery;
+        } catch (delErr) {
+          console.warn('Both-cleared message purge fallback:', delErr);
+        }
+      }
+
+      // 3. Fallback sync record (guarantees cross-device sync for this user even if ClearedHistory column is missing)
+      if (userId) {
+        try {
+          const syncNotifId = toUuid(`conv_clear_${userId}_${conversationId}`);
+          await client.from('Notification').upsert({
+            NotificationID: syncNotifId,
+            UserID: toUuid(userId),
+            NotificationType: 'system_conv_cleared',
+            NotificationMessage: JSON.stringify({
+              conversationId,
+              clearedAt: targetTime,
+              ids: idsList,
+            }),
+            IsRead: true,
+            NotificationDate: targetTime,
+          }, { onConflict: 'NotificationID' });
+        } catch {}
+      }
+
+      return true;
+    } catch (e) {
+      console.warn('Supabase deleteConversationMessages warning:', e);
+      return false;
     }
   },
 
@@ -2691,6 +2858,29 @@ export const supabaseDb = {
 
         if (isGenericTrigger) {
           // Skip redundant generic system notification so it never duplicates rich notifications!
+          continue;
+        }
+
+        // Silent system sync for conversation clearance across devices
+        if (r.NotificationType === 'system_conv_cleared') {
+          try {
+            const payload = typeof r.NotificationMessage === 'string' ? JSON.parse(r.NotificationMessage) : r.NotificationMessage;
+            if (payload && payload.conversationId && payload.clearedAt && r.UserID) {
+              const clearT = new Date(payload.clearedAt).getTime();
+              const uId = r.UserID;
+              const uUuid = toUuid(r.UserID);
+              const cId = payload.conversationId;
+              const cUuid = toUuid(payload.conversationId);
+              try {
+                localStorage.setItem(`viralhub_cleared_conv_${cUuid}_${uUuid}`, JSON.stringify(clearT));
+                localStorage.setItem(`viralhub_cleared_conv_${cId}_${uId}`, JSON.stringify(clearT));
+                (payload.ids || []).forEach((cid: string) => {
+                  localStorage.setItem(`viralhub_cleared_conv_${cid}_${uUuid}`, JSON.stringify(clearT));
+                  localStorage.setItem(`viralhub_cleared_conv_${cid}_${uId}`, JSON.stringify(clearT));
+                });
+              } catch {}
+            }
+          } catch {}
           continue;
         }
 
@@ -3570,6 +3760,7 @@ ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "ThumbnailURL" TEX
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "RejectionReason" TEXT;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealStatus" TEXT DEFAULT 'none';
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealReason" TEXT;
+ALTER TABLE IF EXISTS public."Conversation" ADD COLUMN IF NOT EXISTS "ClearedHistory" JSONB DEFAULT '{}'::jsonb;
 
 -- 5. INDEXES (Guarantees sub-millisecond lookups & protects Supabase Disk IO!)
 CREATE INDEX IF NOT EXISTS "idx_user_isbanned" ON public."User"("IsBanned");
@@ -3578,6 +3769,9 @@ CREATE INDEX IF NOT EXISTS "idx_video_status" ON public."Video"("Status");
 CREATE INDEX IF NOT EXISTS "idx_reportvideo_status" ON public."ReportVideo"("Status");
 CREATE INDEX IF NOT EXISTS "idx_reportuser_status" ON public."ReportUser"("Status");
 CREATE INDEX IF NOT EXISTS "idx_notification_user_unread" ON public."Notification"("UserID", "IsRead");
+CREATE INDEX IF NOT EXISTS "idx_message_conversationid" ON public."Message"("ConversationID");
+CREATE INDEX IF NOT EXISTS "idx_message_sentat" ON public."Message"("SentAt");
+CREATE INDEX IF NOT EXISTS "idx_conversation_userida_useridb" ON public."Conversation"("UserIDA", "UserIDB");
 
 -- 3. ENABLE ROW LEVEL SECURITY (RLS) SAFELY ON BASE TABLES (Views like VideoStats are excluded)
 ALTER TABLE IF EXISTS public."User" ENABLE ROW LEVEL SECURITY;

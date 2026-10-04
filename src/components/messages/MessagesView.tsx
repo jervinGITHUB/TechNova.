@@ -132,6 +132,7 @@ export const MessagesView: React.FC = () => {
         // If there are new visible messages sent after clear timestamp, automatically unhide!
         const convClearTime = Math.max(
           getConversationClearedTimestamp(conv.id, currentUser.id),
+          getConversationClearedTimestamp(toUuid(conv.id), currentUser.id),
           conv.clearedHistoryAt?.[currentUser.id] || 0,
           conv.clearedHistoryAt?.[toUuid(currentUser.id)] || 0
         );
@@ -381,6 +382,7 @@ export const MessagesView: React.FC = () => {
 
               const convClearTime = Math.max(
                 getConversationClearedTimestamp(conv.id, currentUser?.id),
+                getConversationClearedTimestamp(toUuid(conv.id), currentUser?.id),
                 conv.clearedHistoryAt?.[currentUser?.id || ''] || 0,
                 conv.clearedHistoryAt?.[toUuid(currentUser?.id || '')] || 0
               );
@@ -669,6 +671,7 @@ export const MessagesView: React.FC = () => {
               {(() => {
                 const userClearedTimestamp = Math.max(
                   getConversationClearedTimestamp(activeConv.id, currentUser?.id),
+                  getConversationClearedTimestamp(toUuid(activeConv.id), currentUser?.id),
                   activeConv.clearedHistoryAt?.[currentUser?.id || ''] || 0,
                   activeConv.clearedHistoryAt?.[toUuid(currentUser?.id || '')] || 0
                 );
