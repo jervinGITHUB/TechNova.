@@ -2511,7 +2511,7 @@ export const supabaseDb = {
         if (username) clauses.push(`Username.ilike.${username}`);
         if (userUuid) clauses.push(`UserID.eq.${userUuid}`);
 
-        const { data: adminData } = await client
+        const { data: adminData, error: adminErr } = await client
           .from('Admin')
           .select('*')
           .or(clauses.join(','))
@@ -2521,21 +2521,23 @@ export const supabaseDb = {
           return true;
         }
 
-        // Retry lowercase admins table
-        const { data: lowerAdminData } = await client
-          .from('admins')
-          .select('*')
-          .or(clauses.map(c => c.toLowerCase()).join(','))
-          .limit(1);
+        // Only retry lowercase admins table if the PascalCase 'Admin' table does not exist (code 42P01)
+        if (adminErr && adminErr.code === '42P01') {
+          const { data: lowerAdminData } = await client
+            .from('admins')
+            .select('*')
+            .or(clauses.map(c => c.toLowerCase()).join(','))
+            .limit(1);
 
-        if (lowerAdminData && lowerAdminData.length > 0) {
-          return true;
+          if (lowerAdminData && lowerAdminData.length > 0) {
+            return true;
+          }
         }
       }
 
       // 2. Also check if User table has Role = 'admin' / 'Super Admin'
       if (email || userUuid) {
-        let userQuery = client.from('User').select('Role, role');
+        let userQuery = client.from('User').select('*');
         if (email) {
           userQuery = userQuery.ilike('Email', email);
         } else if (userUuid) {
