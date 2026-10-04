@@ -1054,8 +1054,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       if (remoteReports !== null) {
-        setReports(remoteReports);
-        storage.set('reports', remoteReports);
+        setReports(prev => {
+          const map = new Map<string, ReportItem>();
+          // Keep existing local reports first
+          prev.forEach(r => map.set(r.id, r));
+          // Apply authoritative remote reports
+          remoteReports.forEach(r => map.set(r.id, r));
+          const merged = Array.from(map.values());
+          storage.set('reports', merged);
+          return merged;
+        });
       }
 
       // 5. Synchronize Notifications
@@ -3457,11 +3465,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const rejectVideoAdmin = async (videoId: string, reason?: string): Promise<boolean> => {
     const finalReason = reason || 'Inappropriate visual content or guidelines violation';
-    const video = videos.find(v => v.id === videoId);
+    const video = videos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
 
     setVideos(prev => {
       const next = prev.map(v =>
-        v.id === videoId
+        v.id === videoId || toUuid(v.id) === toUuid(videoId)
           ? {
               ...v,
               status: 'rejected' as const,
@@ -3480,9 +3488,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       delete storedAppeals[videoId];
       storage.set('video_appeals_v2', storedAppeals);
     }
+    if (storedAppeals[toUuid(videoId)]) {
+      delete storedAppeals[toUuid(videoId)];
+      storage.set('video_appeals_v2', storedAppeals);
+    }
 
     if (video) {
-      await supabaseDb.updateVideoStatus(videoId, 'rejected', finalReason);
+      await supabaseDb.updateVideoStatus(video.id, 'rejected', finalReason);
       await supabaseDb.insertVideo({
         ...video,
         status: 'rejected',
@@ -3506,7 +3518,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           displayName: 'ViralHub Moderation',
           avatar: '',
         },
-        targetText: `revoked your video "${video.caption.slice(0, 30)}". Reason: ${finalReason}. You may submit an appeal.`,
+        targetText: `revoked your video "${video.caption?.slice(0, 35) || 'video'}". Reason: ${finalReason}. You may submit an appeal.`,
         timestamp: nowIso,
         createdAt: nowIso,
         isUnread: true,
@@ -3521,6 +3533,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return next;
       });
       supabaseDb.insertNotification(revokeNotif, recipientUserId);
+
+      // If active user is this video creator, show toast immediately
+      if (currentUser && isSameUser(currentUser.id, recipientUserId)) {
+        setActiveNotificationPopup(revokeNotif);
+      }
+    } else {
+      // In case video was not found in local array, still update DB
+      await supabaseDb.updateVideoStatus(videoId, 'rejected', finalReason);
     }
     return true;
   };
@@ -3623,7 +3643,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     videoId: string,
     decision: 'approved' | 'declined'
   ): Promise<boolean> => {
-    const video = videos.find(v => v.id === videoId);
+    const video = videos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
     if (!video) return false;
 
     const nowIso = new Date().toISOString();
@@ -3632,15 +3652,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Update persistent appeals map
     const storedAppeals = storage.get<Record<string, any>>('video_appeals_v2', {});
-    if (storedAppeals[videoId]) {
-      storedAppeals[videoId].status = decision;
-      storage.set('video_appeals_v2', storedAppeals);
-    }
+    storedAppeals[videoId] = { ...storedAppeals[videoId], status: decision };
+    storedAppeals[toUuid(videoId)] = { ...storedAppeals[toUuid(videoId)], status: decision };
+    storage.set('video_appeals_v2', storedAppeals);
 
     if (decision === 'approved') {
       setVideos(prev => {
         const next = prev.map(v =>
-          v.id === videoId
+          v.id === videoId || toUuid(v.id) === toUuid(videoId)
             ? {
                 ...v,
                 status: 'approved' as const,
@@ -3653,8 +3672,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return next;
       });
 
-      await supabaseDb.reviewVideoAppeal(videoId, 'approved');
-      await supabaseDb.updateVideoStatus(videoId, 'approved');
+      // Also dismiss any open report against this video since the appeal was approved and video restored!
+      setReports(prev => {
+        const next = prev.map(r =>
+          r.targetId === videoId || toUuid(r.targetId) === toUuid(videoId)
+            ? { ...r, status: 'Rejected' as const }
+            : r
+        );
+        storage.set('reports', next);
+        return next;
+      });
+
+      await supabaseDb.reviewVideoAppeal(video.id, 'approved');
+      await supabaseDb.updateVideoStatus(video.id, 'approved');
 
       const approvedNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
@@ -3667,7 +3697,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           displayName: 'ViralHub Moderation',
           avatar: '',
         },
-        targetText: `Great news! Your appeal for "${video.caption.slice(0, 30)}" was Approved. Your video is now live on the feed!`,
+        targetText: `Great news! Your appeal for "${video.caption?.slice(0, 30) || 'video'}" was Approved. Your video is now live on the feed!`,
         timestamp: nowIso,
         createdAt: nowIso,
         isUnread: true,
@@ -3681,10 +3711,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return next;
       });
       supabaseDb.insertNotification(approvedNotif, recipientUserId);
+
+      if (currentUser && isSameUser(currentUser.id, recipientUserId)) {
+        setActiveNotificationPopup(approvedNotif);
+      }
     } else {
       setVideos(prev => {
         const next = prev.map(v =>
-          v.id === videoId
+          v.id === videoId || toUuid(v.id) === toUuid(videoId)
             ? {
                 ...v,
                 status: 'rejected' as const,
@@ -3696,7 +3730,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return next;
       });
 
-      await supabaseDb.reviewVideoAppeal(videoId, 'declined');
+      await supabaseDb.reviewVideoAppeal(video.id, 'declined');
 
       const declinedNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
@@ -3709,7 +3743,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           displayName: 'ViralHub Moderation',
           avatar: '',
         },
-        targetText: `Your appeal for "${video.caption.slice(0, 30)}" was Declined by moderation after careful review.`,
+        targetText: `Your appeal for "${video.caption?.slice(0, 30) || 'video'}" was Declined by moderation after careful review.`,
         timestamp: nowIso,
         createdAt: nowIso,
         isUnread: true,
@@ -3723,6 +3757,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return next;
       });
       supabaseDb.insertNotification(declinedNotif, recipientUserId);
+
+      if (currentUser && isSameUser(currentUser.id, recipientUserId)) {
+        setActiveNotificationPopup(declinedNotif);
+      }
     }
     return true;
   };
@@ -3906,6 +3944,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     await supabaseDb.updateReportStatus(reportId, type, status);
+
+    // If report is approved for a video, automatically revoke video with appeal option so owner is notified
+    if (status === 'Approved' && type === 'video' && targetReport) {
+      const violationReason = targetReport.description || targetReport.scenario || 'Reported for community guidelines violation';
+      await rejectVideoAdmin(targetReport.targetId, violationReason);
+    }
 
     // If report has a known reporter, send them a status update notification
     if (targetReport && targetReport.reporterId) {

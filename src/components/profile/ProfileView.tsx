@@ -25,8 +25,12 @@ import {
   Share2,
   Trash2,
   AlertTriangle,
+  FileText,
+  CheckCircle2,
+  Send,
+  Loader2,
 } from 'lucide-react';
-import { isSameUser, isVideoUrl } from '../../lib/supabase';
+import { isSameUser, isVideoUrl, toUuid } from '../../lib/supabase';
 
 export const ProfileView: React.FC = () => {
   const {
@@ -53,6 +57,7 @@ export const ProfileView: React.FC = () => {
     setCommentsVideoId,
     getUserLikedVideos,
     deleteVideo,
+    submitVideoAppeal,
   } = useApp();
 
   const [activeTabSub, setActiveTabSub] = useState<'videos' | 'liked'>('videos');
@@ -65,6 +70,49 @@ export const ProfileView: React.FC = () => {
   // Video Preview & Share states
   const [selectedVideoModal, setSelectedVideoModal] = useState<Video | null>(null);
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
+
+  // Creator Appeal Modal state
+  const [appealModalVideoId, setAppealModalVideoId] = useState<string | null>(null);
+  const [appealReasonText, setAppealReasonText] = useState('');
+  const [isSubmittingAppeal, setIsSubmittingAppeal] = useState(false);
+  const [appealSuccessMsg, setAppealSuccessMsg] = useState('');
+
+  const targetAppealVideo = appealModalVideoId ? videos.find(v => v.id === appealModalVideoId || toUuid(v.id) === toUuid(appealModalVideoId)) : null;
+
+  const handleOpenAppealModal = (videoId: string) => {
+    setAppealModalVideoId(videoId);
+    setAppealReasonText('');
+    setAppealSuccessMsg('');
+  };
+
+  const handleCloseAppealModal = () => {
+    setAppealModalVideoId(null);
+    setAppealReasonText('');
+    setAppealSuccessMsg('');
+    setIsSubmittingAppeal(false);
+  };
+
+  const handleSubmitAppeal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!appealModalVideoId || !appealReasonText.trim()) return;
+
+    setIsSubmittingAppeal(true);
+    try {
+      await submitVideoAppeal(appealModalVideoId, appealReasonText.trim());
+      setAppealSuccessMsg('Your appeal has been submitted! Moderation will review your request.');
+      // Update selected modal video if open
+      setSelectedVideoModal(prev =>
+        prev && (prev.id === appealModalVideoId || toUuid(prev.id) === toUuid(appealModalVideoId))
+          ? { ...prev, appealStatus: 'pending', appealReason: appealReasonText.trim() }
+          : prev
+      );
+      setTimeout(() => {
+        handleCloseAppealModal();
+      }, 1800);
+    } finally {
+      setIsSubmittingAppeal(false);
+    }
+  };
 
   // Follow Modal states
   const [followModalOpen, setFollowModalOpen] = useState(false);
@@ -548,8 +596,22 @@ export const ProfileView: React.FC = () => {
                     </div>
                   )}
                   {video.status === 'rejected' && (
-                    <div className="absolute top-2 left-2 z-10 px-2 py-0.5 rounded-md bg-red-600/90 text-white text-[10px] font-extrabold shadow backdrop-blur-sm">
-                      Declined
+                    <div className="absolute top-2 left-2 z-10 flex items-center gap-1">
+                      {video.appealStatus === 'pending' ? (
+                        <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500 text-black text-[10px] font-extrabold shadow backdrop-blur-sm animate-pulse">
+                          <Clock className="w-2.5 h-2.5" />
+                          <span>Appeal Pending</span>
+                        </div>
+                      ) : video.appealStatus === 'declined' ? (
+                        <div className="px-2 py-0.5 rounded-md bg-red-700/90 text-white text-[10px] font-extrabold shadow backdrop-blur-sm">
+                          Appeal Declined
+                        </div>
+                      ) : (
+                        <div className="px-2 py-0.5 rounded-md bg-red-600/90 text-white text-[10px] font-extrabold shadow backdrop-blur-sm flex items-center gap-1">
+                          <AlertTriangle className="w-2.5 h-2.5" />
+                          <span>Revoked · Can Appeal</span>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -826,6 +888,54 @@ export const ProfileView: React.FC = () => {
               </button>
             </div>
 
+            {/* Moderation Status Banner if Video was Revoked */}
+            {selectedVideoModal.status === 'rejected' && (
+              <div className="absolute top-16 left-3 right-3 z-30 p-3 rounded-2xl bg-red-950/90 border border-red-500/50 backdrop-blur-md shadow-2xl text-left space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-red-300 font-bold text-xs">
+                    <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
+                    <span>Video Revoked by Moderation</span>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/30 text-red-200 font-bold">
+                    Not Public
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-neutral-200 leading-relaxed">
+                  <strong>Reason:</strong> {selectedVideoModal.rejectionReason || 'Community guidelines violation'}
+                </p>
+
+                {/* Appeal Status & Actions for Owner */}
+                {isSelf && (
+                  <div className="pt-1 border-t border-red-500/30 flex items-center justify-between gap-2">
+                    {selectedVideoModal.appealStatus === 'pending' ? (
+                      <div className="flex items-center gap-1.5 text-amber-300 text-xs font-semibold">
+                        <Clock className="w-3.5 h-3.5 animate-pulse" />
+                        <span>Appeal Under Admin Review</span>
+                      </div>
+                    ) : selectedVideoModal.appealStatus === 'declined' ? (
+                      <span className="text-red-300 text-xs font-semibold">
+                        Appeal Declined by Moderation
+                      </span>
+                    ) : selectedVideoModal.appealStatus === 'approved' ? (
+                      <span className="text-emerald-300 text-xs font-semibold">
+                        Appeal Approved · Restored
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenAppealModal(selectedVideoModal.id)}
+                        className="py-1 px-3 rounded-xl bg-gradient-to-r from-[#ff007a] to-pink-600 hover:from-[#ff1a8c] hover:to-pink-500 text-white font-bold text-xs flex items-center gap-1.5 shadow cursor-pointer transition-all"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Appeal Decision</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Video Player */}
             {selectedVideoModal.mediaUrl ? (
               <video
@@ -994,6 +1104,94 @@ export const ProfileView: React.FC = () => {
         isOpen={!!shareModalVideo}
         onClose={() => setShareModalVideo(null)}
       />
+
+      {/* Creator Appeal Modal */}
+      {appealModalVideoId && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn select-none">
+          <div className="absolute inset-0" onClick={handleCloseAppealModal} />
+          <div className="relative w-full max-w-md bg-[#14141e] border border-neutral-800 rounded-3xl p-6 shadow-2xl z-10 text-left space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-[#ff007a]/20 text-[#ff007a]">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white font-brand">Appeal Moderation Decision</h3>
+                  <p className="text-xs text-neutral-400">Request review to restore your video to the feed</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseAppealModal}
+                className="text-neutral-400 hover:text-white p-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {targetAppealVideo && (
+              <div className="p-3 rounded-2xl bg-[#181824] border border-neutral-800 text-xs space-y-1">
+                <div className="text-neutral-400 font-semibold">Video Details:</div>
+                <div className="text-white line-clamp-1 italic">"{targetAppealVideo.caption || 'Video upload'}"</div>
+                {targetAppealVideo.rejectionReason && (
+                  <div className="text-red-400 text-[11px] pt-1 border-t border-neutral-800/60">
+                    <strong>Revocation reason:</strong> {targetAppealVideo.rejectionReason}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <form onSubmit={handleSubmitAppeal} className="space-y-4">
+              <div>
+                <label className="text-[11px] font-semibold text-neutral-300 block mb-1.5 uppercase tracking-wider">
+                  Why should this video be approved & restored?
+                </label>
+                <textarea
+                  value={appealReasonText}
+                  onChange={e => setAppealReasonText(e.target.value)}
+                  placeholder="Explain why your video complies with community guidelines (e.g. original content, family-friendly, educational context)..."
+                  rows={4}
+                  maxLength={500}
+                  required
+                  className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 p-3.5 rounded-2xl border border-neutral-700/80 focus:border-[#ff007a] outline-none resize-none"
+                />
+                <div className="flex justify-end text-[10px] text-neutral-500 mt-1">
+                  {appealReasonText.length}/500
+                </div>
+              </div>
+
+              {appealSuccessMsg && (
+                <div className="p-3 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>{appealSuccessMsg}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
+                <button
+                  type="button"
+                  onClick={handleCloseAppealModal}
+                  className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingAppeal || !appealReasonText.trim()}
+                  className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white text-xs font-bold shadow flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmittingAppeal ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Send className="w-3.5 h-3.5" />
+                  )}
+                  <span>{isSubmittingAppeal ? 'Submitting...' : 'Send Appeal'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

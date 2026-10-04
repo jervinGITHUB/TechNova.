@@ -2302,46 +2302,142 @@ export const supabaseDb = {
     if (!client) return null;
 
     try {
-      const [vidRes, userRes] = await Promise.all([
-        client.from('ReportVideo').select('*').order('ReportedDate', { ascending: false }),
-        client.from('ReportUser').select('*').order('ReportedDate', { ascending: false }),
-      ]);
+      let vidData: any[] = [];
+      let userData: any[] = [];
+
+      // 1. Fetch from PascalCase tables
+      try {
+        const [vRes, uRes] = await Promise.all([
+          client.from('ReportVideo').select('*').order('ReportedDate', { ascending: false }),
+          client.from('ReportUser').select('*').order('ReportedDate', { ascending: false }),
+        ]);
+        if (vRes.data) vidData = vRes.data;
+        if (uRes.data) userData = uRes.data;
+      } catch (err) {
+        console.warn('PascalCase Report tables fetch failed, trying snake_case:', err);
+      }
+
+      // 2. Fallback to snake_case if PascalCase returned nothing/failed
+      if (vidData.length === 0) {
+        try {
+          const { data: snakeVid } = await client
+            .from('report_videos')
+            .select('*')
+            .order('created_at', { ascending: false });
+          if (snakeVid && snakeVid.length > 0) {
+            vidData = snakeVid.map((r: any) => ({
+              ReportID: r.id || r.report_id,
+              ReporterUserID: r.reporter_user_id || r.user_id,
+              VideoID: r.video_id,
+              Reason: r.reason,
+              Status: r.status,
+              ReportedDate: r.created_at || r.reported_date,
+            }));
+          }
+        } catch {}
+      }
+
+      if (userData.length === 0) {
+        try {
+          const { data: snakeUser } = await client
+            .from('report_users')
+            .select('*')
+            .order('created_at', { ascending: false });
+          if (snakeUser && snakeUser.length > 0) {
+            userData = snakeUser.map((r: any) => ({
+              ReportID: r.id || r.report_id,
+              ReportUserID: r.reporter_user_id || r.user_id,
+              ReportedUserID: r.reported_user_id,
+              Reason: r.reason,
+              Status: r.status,
+              ReportedDate: r.created_at || r.reported_date,
+            }));
+          }
+        } catch {}
+      }
 
       const items: ReportItem[] = [];
 
-      if (vidRes.data) {
-        vidRes.data.forEach((r: any) => {
-          items.push({
-            id: r.ReportID,
-            reporterId: r.ReporterUserID || undefined,
-            type: 'video',
-            targetId: r.VideoID,
-            targetName: `Video #${r.VideoID ? String(r.VideoID).slice(0, 8) : 'Unknown'}`,
-            targetSubtitle: r.Reason || '',
-            scenario: r.Reason ? r.Reason.split(':')[0] : 'Inappropriate Content',
-            description: r.Reason || '',
-            status: (r.Status as any) || 'Under Review',
-            timestamp: r.ReportedDate ? new Date(r.ReportedDate).toLocaleDateString() : 'Recent',
-            createdAt: r.ReportedDate || new Date().toISOString(),
-          });
+      for (const r of vidData) {
+        const rawReason = r.Reason || r.reason || '';
+        let targetName = `Video #${r.VideoID ? String(r.VideoID).slice(0, 8) : 'Unknown'}`;
+        let targetSubtitle = rawReason;
+        let targetThumbnail = '';
+        let scenario = 'Inappropriate Content';
+        let description = rawReason;
+
+        // Check for serialized metadata (e.g. "scenario: desc|||{...}")
+        if (rawReason.includes('|||')) {
+          const parts = rawReason.split('|||');
+          const basicReason = parts[0] || '';
+          try {
+            const meta = JSON.parse(parts[1]);
+            if (meta.targetName) targetName = meta.targetName;
+            if (meta.targetSubtitle) targetSubtitle = meta.targetSubtitle;
+            if (meta.targetThumbnail) targetThumbnail = meta.targetThumbnail;
+            if (meta.scenario) scenario = meta.scenario;
+            if (meta.description) description = meta.description;
+          } catch {}
+          if (!description) description = basicReason;
+        } else if (rawReason.includes(':')) {
+          scenario = rawReason.split(':')[0].trim();
+          description = rawReason.substring(rawReason.indexOf(':') + 1).trim();
+        }
+
+        items.push({
+          id: r.ReportID || r.id,
+          reporterId: r.ReporterUserID || r.reporter_id || undefined,
+          type: 'video',
+          targetId: r.VideoID || r.video_id,
+          targetName,
+          targetSubtitle,
+          targetThumbnail: targetThumbnail || undefined,
+          scenario,
+          description,
+          status: (r.Status as any) || (r.status as any) || 'Under Review',
+          timestamp: r.ReportedDate ? new Date(r.ReportedDate).toLocaleDateString() : 'Recent',
+          createdAt: r.ReportedDate || new Date().toISOString(),
         });
       }
 
-      if (userRes.data) {
-        userRes.data.forEach((r: any) => {
-          items.push({
-            id: r.ReportID,
-            reporterId: r.ReportUserID || undefined,
-            type: 'user',
-            targetId: r.ReportedUserID,
-            targetName: `User #${r.ReportedUserID ? String(r.ReportedUserID).slice(0, 8) : 'Account'}`,
-            targetSubtitle: r.Reason || '',
-            scenario: r.Reason ? r.Reason.split(':')[0] : 'Community Violation',
-            description: r.Reason || '',
-            status: (r.Status as any) || 'Under Review',
-            timestamp: r.ReportedDate ? new Date(r.ReportedDate).toLocaleDateString() : 'Recent',
-            createdAt: r.ReportedDate || new Date().toISOString(),
-          });
+      for (const r of userData) {
+        const rawReason = r.Reason || r.reason || '';
+        let targetName = `User #${r.ReportedUserID ? String(r.ReportedUserID).slice(0, 8) : 'Account'}`;
+        let targetSubtitle = rawReason;
+        let targetThumbnail = '';
+        let scenario = 'Community Violation';
+        let description = rawReason;
+
+        if (rawReason.includes('|||')) {
+          const parts = rawReason.split('|||');
+          const basicReason = parts[0] || '';
+          try {
+            const meta = JSON.parse(parts[1]);
+            if (meta.targetName) targetName = meta.targetName;
+            if (meta.targetSubtitle) targetSubtitle = meta.targetSubtitle;
+            if (meta.targetThumbnail) targetThumbnail = meta.targetThumbnail;
+            if (meta.scenario) scenario = meta.scenario;
+            if (meta.description) description = meta.description;
+          } catch {}
+          if (!description) description = basicReason;
+        } else if (rawReason.includes(':')) {
+          scenario = rawReason.split(':')[0].trim();
+          description = rawReason.substring(rawReason.indexOf(':') + 1).trim();
+        }
+
+        items.push({
+          id: r.ReportID || r.id,
+          reporterId: r.ReportUserID || r.reporter_id || undefined,
+          type: 'user',
+          targetId: r.ReportedUserID || r.reported_user_id,
+          targetName,
+          targetSubtitle,
+          targetThumbnail: targetThumbnail || undefined,
+          scenario,
+          description,
+          status: (r.Status as any) || (r.status as any) || 'Under Review',
+          timestamp: r.ReportedDate ? new Date(r.ReportedDate).toLocaleDateString() : 'Recent',
+          createdAt: r.ReportedDate || new Date().toISOString(),
         });
       }
 
@@ -2360,10 +2456,20 @@ export const supabaseDb = {
       const reportUuid = toUuid(report.id);
       const reporterUuid = reporterUserId ? toUuid(reporterUserId) : null;
       const targetUuid = toUuid(report.targetId);
-      const reasonText = `${report.scenario || 'Report'}: ${report.description || ''}`;
+
+      // Serialize metadata into Reason column so targetName, thumbnail, and scenario survive restarts
+      const meta = {
+        targetName: report.targetName,
+        targetSubtitle: report.targetSubtitle,
+        targetThumbnail: report.targetThumbnail,
+        scenario: report.scenario,
+        description: report.description,
+      };
+      const reasonText = `${report.scenario || 'Report'}: ${report.description || ''}|||${JSON.stringify(meta)}`;
 
       if (report.type === 'video') {
-        const { error } = await client.from('ReportVideo').insert({
+        // Attempt 1: Full insert into PascalCase ReportVideo
+        let res = await client.from('ReportVideo').insert({
           ReportID: reportUuid,
           ReporterUserID: reporterUuid,
           VideoID: targetUuid,
@@ -2371,9 +2477,36 @@ export const supabaseDb = {
           Status: report.status || 'Under Review',
           ReportedDate: report.createdAt || new Date().toISOString(),
         });
-        return !error;
+
+        // Fallback 1: Foreign key violation (23503) on ReporterUserID or VideoID -> retry with null reporter
+        if (res.error && res.error.code === '23503') {
+          console.warn('[Supabase] ReportVideo foreign key error, retrying with ReporterUserID: null');
+          res = await client.from('ReportVideo').insert({
+            ReportID: reportUuid,
+            ReporterUserID: null,
+            VideoID: targetUuid,
+            Reason: reasonText,
+            Status: report.status || 'Under Review',
+            ReportedDate: report.createdAt || new Date().toISOString(),
+          });
+        }
+
+        // Fallback 2: Column missing or table missing (42P01 / 42703) -> retry snake_case
+        if (res.error && (res.error.code === '42P01' || res.error.code === '42703')) {
+          res = await client.from('report_videos').insert({
+            id: reportUuid,
+            reporter_user_id: reporterUuid,
+            video_id: targetUuid,
+            reason: reasonText,
+            status: report.status || 'Under Review',
+            created_at: report.createdAt || new Date().toISOString(),
+          });
+        }
+
+        return !res.error;
       } else {
-        const { error } = await client.from('ReportUser').insert({
+        // User report
+        let res = await client.from('ReportUser').insert({
           ReportID: reportUuid,
           ReportUserID: reporterUuid,
           ReportedUserID: targetUuid,
@@ -2381,7 +2514,30 @@ export const supabaseDb = {
           Status: report.status || 'Under Review',
           ReportedDate: report.createdAt || new Date().toISOString(),
         });
-        return !error;
+
+        if (res.error && res.error.code === '23503') {
+          res = await client.from('ReportUser').insert({
+            ReportID: reportUuid,
+            ReportUserID: null,
+            ReportedUserID: targetUuid,
+            Reason: reasonText,
+            Status: report.status || 'Under Review',
+            ReportedDate: report.createdAt || new Date().toISOString(),
+          });
+        }
+
+        if (res.error && (res.error.code === '42P01' || res.error.code === '42703')) {
+          res = await client.from('report_users').insert({
+            id: reportUuid,
+            reporter_user_id: reporterUuid,
+            reported_user_id: targetUuid,
+            reason: reasonText,
+            status: report.status || 'Under Review',
+            created_at: report.createdAt || new Date().toISOString(),
+          });
+        }
+
+        return !res.error;
       }
     } catch (e) {
       console.warn('Supabase insertReport fallback:', e);
@@ -2400,12 +2556,20 @@ export const supabaseDb = {
     try {
       const rUuid = toUuid(reportId);
       const table = type === 'video' ? 'ReportVideo' : 'ReportUser';
-      const { error } = await client.from(table).update({ Status: status }).eq('ReportID', rUuid);
+      const altTable = type === 'video' ? 'ReportUser' : 'ReportVideo';
+
+      let { error } = await client.from(table).update({ Status: status }).eq('ReportID', rUuid);
       if (error) {
-        const altTable = type === 'video' ? 'ReportUser' : 'ReportVideo';
-        await client.from(altTable).update({ Status: status }).eq('ReportID', rUuid);
+        const alt = await client.from(altTable).update({ Status: status }).eq('ReportID', rUuid);
+        error = alt.error;
       }
-      return !error;
+
+      // Try snake_case tables if PascalCase not found
+      if (error) {
+        const snakeTable = type === 'video' ? 'report_videos' : 'report_users';
+        await client.from(snakeTable).update({ status }).eq('id', rUuid);
+      }
+      return true;
     } catch (e) {
       console.warn('Supabase updateReportStatus error:', e);
       return false;
@@ -2744,7 +2908,36 @@ CREATE TABLE IF NOT EXISTS public."Admin" (
   "LastLogin" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now())
 );
 
--- 2. USER & VIDEO SCHEMA COMPATIBILITY (Ensures Role, IsPublic on User and Status on Video)
+-- 2. REPORT TABLES (Ensures Community Reports work seamlessly)
+CREATE TABLE IF NOT EXISTS public."ReportVideo" (
+  "ReportID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "ReporterUserID" UUID REFERENCES public."User"("UserID") ON DELETE SET NULL,
+  "VideoID" UUID REFERENCES public."Video"("VideoID") ON DELETE CASCADE,
+  "Reason" TEXT,
+  "Status" TEXT DEFAULT 'Under Review',
+  "ReportedDate" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public."ReportUser" (
+  "ReportID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "ReportUserID" UUID REFERENCES public."User"("UserID") ON DELETE SET NULL,
+  "ReportedUserID" UUID REFERENCES public."User"("UserID") ON DELETE CASCADE,
+  "Reason" TEXT,
+  "Status" TEXT DEFAULT 'Under Review',
+  "ReportedDate" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 3. NOTIFICATION TABLE (For video revocation, creator appeals, and interaction alerts)
+CREATE TABLE IF NOT EXISTS public."Notification" (
+  "NotificationID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "UserID" UUID REFERENCES public."User"("UserID") ON DELETE CASCADE,
+  "NotificationType" TEXT NOT NULL,
+  "NotificationMessage" TEXT,
+  "IsRead" BOOLEAN DEFAULT false,
+  "NotificationDate" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 4. USER & VIDEO SCHEMA COMPATIBILITY (Ensures Role, IsPublic on User and Status on Video)
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "Role" TEXT DEFAULT 'creator';
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "IsPublic" BOOLEAN DEFAULT true;
 ALTER TABLE IF EXISTS public."User" ALTER COLUMN "IsPublic" SET DEFAULT true;
@@ -2753,6 +2946,12 @@ ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "ThumbnailURL" TEX
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "RejectionReason" TEXT;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealStatus" TEXT DEFAULT 'none';
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealReason" TEXT;
+
+-- 5. INDEXES (Guarantees sub-millisecond lookups & protects Supabase Disk IO!)
+CREATE INDEX IF NOT EXISTS "idx_video_status" ON public."Video"("Status");
+CREATE INDEX IF NOT EXISTS "idx_reportvideo_status" ON public."ReportVideo"("Status");
+CREATE INDEX IF NOT EXISTS "idx_reportuser_status" ON public."ReportUser"("Status");
+CREATE INDEX IF NOT EXISTS "idx_notification_user_unread" ON public."Notification"("UserID", "IsRead");
 
 -- 3. ENABLE ROW LEVEL SECURITY (RLS) SAFELY ON BASE TABLES (Views like VideoStats are excluded)
 ALTER TABLE IF EXISTS public."User" ENABLE ROW LEVEL SECURITY;

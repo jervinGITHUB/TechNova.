@@ -6,6 +6,7 @@ import {
   getSupabaseConfig,
   testSupabaseConnection,
   isSameUser,
+  toUuid,
 } from '../../lib/supabase';
 import { AdminRecord, SystemStats } from '../../types';
 import {
@@ -1057,7 +1058,7 @@ export const AdminDashboardView: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold text-white font-brand">
-                  Community Reports ({filteredReports.length})
+                  Community Reports ({filteredReports.length} shown of {reports.length})
                 </h3>
                 {pendingReportsCount > 0 && (
                   <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/30 text-[10px] font-bold">
@@ -1066,23 +1067,27 @@ export const AdminDashboardView: React.FC = () => {
                 )}
               </div>
               <p className="text-xs text-neutral-400 mt-0.5">
-                Community reports submitted for videos and user accounts. Review and update report status.
+                Community reports submitted for videos and user accounts. Review violations, revoke content, and decide appeals.
               </p>
             </div>
 
             {/* Type Filters */}
-            <div className="flex items-center gap-1.5">
-              {(['all', 'video', 'user'] as const).map(f => (
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {[
+                { id: 'all', label: `All Types (${reports.length})` },
+                { id: 'video', label: `Video Reports (${reports.filter(r => r.type === 'video').length})` },
+                { id: 'user', label: `User Reports (${reports.filter(r => r.type === 'user').length})` },
+              ].map(f => (
                 <button
-                  key={f}
-                  onClick={() => setReportFilter(f)}
+                  key={f.id}
+                  onClick={() => setReportFilter(f.id as any)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-semibold capitalize transition-colors cursor-pointer ${
-                    reportFilter === f
+                    reportFilter === f.id
                       ? 'bg-[#ff007a] text-white shadow-sm'
                       : 'bg-neutral-800 text-neutral-400 hover:text-white'
                   }`}
                 >
-                  {f === 'all' ? 'All Types' : `${f} reports`}
+                  {f.label}
                 </button>
               ))}
             </div>
@@ -1112,98 +1117,220 @@ export const AdminDashboardView: React.FC = () => {
 
           <div className="space-y-3">
             {filteredReports.length === 0 ? (
-              <div className="py-12 text-center text-neutral-500 text-xs bg-[#171724] rounded-2xl border border-neutral-800">
-                No moderation reports matching this filter.
+              <div className="py-12 text-center text-neutral-400 text-xs bg-[#171724] rounded-2xl border border-neutral-800 space-y-3 p-6">
+                <AlertTriangle className="w-8 h-8 text-neutral-600 mx-auto" />
+                <div>
+                  <div className="font-bold text-white text-sm">No reports matching current filter</div>
+                  <p className="text-neutral-500 text-xs mt-1">
+                    Filter: {reportFilter} reports · {reportStatusFilter} status ({reports.length} total reports recorded)
+                  </p>
+                </div>
+                {reports.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setReportFilter('all');
+                      setReportStatusFilter('all');
+                    }}
+                    className="py-1.5 px-4 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-xs cursor-pointer transition-all shadow"
+                  >
+                    View All Reports ({reports.length})
+                  </button>
+                )}
               </div>
             ) : (
-              filteredReports.map(report => (
-                <div
-                  key={report.id}
-                  className="p-4 rounded-2xl bg-[#181824] border border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-neutral-700 transition-colors"
-                >
-                  <div className="space-y-1.5 text-xs flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                          report.type === 'video'
-                            ? 'bg-[#ff007a]/15 text-[#ff007a] border border-[#ff007a]/30'
-                            : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
-                        }`}
-                      >
-                        {report.type} report
-                      </span>
-                      <span className="font-bold text-white text-sm">{report.targetName}</span>
-                      <span className="text-[11px] text-neutral-400">· {report.timestamp}</span>
+              filteredReports.map(report => {
+                const targetVideo = report.type === 'video'
+                  ? videos.find(v => v.id === report.targetId || toUuid(v.id) === toUuid(report.targetId))
+                  : null;
 
-                      {/* Current Status */}
-                      <span
-                        className={`font-semibold px-2 py-0.5 rounded-md text-[11px] ${
-                          report.status === 'Approved'
-                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                            : report.status === 'Rejected'
-                            ? 'bg-red-500/15 text-red-400 border border-red-500/30'
-                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                        }`}
-                      >
-                        Status: {report.status === 'Rejected' ? 'Declined' : report.status}
-                      </span>
+                const hasPendingAppeal = targetVideo && (
+                  targetVideo.appealStatus === 'pending' ||
+                  (targetVideo.status === 'rejected' && Boolean(targetVideo.appealReason && targetVideo.appealStatus !== 'declined' && targetVideo.appealStatus !== 'approved'))
+                );
+
+                return (
+                  <div
+                    key={report.id}
+                    className={`p-4 rounded-2xl bg-[#181824] border flex flex-col gap-3 transition-colors ${
+                      hasPendingAppeal
+                        ? 'border-amber-500/60 shadow-[0_0_15px_rgba(245,158,11,0.15)] ring-1 ring-amber-500/40'
+                        : report.status === 'Approved'
+                        ? 'border-emerald-500/30'
+                        : 'border-neutral-800 hover:border-neutral-700'
+                    }`}
+                  >
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="space-y-1.5 text-xs flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                              report.type === 'video'
+                                ? 'bg-[#ff007a]/15 text-[#ff007a] border border-[#ff007a]/30'
+                                : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
+                            }`}
+                          >
+                            {report.type} report
+                          </span>
+                          <span className="font-bold text-white text-sm">
+                            {targetVideo ? `${targetVideo.creator?.displayName || 'Creator'}'s video` : report.targetName}
+                          </span>
+                          <span className="text-[11px] text-neutral-400">· {report.timestamp}</span>
+
+                          {/* Current Status */}
+                          <span
+                            className={`font-semibold px-2 py-0.5 rounded-md text-[11px] ${
+                              report.status === 'Approved'
+                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                                : report.status === 'Rejected'
+                                ? 'bg-red-500/15 text-red-400 border border-red-500/30'
+                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                            }`}
+                          >
+                            Status: {report.status === 'Rejected' ? 'Declined / Dismissed' : report.status}
+                          </span>
+
+                          {/* Video state tag */}
+                          {targetVideo && (
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                targetVideo.status === 'rejected'
+                                  ? 'bg-red-500/20 text-red-300 border border-red-500/40'
+                                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                              }`}
+                            >
+                              Video: {targetVideo.status === 'rejected' ? 'Revoked' : 'Live on Feed'}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="text-neutral-300">
+                          <strong>Violation Reason:</strong> {report.scenario}
+                          {report.description && <span className="text-neutral-400"> — "{report.description}"</span>}
+                        </div>
+
+                        {(report.targetSubtitle || targetVideo?.caption) && (
+                          <div className="text-neutral-400 text-[11px]">
+                            Caption: "{targetVideo?.caption || report.targetSubtitle}"
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Admin Resolution Buttons */}
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        {/* Approve Violation & Revoke Video with Appeal Rights */}
+                        {report.status !== 'Approved' && (
+                          <button
+                            onClick={async () => {
+                              if (report.type === 'video') {
+                                const violationReason =
+                                  report.description || report.scenario || 'Reported for community guidelines violation';
+                                await rejectVideoAdmin(report.targetId, violationReason);
+                                await updateReportStatusAdmin(report.id, report.type, 'Approved');
+                                setSyncStatusMsg({
+                                  type: 'success',
+                                  text: 'Report approved! Video revoked from feed and creator notified with appeal rights.',
+                                });
+                                setTimeout(() => setSyncStatusMsg(null), 4000);
+                              } else if (report.type === 'user') {
+                                await updateReportStatusAdmin(report.id, report.type, 'Approved');
+                                deleteUserAdmin(report.targetId);
+                              }
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                            title={report.type === 'video' ? 'Approve violation & revoke video (creator will be notified to appeal)' : 'Approve & Ban User'}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>{report.type === 'video' ? 'Approve & Revoke Video' : 'Approve & Ban User'}</span>
+                          </button>
+                        )}
+
+                        {/* Mark Under Review */}
+                        {report.status !== 'Under Review' && (
+                          <button
+                            onClick={() => updateReportStatusAdmin(report.id, report.type, 'Under Review')}
+                            className="px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-medium text-xs transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <Clock className="w-3 h-3" />
+                            <span>Under Review</span>
+                          </button>
+                        )}
+
+                        {/* Dismiss / Decline Report */}
+                        {report.status !== 'Rejected' && (
+                          <button
+                            onClick={async () => {
+                              await updateReportStatusAdmin(report.id, report.type, 'Rejected');
+                              setSyncStatusMsg({
+                                type: 'success',
+                                text: 'Report dismissed without action.',
+                              });
+                              setTimeout(() => setSyncStatusMsg(null), 3000);
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1 border border-red-500/30"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            <span>Dismiss Report</span>
+                          </button>
+                        )}
+                      </div>
                     </div>
 
-                    <div className="text-neutral-300">
-                      <strong>Violation Reason:</strong> {report.scenario}
-                      {report.description && <span className="text-neutral-400"> — "{report.description}"</span>}
-                    </div>
+                    {/* Integrated Appeal Review Box if Creator has submitted an Appeal for this video */}
+                    {hasPendingAppeal && targetVideo && (
+                      <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-xs text-amber-200 space-y-2.5 mt-1 animate-fadeIn">
+                        <div className="flex items-center justify-between">
+                          <div className="font-bold flex items-center gap-2 text-amber-300">
+                            <Clock className="w-4 h-4 animate-pulse text-amber-400" />
+                            <span>Creator Appeal Pending Review</span>
+                          </div>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/25 text-amber-200 font-mono font-bold">
+                            Action Required
+                          </span>
+                        </div>
 
-                    {report.targetSubtitle && (
-                      <div className="text-neutral-400 text-[11px]">
-                        Target Details: {report.targetSubtitle}
+                        <div className="p-3 rounded-xl bg-black/50 border border-amber-500/20 text-neutral-200 text-xs">
+                          <span className="text-neutral-400 block text-[11px] mb-1 font-semibold uppercase tracking-wider">
+                            Creator's Appeal Statement:
+                          </span>
+                          "{targetVideo.appealReason || 'Creator requested review and reinstatement'}"
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-1 flex-wrap">
+                          <button
+                            onClick={async () => {
+                              await reviewVideoAppeal(targetVideo.id, 'approved');
+                              setSyncStatusMsg({
+                                type: 'success',
+                                text: 'Appeal Approved! Video is restored to feed and creator notified.',
+                              });
+                              setTimeout(() => setSyncStatusMsg(null), 4000);
+                            }}
+                            className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow cursor-pointer transition-all"
+                          >
+                            <Check className="w-3.5 h-3.5 stroke-[3]" />
+                            <span>Approve Appeal & Restore Video</span>
+                          </button>
+
+                          <button
+                            onClick={async () => {
+                              await reviewVideoAppeal(targetVideo.id, 'declined');
+                              setSyncStatusMsg({
+                                type: 'success',
+                                text: 'Appeal Declined. Creator has been notified.',
+                              });
+                              setTimeout(() => setSyncStatusMsg(null), 4000);
+                            }}
+                            className="px-3.5 py-2 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all border border-red-500/30"
+                          >
+                            <XCircle className="w-3.5 h-3.5" />
+                            <span>Decline Appeal</span>
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
-
-                  {/* Admin Resolution Buttons */}
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    {/* Approve Violation & Take Action */}
-                    <button
-                      onClick={async () => {
-                        await updateReportStatusAdmin(report.id, report.type, 'Approved');
-                        if (report.type === 'video') {
-                          deleteVideoAdmin(report.targetId);
-                        } else if (report.type === 'user') {
-                          deleteUserAdmin(report.targetId);
-                        }
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1.5"
-                      title={report.type === 'video' ? 'Approve & Take Down Video' : 'Approve & Ban User'}
-                    >
-                      <Check className="w-3.5 h-3.5" />
-                      <span>{report.type === 'video' ? 'Approve & Remove Video' : 'Approve & Ban User'}</span>
-                    </button>
-
-                    {/* Mark Under Review */}
-                    {report.status !== 'Under Review' && (
-                      <button
-                        onClick={() => updateReportStatusAdmin(report.id, report.type, 'Under Review')}
-                        className="px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-medium text-xs transition-colors cursor-pointer flex items-center gap-1"
-                      >
-                        <Clock className="w-3 h-3" />
-                        <span>Under Review</span>
-                      </button>
-                    )}
-
-                    {/* Dismiss / Decline Report */}
-                    {report.status !== 'Rejected' && (
-                      <button
-                        onClick={() => updateReportStatusAdmin(report.id, report.type, 'Rejected')}
-                        className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1 border border-red-500/30"
-                      >
-                        <XCircle className="w-3.5 h-3.5" />
-                        <span>Decline Report</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
