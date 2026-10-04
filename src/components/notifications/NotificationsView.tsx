@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { formatRealtimeAgo } from '../../utils/time';
+import { deduplicateNotifications } from '../../utils/notifications';
 import {
   Bell,
   Heart,
@@ -19,6 +20,7 @@ import {
   Send,
   Loader2,
   ShieldAlert,
+  Ban,
 } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
 
@@ -94,6 +96,8 @@ export const NotificationsView: React.FC = () => {
         return <Share2 className="w-3.5 h-3.5 text-purple-400" />;
       case 'video_revoked':
         return <AlertTriangle className="w-3.5 h-3.5 text-red-400" />;
+      case 'account_banned':
+        return <Ban className="w-3.5 h-3.5 text-red-400" />;
       case 'appeal_status':
         return <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />;
       default:
@@ -101,28 +105,14 @@ export const NotificationsView: React.FC = () => {
     }
   };
 
-  // Filter out redundant generic trigger notifications (e.g. "ViralHub Someone commented on your video")
+  // Filter and deduplicate notifications, discarding duplicates and generic trigger notifications
   const validNotifications = React.useMemo(() => {
-    return notifications.filter(item => {
-      const text = (item.targetText || '').toLowerCase();
-      const isGenericComment =
-        item.type === 'comment' &&
-        item.actor?.displayName === 'ViralHub' &&
-        (text.includes('someone commented') || text.includes('commented on your video'));
-      return !isGenericComment;
-    });
+    return deduplicateNotifications(notifications);
   }, [notifications]);
 
   const unreadCount = validNotifications.filter(n => n.isUnread).length;
 
-  // Ensure new notifications are strictly on top across all devices
-  const sortedNotifications = React.useMemo(() => {
-    return [...validNotifications].sort((a, b) => {
-      const timeA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
-      const timeB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
-      return timeB - timeA;
-    });
-  }, [validNotifications]);
+  const sortedNotifications = validNotifications;
 
   return (
     <div className="flex-1 p-4 sm:p-8 max-w-3xl mx-auto w-full select-none text-left">
@@ -167,7 +157,7 @@ export const NotificationsView: React.FC = () => {
                 }
               }}
               className={`flex items-start sm:items-center justify-between p-4 rounded-2xl border transition-all duration-300 cursor-pointer ${
-                item.type === 'video_revoked'
+                item.type === 'video_revoked' || item.type === 'account_banned'
                   ? 'bg-[#191118] border-red-500/40 hover:bg-[#1f131f]'
                   : item.type === 'appeal_status'
                   ? 'bg-[#141822] border-amber-500/30 hover:bg-[#181d2a]'

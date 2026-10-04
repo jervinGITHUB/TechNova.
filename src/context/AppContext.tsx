@@ -44,6 +44,7 @@ import {
   recordDeletedUserId,
   isUserIdDeleted,
 } from '../lib/supabase';
+import { deduplicateNotifications } from '../utils/notifications';
 
 /**
  * Deduplicates conversations so that only ONE canonical conversation
@@ -352,6 +353,10 @@ interface AppContextType {
   addAdmin: (admin: Partial<AdminRecord>) => Promise<boolean>;
   removeAdmin: (adminId: string) => Promise<boolean>;
   deleteUserAdmin: (userId: string) => Promise<boolean>;
+  banUserAdmin: (userId: string, reason?: string) => Promise<boolean>;
+  unbanUserAdmin: (userId: string) => Promise<boolean>;
+  submitUserAppeal: (reason: string) => Promise<boolean>;
+  reviewUserAppeal: (userId: string, decision: 'approved' | 'declined') => Promise<boolean>;
   deleteVideoAdmin: (videoId: string) => Promise<boolean>;
   approveVideoAdmin: (videoId: string) => Promise<boolean>;
   rejectVideoAdmin: (videoId: string, reason?: string) => Promise<boolean>;
@@ -3843,6 +3848,338 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return res;
   };
 
+  const banUserAdmin = async (userId: string, reason = 'Violation of Community Guidelines'): Promise<boolean> => {
+    const finalReason = reason.trim() || 'Violation of Community Guidelines';
+    const nowIso = new Date().toISOString();
+
+    // 1. Update user in users list
+    setUsers(prev => {
+      const next = prev.map(u => {
+        if (isSameUser(u.id, userId)) {
+          return {
+            ...u,
+            isBanned: true,
+            banReason: finalReason,
+            bannedAt: nowIso,
+            appealStatus: 'none' as const,
+          };
+        }
+        return u;
+      });
+      storage.set('users', next);
+      return next;
+    });
+
+    // Save to user bans backup storage map so bans persist even before SQL migration
+    const bansMap = storage.get<Record<string, any>>('user_bans_v1', {});
+    bansMap[userId] = { isBanned: true, banReason: finalReason, bannedAt: nowIso, appealStatus: 'none' };
+    if (toUuid(userId)) bansMap[toUuid(userId)] = bansMap[userId];
+    storage.set('user_bans_v1', bansMap);
+
+    // 2. If banned user is currently logged in, update currentUser immediately!
+    if (currentUser && isSameUser(currentUser.id, userId)) {
+      const updatedUser: User = {
+        ...currentUser,
+        isBanned: true,
+        banReason: finalReason,
+        bannedAt: nowIso,
+        appealStatus: 'none',
+      };
+      setCurrentUser(updatedUser);
+      storage.set('currentUser', updatedUser);
+    }
+
+    // 3. Revoke their videos from public feed so feed stays clean
+    setVideos(prev => {
+      const next = prev.map(v => {
+        if (isSameUser(v.creatorId, userId) || isSameUser(v.creator?.id, userId)) {
+          return {
+            ...v,
+            status: 'rejected' as const,
+            rejectionReason: `Creator account suspended: ${finalReason}`,
+          };
+        }
+        return v;
+      });
+      storage.set('videos', next);
+      return next;
+    });
+
+    // 4. Create and send account_banned notification to the banned user
+    const targetUser = users.find(u => isSameUser(u.id, userId));
+    const banNotif: NotificationItem = {
+      id: `notif_ban_${Date.now()}`,
+      recipientId: userId,
+      recipientEmail: targetUser?.email,
+      type: 'account_banned',
+      actor: {
+        id: 'viralhub_moderation',
+        username: 'moderation',
+        displayName: 'ViralHub Moderation',
+        avatar: '',
+      },
+      targetText: `Your account was banned due to: ${finalReason}. You may submit an appeal from your screen.`,
+      banReason: finalReason,
+      timestamp: nowIso,
+      createdAt: nowIso,
+      isUnread: true,
+    };
+
+    setNotifications(prev => {
+      const next = deduplicateNotifications([banNotif, ...prev]);
+      storage.set('notifications', next);
+      return next;
+    });
+    supabaseDb.insertNotification(banNotif, userId);
+
+    // 5. Update in Supabase
+    await supabaseDb.banUser(userId, finalReason);
+
+    // 6. Broadcast event so other open tabs update
+    storage.set('viralhub_user_banned_event', { userId, reason: finalReason, timestamp: Date.now() });
+
+    return true;
+  };
+
+  const unbanUserAdmin = async (userId: string): Promise<boolean> => {
+    // 1. Update user in users list
+    setUsers(prev => {
+      const next = prev.map(u => {
+        if (isSameUser(u.id, userId)) {
+          return {
+            ...u,
+            isBanned: false,
+            banReason: undefined,
+            appealStatus: 'approved' as const,
+          };
+        }
+        return u;
+      });
+      storage.set('users', next);
+      return next;
+    });
+
+    // Remove from user bans backup storage map
+    const bansMap = storage.get<Record<string, any>>('user_bans_v1', {});
+    delete bansMap[userId];
+    if (toUuid(userId)) delete bansMap[toUuid(userId)];
+    storage.set('user_bans_v1', bansMap);
+
+    // 2. If unbanned user is currently logged in, update currentUser
+    if (currentUser && isSameUser(currentUser.id, userId)) {
+      const updatedUser: User = {
+        ...currentUser,
+        isBanned: false,
+        banReason: undefined,
+        appealStatus: 'approved',
+      };
+      setCurrentUser(updatedUser);
+      storage.set('currentUser', updatedUser);
+    }
+
+    // 3. Reinstate user videos
+    setVideos(prev => {
+      const next = prev.map(v => {
+        if (isSameUser(v.creatorId, userId) || isSameUser(v.creator?.id, userId)) {
+          return {
+            ...v,
+            status: 'approved' as const,
+            rejectionReason: undefined,
+          };
+        }
+        return v;
+      });
+      storage.set('videos', next);
+      return next;
+    });
+
+    // 4. Send appeal_status approved notification
+    const nowIso = new Date().toISOString();
+    const approvedNotif: NotificationItem = {
+      id: `notif_unban_${Date.now()}`,
+      recipientId: userId,
+      type: 'appeal_status',
+      actor: {
+        id: 'viralhub_moderation',
+        username: 'moderation',
+        displayName: 'ViralHub Moderation',
+        avatar: '',
+      },
+      targetText: `Your account ban appeal was approved! Full access to ViralHub has been restored.`,
+      appealStatus: 'approved',
+      timestamp: nowIso,
+      createdAt: nowIso,
+      isUnread: true,
+    };
+
+    setNotifications(prev => {
+      const next = deduplicateNotifications([approvedNotif, ...prev]);
+      storage.set('notifications', next);
+      return next;
+    });
+    supabaseDb.insertNotification(approvedNotif, userId);
+
+    // 5. Update in Supabase
+    await supabaseDb.unbanUser(userId);
+
+    // 6. Broadcast event
+    storage.set('viralhub_user_unbanned_event', { userId, timestamp: Date.now() });
+
+    return true;
+  };
+
+  const submitUserAppeal = async (reason: string): Promise<boolean> => {
+    if (!currentUser) return false;
+    const cleanReason = reason.trim();
+    if (!cleanReason) return false;
+
+    const nowIso = new Date().toISOString();
+
+    // 1. Update currentUser
+    const updatedUser: User = {
+      ...currentUser,
+      appealStatus: 'pending',
+      appealReason: cleanReason,
+      appealSubmittedAt: nowIso,
+    };
+    setCurrentUser(updatedUser);
+    storage.set('currentUser', updatedUser);
+
+    // 2. Update in users array
+    setUsers(prev => {
+      const next = prev.map(u =>
+        isSameUser(u.id, currentUser.id)
+          ? { ...u, appealStatus: 'pending' as const, appealReason: cleanReason, appealSubmittedAt: nowIso }
+          : u
+      );
+      storage.set('users', next);
+      return next;
+    });
+
+    // Update in user bans backup storage map
+    const bansMap = storage.get<Record<string, any>>('user_bans_v1', {});
+    if (bansMap[currentUser.id]) {
+      bansMap[currentUser.id].appealStatus = 'pending';
+      bansMap[currentUser.id].appealReason = cleanReason;
+      bansMap[currentUser.id].appealSubmittedAt = nowIso;
+    }
+    if (toUuid(currentUser.id) && bansMap[toUuid(currentUser.id)]) {
+      bansMap[toUuid(currentUser.id)].appealStatus = 'pending';
+      bansMap[toUuid(currentUser.id)].appealReason = cleanReason;
+      bansMap[toUuid(currentUser.id)].appealSubmittedAt = nowIso;
+    }
+    storage.set('user_bans_v1', bansMap);
+
+    // 3. Update related user reports so admin sees appeal status
+    setReports(prev => {
+      const next = prev.map(r =>
+        r.type === 'user' && isSameUser(r.targetId, currentUser.id)
+          ? { ...r, description: `${r.description || ''} [User Appeal: "${cleanReason}"]` }
+          : r
+      );
+      storage.set('reports', next);
+      return next;
+    });
+
+    // 4. Notify Admin Team
+    const adminAppealNotif: NotificationItem = {
+      id: `notif_adm_usr_appeal_${Date.now()}`,
+      recipientId: 'admin',
+      type: 'appeal_status',
+      actor: {
+        id: currentUser.id,
+        username: currentUser.username,
+        displayName: currentUser.displayName,
+        avatar: currentUser.avatar,
+      },
+      targetText: `@${currentUser.username} submitted an account ban appeal: "${cleanReason.slice(0, 50)}..."`,
+      timestamp: nowIso,
+      createdAt: nowIso,
+      isUnread: true,
+      appealStatus: 'pending',
+      appealReason: cleanReason,
+    };
+
+    setNotifications(prev => {
+      const next = deduplicateNotifications([adminAppealNotif, ...prev]);
+      storage.set('notifications', next);
+      return next;
+    });
+    supabaseDb.insertNotification(adminAppealNotif, 'admin');
+
+    // 5. Update Supabase
+    await supabaseDb.submitUserAppeal(currentUser.id, cleanReason);
+
+    return true;
+  };
+
+  const reviewUserAppeal = async (userId: string, decision: 'approved' | 'declined'): Promise<boolean> => {
+    if (decision === 'approved') {
+      return unbanUserAdmin(userId);
+    }
+
+    const nowIso = new Date().toISOString();
+
+    // 1. Update user appealStatus to 'declined'
+    setUsers(prev => {
+      const next = prev.map(u => {
+        if (isSameUser(u.id, userId)) {
+          return {
+            ...u,
+            appealStatus: 'declined' as const,
+          };
+        }
+        return u;
+      });
+      storage.set('users', next);
+      return next;
+    });
+
+    const bansMap = storage.get<Record<string, any>>('user_bans_v1', {});
+    if (bansMap[userId]) bansMap[userId].appealStatus = 'declined';
+    if (toUuid(userId) && bansMap[toUuid(userId)]) bansMap[toUuid(userId)].appealStatus = 'declined';
+    storage.set('user_bans_v1', bansMap);
+
+    if (currentUser && isSameUser(currentUser.id, userId)) {
+      const updatedUser: User = {
+        ...currentUser,
+        appealStatus: 'declined',
+      };
+      setCurrentUser(updatedUser);
+      storage.set('currentUser', updatedUser);
+    }
+
+    // 2. Notify user
+    const declinedNotif: NotificationItem = {
+      id: `notif_dec_ban_${Date.now()}`,
+      recipientId: userId,
+      type: 'appeal_status',
+      actor: {
+        id: 'viralhub_moderation',
+        username: 'moderation',
+        displayName: 'ViralHub Moderation',
+        avatar: '',
+      },
+      targetText: `Your account ban appeal was reviewed and declined by administration. Account remains suspended.`,
+      appealStatus: 'declined',
+      timestamp: nowIso,
+      createdAt: nowIso,
+      isUnread: true,
+    };
+
+    setNotifications(prev => {
+      const next = deduplicateNotifications([declinedNotif, ...prev]);
+      storage.set('notifications', next);
+      return next;
+    });
+    supabaseDb.insertNotification(declinedNotif, userId);
+
+    // 3. Update Supabase
+    await supabaseDb.reviewUserAppeal(userId, 'declined');
+
+    return true;
+  };
+
   const deleteVideo = async (videoId: string): Promise<boolean> => {
     const targetVideo = videos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
     const mediaUrl = targetVideo?.mediaUrl;
@@ -4108,6 +4445,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addAdmin,
         removeAdmin,
         deleteUserAdmin,
+        banUserAdmin,
+        unbanUserAdmin,
+        submitUserAppeal,
+        reviewUserAppeal,
         deleteVideoAdmin,
         deleteVideo,
         updateUserRoleAdmin,

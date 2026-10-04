@@ -13,6 +13,12 @@ export interface User {
   isBlocked?: boolean;
   isReported?: boolean;
   role?: 'creator' | 'viewer' | 'admin' | 'moderator';
+  isBanned?: boolean;
+  banReason?: string;
+  bannedAt?: string;
+  appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
+  appealReason?: string;
+  appealSubmittedAt?: string;
 }
 
 export interface AudioTrack {
@@ -145,7 +151,7 @@ export interface NotificationItem {
   id: string;
   recipientId?: string;
   recipientEmail?: string;
-  type: 'like' | 'follow' | 'follow_request' | 'comment' | 'share' | 'video_revoked' | 'appeal_status' | 'message';
+  type: 'like' | 'follow' | 'follow_request' | 'comment' | 'share' | 'video_revoked' | 'account_banned' | 'appeal_status' | 'message';
   actor: {
     id: string;
     username: string;
@@ -162,6 +168,7 @@ export interface NotificationItem {
   appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
   rejectionReason?: string;
   appealReason?: string;
+  banReason?: string;
 }
 
 export interface ReportItem {

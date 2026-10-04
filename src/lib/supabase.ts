@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { User, Video, AudioTrack, NotificationItem, ReportItem, LiveStream, AdminRecord, SystemStats, CommentEntry, CommentReplyEntry } from '../types';
+import { deduplicateNotifications } from '../utils/notifications';
 
 export interface SupabaseConfig {
   url: string;
@@ -483,9 +484,26 @@ export const supabaseDb = {
             if (row.DisplayName && (!existing.displayName || existing.displayName === 'User')) {
               existing.displayName = row.DisplayName;
             }
+            if (row.IsBanned || row.is_banned) {
+              existing.isBanned = true;
+              existing.banReason = row.BanReason || row.ban_reason || existing.banReason;
+              existing.bannedAt = row.BannedAt || row.banned_at || existing.bannedAt;
+            }
+            if (row.AppealStatus || row.appeal_status) {
+              existing.appealStatus = row.AppealStatus || row.appeal_status;
+              existing.appealReason = row.AppealReason || row.appeal_reason || existing.appealReason;
+              existing.appealSubmittedAt = row.AppealSubmittedAt || row.appeal_submitted_at || existing.appealSubmittedAt;
+            }
             continue; // Skip creating duplicate user
           }
         }
+
+        const isUserBanned = Boolean(row.IsBanned || row.is_banned || false);
+        const banReason = row.BanReason || row.ban_reason || undefined;
+        const bannedAt = row.BannedAt || row.banned_at || undefined;
+        const appealStatus = (row.AppealStatus || row.appeal_status || 'none') as any;
+        const appealReason = row.AppealReason || row.appeal_reason || undefined;
+        const appealSubmittedAt = row.AppealSubmittedAt || row.appeal_submitted_at || undefined;
 
         const newUser: User = {
           id: uId,
@@ -499,6 +517,12 @@ export const supabaseDb = {
           likesCount: '0',
           isPrivate: row.IsPublic !== undefined ? !row.IsPublic : (row.is_public !== undefined ? !row.is_public : Boolean(row.isPrivate || row.is_private)),
           role: isAdminUser ? 'admin' : 'creator',
+          isBanned: isUserBanned,
+          banReason,
+          bannedAt,
+          appealStatus,
+          appealReason,
+          appealSubmittedAt,
         };
 
         userMap.set(uId, newUser);
@@ -707,6 +731,145 @@ export const supabaseDb = {
       return true;
     } catch (e) {
       console.warn('Supabase deleteUser error:', e);
+      return false;
+    }
+  },
+
+  async banUser(userId: string, reason: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !userId) return false;
+    try {
+      const uUuid = toUuid(userId);
+      const nowIso = new Date().toISOString();
+      const payload: Record<string, any> = {
+        IsBanned: true,
+        BanReason: reason,
+        BannedAt: nowIso,
+        AppealStatus: 'none',
+      };
+      let res = await client
+        .from('User')
+        .update(payload)
+        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
+
+      if (res.error) {
+        await client
+          .from('users')
+          .update({
+            is_banned: true,
+            ban_reason: reason,
+            banned_at: nowIso,
+            appeal_status: 'none',
+          })
+          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      }
+      cachedUsersResult = null;
+      return true;
+    } catch (e) {
+      console.warn('Supabase banUser warning:', e);
+      return false;
+    }
+  },
+
+  async unbanUser(userId: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !userId) return false;
+    try {
+      const uUuid = toUuid(userId);
+      const payload: Record<string, any> = {
+        IsBanned: false,
+        BanReason: null,
+        AppealStatus: 'approved',
+      };
+      let res = await client
+        .from('User')
+        .update(payload)
+        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
+
+      if (res.error) {
+        await client
+          .from('users')
+          .update({
+            is_banned: false,
+            ban_reason: null,
+            appeal_status: 'approved',
+          })
+          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      }
+      cachedUsersResult = null;
+      return true;
+    } catch (e) {
+      console.warn('Supabase unbanUser warning:', e);
+      return false;
+    }
+  },
+
+  async submitUserAppeal(userId: string, appealReason: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !userId) return false;
+    try {
+      const uUuid = toUuid(userId);
+      const nowIso = new Date().toISOString();
+      const payload: Record<string, any> = {
+        AppealStatus: 'pending',
+        AppealReason: appealReason,
+        AppealSubmittedAt: nowIso,
+      };
+      let res = await client
+        .from('User')
+        .update(payload)
+        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
+
+      if (res.error) {
+        await client
+          .from('users')
+          .update({
+            appeal_status: 'pending',
+            appeal_reason: appealReason,
+            appeal_submitted_at: nowIso,
+          })
+          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      }
+      cachedUsersResult = null;
+      return true;
+    } catch (e) {
+      console.warn('Supabase submitUserAppeal warning:', e);
+      return false;
+    }
+  },
+
+  async reviewUserAppeal(userId: string, decision: 'approved' | 'declined'): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !userId) return false;
+    try {
+      const uUuid = toUuid(userId);
+      const isApproved = decision === 'approved';
+      const payload: Record<string, any> = {
+        AppealStatus: decision,
+        IsBanned: !isApproved,
+      };
+      if (isApproved) {
+        payload.BanReason = null;
+      }
+      let res = await client
+        .from('User')
+        .update(payload)
+        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
+
+      if (res.error) {
+        await client
+          .from('users')
+          .update({
+            appeal_status: decision,
+            is_banned: !isApproved,
+            ...(isApproved ? { ban_reason: null } : {}),
+          })
+          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      }
+      cachedUsersResult = null;
+      return true;
+    } catch (e) {
+      console.warn('Supabase reviewUserAppeal warning:', e);
       return false;
     }
   },
@@ -2035,16 +2198,17 @@ export const supabaseDb = {
         requestId: item.requestId,
         status: item.status,
         appealStatus: item.appealStatus,
+        banReason: item.banReason,
       });
 
-      const { error } = await client.from('Notification').insert({
+      const { error } = await client.from('Notification').upsert({
         NotificationID: notifUuid,
         UserID: userUuid,
         NotificationType: item.type,
         NotificationMessage: payloadString,
         IsRead: !item.isUnread,
         NotificationDate: item.createdAt || item.timestamp || new Date().toISOString(),
-      });
+      }, { onConflict: 'NotificationID' });
 
       return !error;
     } catch (e) {
@@ -2082,18 +2246,20 @@ export const supabaseDb = {
 
         const isRevoked = r.NotificationType === 'video_revoked';
         const isAppeal = r.NotificationType === 'appeal_status';
+        const isBanned = r.NotificationType === 'account_banned';
 
         let targetText = r.NotificationMessage || '';
         let actor = {
-          id: isRevoked || isAppeal ? 'viralhub_moderation' : 'system',
-          username: isRevoked || isAppeal ? 'moderation' : 'viralhub',
-          displayName: isRevoked || isAppeal ? 'ViralHub Moderation' : 'ViralHub',
+          id: isRevoked || isAppeal || isBanned ? 'viralhub_moderation' : 'system',
+          username: isRevoked || isAppeal || isBanned ? 'moderation' : 'viralhub',
+          displayName: isRevoked || isAppeal || isBanned ? 'ViralHub Moderation' : 'ViralHub',
           avatar: '',
         };
         let videoId = r.VideoID || undefined;
         let requestId: string | undefined = undefined;
         let status: any = undefined;
         let appealStatus: any = isRevoked ? 'none' : undefined;
+        let banReason: string | undefined = undefined;
 
         // Attempt to parse rich JSON payload
         if (rawMsg.startsWith('{')) {
@@ -2105,6 +2271,7 @@ export const supabaseDb = {
             if (parsed.requestId) requestId = parsed.requestId;
             if (parsed.status) status = parsed.status;
             if (parsed.appealStatus) appealStatus = parsed.appealStatus;
+            if (parsed.banReason) banReason = parsed.banReason;
           } catch {
             // Keep default fallback
           }
@@ -2123,9 +2290,10 @@ export const supabaseDb = {
           requestId,
           status,
           appealStatus,
+          banReason,
         });
       }
-      return items;
+      return deduplicateNotifications(items);
     } catch (e) {
       console.warn('Supabase fetchNotifications fallback:', e);
       return null;
@@ -2937,10 +3105,16 @@ CREATE TABLE IF NOT EXISTS public."Notification" (
   "NotificationDate" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 4. USER & VIDEO SCHEMA COMPATIBILITY (Ensures Role, IsPublic on User and Status on Video)
+-- 4. USER & VIDEO SCHEMA COMPATIBILITY (Ensures Role, IsPublic, IsBanned, Appeals on User and Status on Video)
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "Role" TEXT DEFAULT 'creator';
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "IsPublic" BOOLEAN DEFAULT true;
 ALTER TABLE IF EXISTS public."User" ALTER COLUMN "IsPublic" SET DEFAULT true;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "IsBanned" BOOLEAN DEFAULT false;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "BanReason" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "BannedAt" TIMESTAMP WITH TIME ZONE;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "AppealStatus" TEXT DEFAULT 'none';
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "AppealReason" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "AppealSubmittedAt" TIMESTAMP WITH TIME ZONE;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "Status" TEXT DEFAULT 'approved';
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "ThumbnailURL" TEXT;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "RejectionReason" TEXT;
@@ -2948,6 +3122,8 @@ ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealStatus" TEX
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealReason" TEXT;
 
 -- 5. INDEXES (Guarantees sub-millisecond lookups & protects Supabase Disk IO!)
+CREATE INDEX IF NOT EXISTS "idx_user_isbanned" ON public."User"("IsBanned");
+CREATE INDEX IF NOT EXISTS "idx_user_appealstatus" ON public."User"("AppealStatus");
 CREATE INDEX IF NOT EXISTS "idx_video_status" ON public."Video"("Status");
 CREATE INDEX IF NOT EXISTS "idx_reportvideo_status" ON public."ReportVideo"("Status");
 CREATE INDEX IF NOT EXISTS "idx_reportuser_status" ON public."ReportUser"("Status");

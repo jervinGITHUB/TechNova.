@@ -37,6 +37,8 @@ import {
   LogOut,
   ArrowRightLeft,
   UserCog,
+  Ban,
+  UserCheck,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -49,6 +51,9 @@ export const AdminDashboardView: React.FC = () => {
     addAdmin,
     removeAdmin,
     deleteUserAdmin,
+    banUserAdmin,
+    unbanUserAdmin,
+    reviewUserAppeal,
     updateUserRoleAdmin,
     deleteVideoAdmin,
     approveVideoAdmin,
@@ -67,6 +72,10 @@ export const AdminDashboardView: React.FC = () => {
   const [activeAdminTab, setActiveAdminTab] = useState<
     'overview' | 'users' | 'videos' | 'reports' | 'admins'
   >('overview');
+
+  const [resolvingReportId, setResolvingReportId] = useState<string | null>(null);
+  const [banningUser, setBanningUser] = useState<{ id: string; username: string; displayName: string } | null>(null);
+  const [banCustomReason, setBanCustomReason] = useState('Violation of Community Guidelines');
 
   // Deduplicate users so that even if database had duplicate rows for an email, each unique user account displays once!
   const uniqueUsers = React.useMemo(() => {
@@ -646,6 +655,7 @@ export const AdminDashboardView: React.FC = () => {
                   <th className="py-3 px-3">User</th>
                   <th className="py-3 px-3">Email</th>
                   <th className="py-3 px-3">Role</th>
+                  <th className="py-3 px-3">Status</th>
                   <th className="py-3 px-3">Followers</th>
                   <th className="py-3 px-3 text-right">Actions</th>
                 </tr>
@@ -653,7 +663,7 @@ export const AdminDashboardView: React.FC = () => {
               <tbody className="divide-y divide-neutral-800/60">
                 {filteredUsers.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="py-8 text-center text-neutral-500">
+                    <td colSpan={6} className="py-8 text-center text-neutral-500">
                       No user accounts found matching "{userSearch}".
                     </td>
                   </tr>
@@ -710,6 +720,75 @@ export const AdminDashboardView: React.FC = () => {
                           </select>
                         </div>
                       </td>
+                      <td className="py-3 px-3">
+                        {u.isBanned ? (
+                          <div className="space-y-1.5 min-w-[140px]">
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 font-bold text-[10px] flex items-center gap-1 w-fit">
+                                <Ban className="w-2.5 h-2.5" />
+                                <span>BANNED</span>
+                              </span>
+                              {u.appealStatus === 'pending' && (
+                                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-[10px] animate-pulse flex items-center gap-1 w-fit">
+                                  <Clock className="w-2.5 h-2.5" />
+                                  <span>APPEAL PENDING</span>
+                                </span>
+                              )}
+                            </div>
+                            {u.banReason && (
+                              <div className="text-[10px] text-neutral-400 italic line-clamp-1" title={u.banReason}>
+                                Reason: {u.banReason}
+                              </div>
+                            )}
+
+                            {/* Appeal review card if pending */}
+                            {u.appealStatus === 'pending' && (
+                              <div className="p-2 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-200 text-[11px] space-y-1.5 mt-1">
+                                <div className="font-semibold text-amber-400 flex items-center gap-1 text-[10px]">
+                                  <span>User Appeal:</span>
+                                </div>
+                                <div className="italic text-neutral-200 bg-black/40 p-1.5 rounded-lg border border-amber-500/20 max-w-xs break-words">
+                                  "{u.appealReason || 'No details provided'}"
+                                </div>
+                                <div className="flex items-center gap-1.5 pt-0.5">
+                                  <button
+                                    onClick={async () => {
+                                      await reviewUserAppeal(u.id, 'approved');
+                                      setSyncStatusMsg({
+                                        type: 'success',
+                                        text: `Appeal approved! @${u.username} has been unbanned.`,
+                                      });
+                                      setTimeout(() => setSyncStatusMsg(null), 3500);
+                                    }}
+                                    className="px-2 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] transition-colors cursor-pointer flex items-center gap-1"
+                                  >
+                                    <Check className="w-2.5 h-2.5" />
+                                    <span>Approve & Unban</span>
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      await reviewUserAppeal(u.id, 'declined');
+                                      setSyncStatusMsg({
+                                        type: 'error',
+                                        text: `Appeal declined for @${u.username}. Account remains banned.`,
+                                      });
+                                      setTimeout(() => setSyncStatusMsg(null), 3500);
+                                    }}
+                                    className="px-2 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-[10px] transition-colors cursor-pointer"
+                                  >
+                                    Decline Appeal
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold text-[10px] flex items-center gap-1 w-fit">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                            <span>Active</span>
+                          </span>
+                        )}
+                      </td>
                       <td className="py-3 px-3 text-neutral-300">{u.followersCount}</td>
                       <td className="py-3 px-3 text-right">
                         <div className="flex items-center justify-end gap-1.5">
@@ -720,6 +799,39 @@ export const AdminDashboardView: React.FC = () => {
                           >
                             <Eye className="w-3.5 h-3.5" />
                           </button>
+
+                          {/* Ban / Unban Toggle Button */}
+                          {u.isBanned ? (
+                            <button
+                              onClick={async () => {
+                                const confirmUnban = window.confirm(`Are you sure you want to unban user @${u.username}?`);
+                                if (!confirmUnban) return;
+                                await unbanUserAdmin(u.id);
+                                setSyncStatusMsg({
+                                  type: 'success',
+                                  text: `User @${u.username} has been unbanned.`,
+                                });
+                                setTimeout(() => setSyncStatusMsg(null), 3500);
+                              }}
+                              className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-400 transition-colors cursor-pointer"
+                              title="Unban User Account"
+                            >
+                              <UserCheck className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setBanningUser({ id: u.id, username: u.username, displayName: u.displayName });
+                                setBanCustomReason('Violation of Community Guidelines');
+                              }}
+                              disabled={isSameUser(u.id, currentUser?.id)}
+                              className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 transition-colors cursor-pointer disabled:opacity-30"
+                              title={isSameUser(u.id, currentUser?.id) ? 'Cannot ban your own active session' : 'Ban User Account'}
+                            >
+                              <Ban className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
                           <button
                             onClick={async () => {
                               const isTargetClientOnThisDevice = (savedAccounts || []).some(
@@ -1220,23 +1332,37 @@ export const AdminDashboardView: React.FC = () => {
                         {/* Approve Violation & Revoke Video with Appeal Rights */}
                         {report.status !== 'Approved' && (
                           <button
+                            disabled={resolvingReportId === report.id}
                             onClick={async () => {
-                              if (report.type === 'video') {
-                                const violationReason =
-                                  report.description || report.scenario || 'Reported for community guidelines violation';
-                                await rejectVideoAdmin(report.targetId, violationReason);
-                                await updateReportStatusAdmin(report.id, report.type, 'Approved');
-                                setSyncStatusMsg({
-                                  type: 'success',
-                                  text: 'Report approved! Video revoked from feed and creator notified with appeal rights.',
-                                });
-                                setTimeout(() => setSyncStatusMsg(null), 4000);
-                              } else if (report.type === 'user') {
-                                await updateReportStatusAdmin(report.id, report.type, 'Approved');
-                                deleteUserAdmin(report.targetId);
+                              if (resolvingReportId === report.id) return;
+                              setResolvingReportId(report.id);
+                              try {
+                                if (report.type === 'video') {
+                                  const violationReason =
+                                    report.description || report.scenario || 'Reported for community guidelines violation';
+                                  await rejectVideoAdmin(report.targetId, violationReason);
+                                  await updateReportStatusAdmin(report.id, report.type, 'Approved');
+                                  setSyncStatusMsg({
+                                    type: 'success',
+                                    text: 'Report approved! Video revoked from feed and creator notified with appeal rights.',
+                                  });
+                                  setTimeout(() => setSyncStatusMsg(null), 4000);
+                                } else if (report.type === 'user') {
+                                  const violationReason =
+                                    report.description || report.scenario || 'Reported for community guidelines violation';
+                                  await banUserAdmin(report.targetId, violationReason);
+                                  await updateReportStatusAdmin(report.id, report.type, 'Approved');
+                                  setSyncStatusMsg({
+                                    type: 'success',
+                                    text: 'Report approved! User account banned and suspended. User notified with appeal rights.',
+                                  });
+                                  setTimeout(() => setSyncStatusMsg(null), 4000);
+                                }
+                              } finally {
+                                setResolvingReportId(null);
                               }
                             }}
-                            className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                            className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
                             title={report.type === 'video' ? 'Approve violation & revoke video (creator will be notified to appeal)' : 'Approve & Ban User'}
                           >
                             <Check className="w-3.5 h-3.5" />
@@ -1498,6 +1624,97 @@ export const AdminDashboardView: React.FC = () => {
       )}
 
 
+
+      {/* Ban User Modal Dialog */}
+      {banningUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-[#14141e] border border-red-500/30 rounded-3xl p-6 w-full max-w-md space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-base text-white font-brand flex items-center gap-2">
+                <Ban className="w-4 h-4 text-red-400" />
+                <span>Ban User Account: @{banningUser.username}</span>
+              </h3>
+              <button
+                onClick={() => setBanningUser(null)}
+                className="text-neutral-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-neutral-300 leading-relaxed">
+              Banning this user will immediately suspend their account, hide their content from public feeds, and display a banned screen with the reason and appeal instructions.
+            </p>
+
+            <div className="space-y-2 text-xs">
+              <label className="text-neutral-300 font-semibold block">Select or Enter Reason for Ban</label>
+              <div className="grid grid-cols-1 gap-1.5 max-h-36 overflow-y-auto pr-1">
+                {[
+                  'Harassment, bullying, or intimidation',
+                  'Hate speech or discrimination',
+                  'Inappropriate Profile Info (Bio / Avatar / Name)',
+                  'Pretending to Be Someone',
+                  'Scam, fraud, or spam',
+                  'Exploitation and abuse of people under 18',
+                  'Physical violence and violent threats',
+                  'Animal abuse',
+                  'Violation of Community Guidelines',
+                ].map(r => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setBanCustomReason(r)}
+                    className={`text-left px-3 py-1.5 rounded-xl border text-[11px] transition-all cursor-pointer ${
+                      banCustomReason === r
+                        ? 'bg-red-500/20 border-red-500/50 text-white font-semibold'
+                        : 'bg-[#181824] border-neutral-800 text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
+
+              <div className="pt-2">
+                <label className="text-neutral-400 text-[11px] block mb-1">Custom Note / Explanation:</label>
+                <textarea
+                  value={banCustomReason}
+                  onChange={e => setBanCustomReason(e.target.value)}
+                  rows={2}
+                  className="w-full bg-[#181824] p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-red-500 text-xs resize-none"
+                  placeholder="Enter specific ban reason for the user to read..."
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setBanningUser(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 hover:text-white font-semibold text-xs cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (!banningUser) return;
+                  await banUserAdmin(banningUser.id, banCustomReason);
+                  setSyncStatusMsg({
+                    type: 'success',
+                    text: `User @${banningUser.username} has been banned and suspended.`,
+                  });
+                  setTimeout(() => setSyncStatusMsg(null), 3500);
+                  setBanningUser(null);
+                }}
+                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs cursor-pointer shadow-lg shadow-red-600/30"
+              >
+                Confirm Ban
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Add Admin Modal */}
       {showAddAdminModal && (

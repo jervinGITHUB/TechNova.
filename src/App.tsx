@@ -20,6 +20,7 @@ import { AudioLibraryModal } from './components/modals/AudioLibraryModal';
 import { SupabaseVercelModal } from './components/modals/SupabaseVercelModal';
 import { SwitchAccountModal } from './components/modals/SwitchAccountModal';
 import { AdminDashboardView } from './components/admin/AdminDashboardView';
+import { BannedAccountView } from './components/auth/BannedAccountView';
 import { InAppNotificationToast } from './components/notifications/InAppNotificationToast';
 import { X } from 'lucide-react';
 
@@ -39,6 +40,25 @@ const AppContent: React.FC = () => {
   // If user is not authenticated, show Auth Page first
   if (!currentUser) {
     return <AuthPage />;
+  }
+
+  // If user account is suspended/banned, show Banned Account View with appeal capability
+  if (currentUser.isBanned) {
+    return (
+      <div className="h-screen w-screen overflow-hidden bg-[#0c0c10] text-white flex flex-col antialiased selection:bg-[#ff007a] selection:text-white">
+        <BannedAccountView />
+        <InAppNotificationToast />
+        <SupabaseVercelModal
+          isOpen={supabaseModalOpen}
+          onClose={() => setSupabaseModalOpen(false)}
+          onConnected={syncWithSupabase}
+        />
+        <SwitchAccountModal
+          isOpen={switchAccountModalOpen}
+          onClose={() => setSwitchAccountModalOpen(false)}
+        />
+      </div>
+    );
   }
 
   // If logged-in user is an administrator (queried from Supabase), they ONLY have the Admin Dashboard
