@@ -1141,6 +1141,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Helper to detect if browser is returning from an OAuth callback
+  const checkIsOAuthRedirect = (): boolean => {
+    if (typeof window === 'undefined') return false;
+    const hash = window.location.hash || '';
+    const search = window.location.search || '';
+    const inProgress = sessionStorage.getItem('viralhub_oauth_in_progress') === 'true';
+    const hasAuthParams =
+      hash.includes('access_token=') ||
+      hash.includes('refresh_token=') ||
+      search.includes('code=') ||
+      search.includes('error=');
+    if (hasAuthParams) {
+      sessionStorage.setItem('viralhub_oauth_in_progress', 'true');
+      return true;
+    }
+    return inProgress;
+  };
+
   // Sync Supabase user session (Google OAuth or email session) into user profile
   const handleSupabaseUserSession = async (sbUser: any) => {
     if (!sbUser) return;
@@ -1151,17 +1169,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const username = rawUsername.replace(/[^a-zA-Z0-9._]/g, '').toLowerCase() || `user_${sbUser.id.slice(0, 6)}`;
     const avatar = meta.avatar_url || meta.picture || '';
 
-    // Check if user already exists in database or state to NEVER create duplicate accounts
-    let existingUser: User | null = null;
-    try {
-      const remoteUsers = await supabaseDb.fetchUsers();
-      if (remoteUsers) {
-        existingUser = remoteUsers.find(
-          u => u.id === sbUser.id || (email && u.email?.trim().toLowerCase() === email)
-        ) || null;
+    // Check memory first (instant, 0 DB roundtrip)
+    let existingUser: User | null =
+      users.find(u => u.id === sbUser.id || (email && u.email && u.email.trim().toLowerCase() === email)) ||
+      savedAccounts.find(u => u.id === sbUser.id || (email && u.email && u.email.trim().toLowerCase() === email)) ||
+      null;
+
+    if (!existingUser) {
+      try {
+        const remoteUsers = await supabaseDb.fetchUsers();
+        if (remoteUsers) {
+          existingUser = remoteUsers.find(
+            u => u.id === sbUser.id || (email && u.email?.trim().toLowerCase() === email)
+          ) || null;
+        }
+      } catch {
+        // fallback
       }
-    } catch {
-      // fallback
     }
 
     if (!existingUser && email) {
@@ -1201,6 +1225,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(finalUser);
     storage.set('currentUser', finalUser);
     recordSavedAccount(finalUser);
+    setSwitchAccountModalOpen(false);
 
     setUsers(prev => {
       // Filter out any duplicates with same id or email
@@ -1219,11 +1244,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const client = getSupabaseClient();
     if (!client) return;
 
-    // Check existing session on load only if no account is currently active in storage
+    const isInitialOAuth = checkIsOAuthRedirect();
+
+    // Check existing session on load
     client.auth.getSession().then(({ data: { session } }) => {
       const activeStored = storage.get<User | null>('currentUser', null);
-      if (!activeStored && session?.user) {
-        handleSupabaseUserSession(session.user);
+      if (session?.user) {
+        if (isInitialOAuth || !activeStored) {
+          if (typeof window !== 'undefined') {
+            sessionStorage.removeItem('viralhub_oauth_in_progress');
+          }
+          handleSupabaseUserSession(session.user);
+        }
       }
     });
 
@@ -1232,9 +1264,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (event === 'SIGNED_IN') {
         if (session?.user) {
           const activeStored = storage.get<User | null>('currentUser', null);
-          const isExplicitOAuthRedirect =
-            typeof window !== 'undefined' &&
-            (window.location.hash.includes('access_token') || window.location.search.includes('code='));
+          const isExplicitOAuth = checkIsOAuthRedirect();
+
+          // If returning from an explicit OAuth action, always finalize login!
+          if (isExplicitOAuth) {
+            if (typeof window !== 'undefined') {
+              sessionStorage.removeItem('viralhub_oauth_in_progress');
+            }
+            await handleSupabaseUserSession(session.user);
+            return;
+          }
 
           // If there is an active user currently in storage, check if this event belongs to them
           if (activeStored) {
@@ -1247,7 +1286,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             // If the user deliberately switched to a different account (e.g. Account 2),
             // a background tab-focus / token refresh from Account 1 MUST NOT switch them back!
-            if (!isSameUser && !isExplicitOAuthRedirect) {
+            if (!isSameUser) {
               return;
             }
           }
@@ -1255,9 +1294,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           await handleSupabaseUserSession(session.user);
         }
       } else if (event === 'INITIAL_SESSION') {
-        const activeStored = storage.get<User | null>('currentUser', null);
-        if (!activeStored && session?.user) {
+        const isExplicitOAuth = checkIsOAuthRedirect();
+        if (isExplicitOAuth && session?.user) {
+          if (typeof window !== 'undefined') {
+            sessionStorage.removeItem('viralhub_oauth_in_progress');
+          }
           await handleSupabaseUserSession(session.user);
+        } else {
+          const activeStored = storage.get<User | null>('currentUser', null);
+          if (!activeStored && session?.user) {
+            await handleSupabaseUserSession(session.user);
+          }
         }
       } else if (event === 'SIGNED_OUT') {
         // Do not force wipe if user is just switching local accounts
@@ -1960,8 +2007,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    // Save current active user to device savedAccounts so they can easily switch back anytime
+    if (currentUser) {
+      recordSavedAccount(currentUser);
+    }
+
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('viralhub_oauth_in_progress', 'true');
+    }
+
     const { error } = await signInWithGoogle();
     if (error) {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('viralhub_oauth_in_progress');
+      }
       return { success: false, message: error.message };
     }
     return { success: true };
