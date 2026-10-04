@@ -14,6 +14,7 @@ import {
   FollowRequest,
   FollowStatus,
   AdminRecord,
+  CommentEntry,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -151,7 +152,11 @@ interface AppContextType {
   updateUserProfile: (updates: Partial<User>) => void;
   toggleFollowUser: (userId: string) => void;
   toggleLikeVideo: (videoId: string) => void;
-  addCommentToVideo: (videoId: string, text: string) => void;
+  addCommentToVideo: (videoId: string, text: string, replyToCommentId?: string) => Promise<boolean>;
+  deleteCommentFromVideo: (videoId: string, commentId: string) => Promise<boolean>;
+  toggleLikeComment: (videoId: string, commentId: string) => void;
+  commentsMap: Record<string, CommentEntry[]>;
+  fetchCommentsForVideo: (videoId: string, force?: boolean) => Promise<CommentEntry[]>;
   shareVideo: (videoId: string) => void;
   shareVideoToUser: (video: Video, targetUserId: string, note?: string) => boolean;
   recordVideoView: (videoId: string) => void;
@@ -469,8 +474,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return r === 'admin' || r === 'super admin' || r === 'administrator';
   });
 
-  // Modals
+  // Modals & Comments
   const [commentsVideoId, setCommentsVideoId] = useState<string | null>(null);
+  const [commentsMap, setCommentsMap] = useState<Record<string, CommentEntry[]>>(() =>
+    storage.get<Record<string, CommentEntry[]>>('video_comments_v2', {})
+  );
+
+  const fetchCommentsForVideo = async (videoId: string, force = false): Promise<CommentEntry[]> => {
+    if (!videoId) return [];
+    if (!force && commentsMap[videoId] && commentsMap[videoId].length > 0) {
+      return commentsMap[videoId];
+    }
+    try {
+      const remote = await supabaseDb.fetchComments(videoId);
+      if (remote !== null) {
+        setCommentsMap(prev => {
+          const existing = prev[videoId] || [];
+          const likedIds = new Set(existing.filter(c => c.isLiked).map(c => c.id));
+          const merged = remote.map(c => ({
+            ...c,
+            isLiked: likedIds.has(c.id),
+          }));
+          const next = { ...prev, [videoId]: merged };
+          storage.set('video_comments_v2', next);
+          return next;
+        });
+
+        // Synchronize video comment count directly from database records
+        const count = remote.reduce((acc, c) => acc + 1 + (c.replies ? c.replies.length : 0), 0);
+        setVideos(prev =>
+          prev.map(v =>
+            v.id === videoId || toUuid(v.id) === toUuid(videoId)
+              ? { ...v, commentsCount: count }
+              : v
+          )
+        );
+        return remote;
+      }
+    } catch (err) {
+      console.warn('fetchCommentsForVideo error:', err);
+    }
+    return commentsMap[videoId] || [];
+  };
+
+  const fetchCommentsForVideoRef = React.useRef(fetchCommentsForVideo);
+  fetchCommentsForVideoRef.current = fetchCommentsForVideo;
   const [reportModal, setReportModal] = useState<ReportModalConfig | null>(null);
   const [audioLibraryOpen, setAudioLibraryOpen] = useState<boolean>(false);
   const [onSelectAudioCallback, setOnSelectAudioCallback] = useState<((track: AudioTrack) => void) | null>(null);
@@ -1136,24 +1184,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 );
               }
             })
-            // 4. Comment updates: update video comment count directly in memory (ignore own optimistic actions)
+            // 4. Comment updates: update video comment count and comments list in real time across devices
             .on('postgres_changes', { event: '*', schema: 'public', table: 'Comment' }, (payload: any) => {
-              const actorId = payload.new?.UserID || payload.old?.UserID;
-              if (currentUser && actorId && isSameUser(actorId, currentUser.id)) {
-                // Actor's own comment is already optimistically updated locally in UI
-                return;
-              }
               const videoId = payload.new?.VideoID || payload.old?.VideoID;
-              if (!videoId) return;
-              const delta = payload.eventType === 'INSERT' ? 1 : payload.eventType === 'DELETE' ? -1 : 0;
-              if (delta !== 0) {
-                setVideos(prev =>
-                  prev.map(v =>
-                    v.id === videoId || toUuid(v.id) === toUuid(videoId)
-                      ? { ...v, commentsCount: Math.max(0, (v.commentsCount || 0) + delta) }
-                      : v
-                  )
-                );
+              if (videoId) {
+                fetchCommentsForVideoRef.current(videoId, true);
               }
             })
             // 5. Video updates: handle uploads, deletions, and view count updates without global sync
@@ -2152,27 +2187,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Add Comment (BR-018, BR-021)
-  const addCommentToVideo = (videoId: string, text: string) => {
-    if (!currentUser || !text.trim()) return;
+  const addCommentToVideo = async (
+    videoId: string,
+    text: string,
+    replyToCommentId?: string
+  ): Promise<boolean> => {
+    if (!currentUser || !text.trim() || !videoId) return false;
+    const cleanText = text.trim();
+    const commentUuid = crypto.randomUUID();
+    const nowIso = new Date().toISOString();
+
+    // 1. Optimistic UI update in commentsMap
+    setCommentsMap(prev => {
+      const list = prev[videoId] || [];
+      if (replyToCommentId) {
+        const updated = list.map(c => {
+          if (c.id === replyToCommentId || toUuid(c.id) === toUuid(replyToCommentId)) {
+            const replies = [
+              ...(c.replies || []),
+              {
+                id: commentUuid,
+                name: currentUser.displayName || currentUser.username || 'User',
+                avatar: currentUser.avatar || '',
+                text: cleanText,
+                timestamp: nowIso,
+                userId: currentUser.id,
+              },
+            ];
+            return { ...c, replies };
+          }
+          return c;
+        });
+        const next = { ...prev, [videoId]: updated };
+        storage.set('video_comments_v2', next);
+        return next;
+      } else {
+        const newEntry: CommentEntry = {
+          id: commentUuid,
+          name: currentUser.displayName || currentUser.username || 'User',
+          avatar: currentUser.avatar || '',
+          text: cleanText,
+          timestamp: nowIso,
+          likesCount: 0,
+          isLiked: false,
+          userId: currentUser.id,
+          replies: [],
+        };
+        const next = { ...prev, [videoId]: [...list, newEntry] };
+        storage.set('video_comments_v2', next);
+        return next;
+      }
+    });
+
     setVideos(prev =>
       prev.map(v => {
-        if (v.id === videoId) {
-          return { ...v, commentsCount: v.commentsCount + 1 };
+        if (v.id === videoId || toUuid(v.id) === toUuid(videoId)) {
+          return { ...v, commentsCount: (v.commentsCount || 0) + 1 };
         }
         return v;
       })
     );
 
-    const commentId = `c_${Date.now()}`;
-    supabaseDb.insertComment(commentId, videoId, currentUser, text.trim());
+    // 2. Persist to Supabase Comment table
+    const success = await supabaseDb.insertComment(
+      commentUuid,
+      videoId,
+      currentUser,
+      cleanText,
+      replyToCommentId
+    );
 
-    // Trigger notification to the VIDEO CREATOR (NOT currentUser)
-    const video = videos.find(v => v.id === videoId);
-    if (video && video.creatorId !== currentUser.id) {
-      const nowIso = new Date().toISOString();
+    // 3. Trigger notification to the VIDEO CREATOR (if not currentUser)
+    const video = videos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
+    if (video && !isSameUser(video.creatorId, currentUser.id)) {
       const newNotif: NotificationItem = {
         id: `notif_${Date.now()}`,
-        recipientId: video.creatorId, // Recipient is the VIDEO CREATOR!
+        recipientId: video.creatorId,
         type: 'comment',
         actor: {
           id: currentUser.id,
@@ -2180,7 +2270,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           displayName: currentUser.displayName,
           avatar: currentUser.avatar,
         },
-        targetText: `commented to your video: "${text.slice(0, 35)}"`,
+        targetText: `commented to your video: "${cleanText.slice(0, 35)}"`,
         timestamp: nowIso,
         createdAt: nowIso,
         isUnread: true,
@@ -2193,6 +2283,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       supabaseDb.insertNotification(newNotif, video.creatorId);
     }
+
+    return success;
+  };
+
+  const deleteCommentFromVideo = async (videoId: string, commentId: string): Promise<boolean> => {
+    if (!videoId || !commentId) return false;
+
+    setCommentsMap(prev => {
+      const list = prev[videoId] || [];
+      const updated = list
+        .filter(c => c.id !== commentId && toUuid(c.id) !== toUuid(commentId))
+        .map(c => ({
+          ...c,
+          replies: (c.replies || []).filter(r => r.id !== commentId && toUuid(r.id) !== toUuid(commentId)),
+        }));
+      const next = { ...prev, [videoId]: updated };
+      storage.set('video_comments_v2', next);
+      return next;
+    });
+
+    setVideos(prev =>
+      prev.map(v => {
+        if (v.id === videoId || toUuid(v.id) === toUuid(videoId)) {
+          return { ...v, commentsCount: Math.max(0, (v.commentsCount || 0) - 1) };
+        }
+        return v;
+      })
+    );
+
+    return supabaseDb.deleteComment(commentId, videoId);
+  };
+
+  const toggleLikeComment = (videoId: string, commentId: string) => {
+    setCommentsMap(prev => {
+      const list = prev[videoId] || [];
+      const updated = list.map(c => {
+        if (c.id === commentId || toUuid(c.id) === toUuid(commentId)) {
+          const liked = !c.isLiked;
+          const count = Math.max(0, (c.likesCount || 0) + (liked ? 1 : -1));
+          return { ...c, isLiked: liked, likesCount: count };
+        }
+        return c;
+      });
+      const next = { ...prev, [videoId]: updated };
+      storage.set('video_comments_v2', next);
+      return next;
+    });
   };
 
   // Share Video (BR-019, BR-020, BR-023)
@@ -3375,6 +3512,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleFollowUser,
         toggleLikeVideo,
         addCommentToVideo,
+        deleteCommentFromVideo,
+        toggleLikeComment,
+        commentsMap,
+        fetchCommentsForVideo,
         shareVideo,
         shareVideoToUser,
         recordVideoView,

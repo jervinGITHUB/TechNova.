@@ -26,6 +26,28 @@ export interface AudioTrack {
   sourceUsername?: string;
 }
 
+export interface CommentReplyEntry {
+  id: string;
+  name: string;
+  avatar: string;
+  text: string;
+  timestamp?: string;
+  userId?: string;
+}
+
+export interface CommentEntry {
+  id: string;
+  name: string;
+  avatar: string;
+  text: string;
+  timestamp?: string;
+  likesCount?: number;
+  isLiked?: boolean;
+  replyTo?: string;
+  userId?: string;
+  replies?: CommentReplyEntry[];
+}
+
 export interface VideoComment {
   id: string;
   videoId: string;

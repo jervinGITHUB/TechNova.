@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Video, AudioTrack, NotificationItem, ReportItem, LiveStream, AdminRecord, SystemStats } from '../types';
+import { User, Video, AudioTrack, NotificationItem, ReportItem, LiveStream, AdminRecord, SystemStats, CommentEntry, CommentReplyEntry } from '../types';
 
 export interface SupabaseConfig {
   url: string;
@@ -780,20 +780,18 @@ export const supabaseDb = {
         // ignore
       }
 
-      // Fetch like counts & comment counts from VideoStats (targeted by videoIds)
+      // Fetch like counts from VideoStats (targeted by videoIds)
       let likesCountMap = new Map<string, number>();
-      let commentsCountMap = new Map<string, number>();
       try {
         if (videoIds.length > 0) {
           const { data: statsRows } = await client
             .from('VideoStats')
-            .select('VideoID, LikeCount, CommentCount')
+            .select('VideoID, LikeCount')
             .in('VideoID', videoIds);
           if (statsRows && statsRows.length > 0) {
             statsRows.forEach((s: any) => {
               if (s.VideoID) {
                 likesCountMap.set(s.VideoID, s.LikeCount || 0);
-                commentsCountMap.set(s.VideoID, s.CommentCount || 0);
               }
             });
           }
@@ -802,7 +800,7 @@ export const supabaseDb = {
         // ignore
       }
 
-      // Scoped fallback for any videos missing from VideoStats (NEVER download the whole Like or Comment table)
+      // Scoped fallback for any videos missing from VideoStats (NEVER download the whole Like table)
       const missingLikeIds = videoIds.filter(id => !likesCountMap.has(id));
       if (missingLikeIds.length > 0 && missingLikeIds.length <= 40) {
         try {
@@ -813,23 +811,6 @@ export const supabaseDb = {
           if (likes) {
             likes.forEach((l: any) => {
               likesCountMap.set(l.VideoID, (likesCountMap.get(l.VideoID) || 0) + 1);
-            });
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      const missingCommentIds = videoIds.filter(id => !commentsCountMap.has(id));
-      if (missingCommentIds.length > 0 && missingCommentIds.length <= 40) {
-        try {
-          const { data: comments } = await client
-            .from('Comment')
-            .select('VideoID')
-            .in('VideoID', missingCommentIds);
-          if (comments) {
-            comments.forEach((c: any) => {
-              commentsCountMap.set(c.VideoID, (commentsCountMap.get(c.VideoID) || 0) + 1);
             });
           }
         } catch {
@@ -854,7 +835,7 @@ export const supabaseDb = {
 
         const hashtags = hashtagsMap.get(row.VideoID) || ['#viral', '#fyp'];
         const likesCount = likesCountMap.get(row.VideoID) || 0;
-        const commentsCount = commentsCountMap.get(row.VideoID) || 0;
+        const commentsCount = 0; // Comments count is fetched on-demand inside the comment drawer
 
         // If mediaUrl is a local blob (which is invalid across devices or after refresh),
         // provide a high-performance streaming video fallback so it never renders as a black box!
@@ -1482,6 +1463,196 @@ export const supabaseDb = {
   // -----------------------------------------------------------------------
   // 4. Comment Table (CommentID, UserID, VideoID, ParentCommentID, CommentText)
   // -----------------------------------------------------------------------
+  async fetchComments(videoId: string): Promise<CommentEntry[] | null> {
+    const client = getSupabaseClient();
+    if (!client) return null;
+
+    try {
+      const vUuid = toUuid(videoId);
+      let commentRows: any[] | null = null;
+      let error: any = null;
+
+      // 1. Fetch from PascalCase 'Comment' table
+      try {
+        const res1 = await client
+          .from('Comment')
+          .select('*')
+          .eq('VideoID', vUuid);
+
+        if (!res1.error && res1.data) {
+          commentRows = res1.data;
+        } else {
+          error = res1.error;
+        }
+      } catch (err: any) {
+        error = err;
+      }
+
+      // 2. Fallback to lowercase 'comments' table if 'Comment' table doesn't exist
+      if (commentRows === null) {
+        try {
+          const res2 = await client
+            .from('comments')
+            .select('*')
+            .eq('video_id', vUuid);
+
+          if (!res2.error && res2.data) {
+            commentRows = res2.data.map((r: any) => ({
+              CommentID: r.id || r.comment_id,
+              UserID: r.user_id || r.userId,
+              VideoID: r.video_id || r.videoId,
+              ParentCommentID: r.parent_comment_id || r.parentCommentId || r.reply_to_id,
+              CommentText: r.comment_text || r.text || r.content || '',
+              CreatedAt: r.created_at || r.published_at || r.createdAt,
+            }));
+            error = null;
+          }
+        } catch {}
+      }
+
+      if (error && !commentRows) {
+        console.warn('Supabase fetchComments error:', error.message);
+        return null;
+      }
+
+      if (!commentRows || commentRows.length === 0) {
+        return [];
+      }
+
+      // 3. Resolve user details for all commenter UserIDs
+      const rawUserIds = commentRows.map((r: any) => r.UserID || r.user_id).filter(Boolean);
+      const userIds = Array.from(new Set(rawUserIds));
+
+      const userMap = new Map<string, { name: string; avatar: string; username: string }>();
+
+      // Check User table in Supabase
+      if (userIds.length > 0) {
+        try {
+          const { data: dbUsers } = await client
+            .from('User')
+            .select('UserID, Username, DisplayName, ProfilePictureURL')
+            .in('UserID', userIds);
+
+          if (dbUsers && dbUsers.length > 0) {
+            dbUsers.forEach((u: any) => {
+              const uId = String(u.UserID || u.id || '').toLowerCase();
+              const name = u.DisplayName || u.Username || 'User';
+              const avatar = u.ProfilePictureURL || '';
+              const username = u.Username || '';
+              if (uId) {
+                userMap.set(uId, { name, avatar, username });
+              }
+            });
+          }
+        } catch {
+          // fallback
+        }
+      }
+
+      // Also check cached users from AppContext / supabaseDb cache
+      if (cachedUsersResult?.data) {
+        cachedUsersResult.data.forEach(u => {
+          const key1 = String(u.id).toLowerCase();
+          const key2 = toUuid(u.id).toLowerCase();
+          const entry = {
+            name: u.displayName || u.username || 'User',
+            avatar: u.avatar || '',
+            username: u.username || '',
+          };
+          if (!userMap.has(key1)) userMap.set(key1, entry);
+          if (!userMap.has(key2)) userMap.set(key2, entry);
+        });
+      }
+
+      // 4. Map comment rows to CommentEntry objects
+      const topLevel: CommentEntry[] = [];
+      const repliesMap = new Map<string, CommentReplyEntry[]>();
+
+      for (const row of commentRows) {
+        const cId = String(row.CommentID || row.id || row.comment_id || '');
+        const uId = String(row.UserID || row.user_id || '');
+        const parentId = row.ParentCommentID || row.parent_comment_id || null;
+        const text = String(row.CommentText || row.comment_text || row.text || row.content || '');
+        const timestamp =
+          row.CreatedAt ||
+          row.created_at ||
+          row.CommentedAt ||
+          row.commented_at ||
+          new Date().toISOString();
+
+        const userMeta =
+          userMap.get(uId.toLowerCase()) ||
+          userMap.get(toUuid(uId).toLowerCase()) || {
+            name: `User ${uId.slice(0, 5)}`,
+            avatar: '',
+            username: `user_${uId.slice(0, 5)}`,
+          };
+
+        if (parentId) {
+          const pId = String(parentId).toLowerCase();
+          const list = repliesMap.get(pId) || [];
+          list.push({
+            id: cId,
+            name: userMeta.name,
+            avatar: userMeta.avatar,
+            text,
+            timestamp,
+            userId: uId,
+          });
+          repliesMap.set(pId, list);
+        } else {
+          topLevel.push({
+            id: cId,
+            name: userMeta.name,
+            avatar: userMeta.avatar,
+            text,
+            timestamp,
+            likesCount: 0,
+            isLiked: false,
+            userId: uId,
+            replies: [],
+          });
+        }
+      }
+
+      // Attach replies to top-level comments
+      for (const comment of topLevel) {
+        const key1 = comment.id.toLowerCase();
+        const key2 = toUuid(comment.id).toLowerCase();
+        const replies = [...(repliesMap.get(key1) || []), ...(repliesMap.get(key2) || [])];
+        if (replies.length > 0) {
+          comment.replies = replies;
+          repliesMap.delete(key1);
+          repliesMap.delete(key2);
+        }
+      }
+
+      // Promote any orphaned replies to top-level comments so none are lost
+      for (const [_, orphans] of repliesMap.entries()) {
+        if (orphans && orphans.length > 0) {
+          for (const orphan of orphans) {
+            topLevel.push({
+              id: orphan.id,
+              name: orphan.name,
+              avatar: orphan.avatar,
+              text: orphan.text,
+              timestamp: orphan.timestamp,
+              likesCount: 0,
+              isLiked: false,
+              userId: orphan.userId,
+              replies: [],
+            });
+          }
+        }
+      }
+
+      return topLevel;
+    } catch (e) {
+      console.warn('Supabase fetchComments exception:', e);
+      return null;
+    }
+  },
+
   async insertComment(
     commentId: string,
     videoId: string,
@@ -1534,13 +1705,25 @@ export const supabaseDb = {
     }
   },
 
-  async deleteComment(commentId: string): Promise<boolean> {
+  async deleteComment(commentId: string, videoId?: string): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;
 
     try {
       const cUuid = toUuid(commentId);
-      const { error } = await client.from('Comment').delete().eq('CommentID', cUuid);
+      const { error } = await client.from('Comment').delete().or(`CommentID.eq.${cUuid},CommentID.eq.${commentId}`);
+      if (!error && videoId) {
+        const vUuid = toUuid(videoId);
+        try {
+          const { count } = await client
+            .from('Comment')
+            .select('*', { count: 'exact', head: true })
+            .eq('VideoID', vUuid);
+          if (typeof count === 'number') {
+            await client.from('VideoStats').upsert({ VideoID: vUuid, CommentCount: count }, { onConflict: 'VideoID' });
+          }
+        } catch {}
+      }
       return !error;
     } catch (e) {
       console.warn('Supabase deleteComment error:', e);

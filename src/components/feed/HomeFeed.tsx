@@ -339,7 +339,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           </span>
         </div>
 
-        {/* Comment Button */}
+        {/* Comment Button (Count only fetched on-demand inside comment section) */}
         <div className="flex flex-col items-center">
           <button
             onClick={() => setCommentsVideoId(video.id)}
@@ -348,9 +348,6 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           >
             <MessageCircle className="w-6 h-6" />
           </button>
-          <span className="text-[11px] font-semibold text-white mt-1 drop-shadow">
-            {formatCount(video.commentsCount)}
-          </span>
         </div>
 
         {/* Share Button */}

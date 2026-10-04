@@ -1,75 +1,53 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
-import { X, Send, Heart, ChevronUp, ChevronDown, MessageSquare } from 'lucide-react';
+import { X, Send, Heart, ChevronUp, ChevronDown, MessageSquare, Trash2, RefreshCw } from 'lucide-react';
 import { formatRealtimeAgo } from '../../utils/time';
-
-interface CommentEntry {
-  id: string;
-  name: string;
-  avatar: string;
-  text: string;
-  timestamp?: string;
-  likesCount?: number;
-  isLiked?: boolean;
-  replyTo?: string;
-  replies?: {
-    id: string;
-    name: string;
-    avatar: string;
-    text: string;
-    timestamp?: string;
-  }[];
-}
-
-const DEFAULT_VIDEO_COMMENTS: Record<string, CommentEntry[]> = {};
+import { isSameUser } from '../../lib/supabase';
 
 export const CommentsDrawer: React.FC = () => {
-  const { commentsVideoId, setCommentsVideoId, currentUser, addCommentToVideo, videos } = useApp();
+  const {
+    commentsVideoId,
+    setCommentsVideoId,
+    currentUser,
+    addCommentToVideo,
+    deleteCommentFromVideo,
+    toggleLikeComment,
+    videos,
+    commentsMap,
+    fetchCommentsForVideo,
+  } = useApp();
 
   // Bottom-sheet height state (starts at 50% = half of video)
   const [heightPercent, setHeightPercent] = useState<number>(50);
   const [isDragging, setIsDragging] = useState<boolean>(false);
-
-  // Per-video comments state
-  const [commentsMap, setCommentsMap] = useState<Record<string, CommentEntry[]>>(() => {
-    try {
-      const saved = localStorage.getItem('viralhub_video_comments_v2');
-      return saved ? JSON.parse(saved) : DEFAULT_VIDEO_COMMENTS;
-    } catch {
-      return DEFAULT_VIDEO_COMMENTS;
-    }
-  });
-
   const [inputVal, setInputVal] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
 
   // Drag tracking refs
   const dragStartY = useRef<number>(0);
   const dragStartHeight = useRef<number>(50);
   const currentHeightRef = useRef<number>(50);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('viralhub_video_comments_v2', JSON.stringify(commentsMap));
-    } catch {
-      // ignore
-    }
-  }, [commentsMap]);
-
-  // Reset to 50% height whenever opened for a new video
+  // Fetch comments from Supabase when drawer opens or video changes
   useEffect(() => {
     if (commentsVideoId) {
       setHeightPercent(50);
       currentHeightRef.current = 50;
       setReplyingTo(null);
       setInputVal('');
+      setIsLoading(true);
+      fetchCommentsForVideo(commentsVideoId, true).finally(() => {
+        setIsLoading(false);
+      });
     }
   }, [commentsVideoId]);
 
   if (!commentsVideoId) return null;
 
-  const currentComments = commentsMap[commentsVideoId] || DEFAULT_VIDEO_COMMENTS[commentsVideoId] || [];
+  const currentComments = commentsMap[commentsVideoId] || [];
   const currentVideo = videos.find(v => v.id === commentsVideoId);
 
   // Total comments count including replies
@@ -78,71 +56,35 @@ export const CommentsDrawer: React.FC = () => {
     0
   );
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!inputVal.trim() || !currentUser) return;
-
-    if (replyingTo) {
-      setCommentsMap(prev => {
-        const list = prev[commentsVideoId] || [];
-        return {
-          ...prev,
-          [commentsVideoId]: list.map(c => {
-            if (c.id === replyingTo) {
-              return {
-                ...c,
-                replies: [
-                  ...(c.replies || []),
-                  {
-                    id: `r_${Date.now()}`,
-                    name: currentUser.displayName,
-                    avatar: currentUser.avatar,
-                    text: inputVal.trim(),
-                    timestamp: new Date().toISOString(),
-                  },
-                ],
-              };
-            }
-            return c;
-          }),
-        };
-      });
-      setReplyingTo(null);
-    } else {
-      const newEntry: CommentEntry = {
-        id: `c_${Date.now()}`,
-        name: currentUser.displayName,
-        avatar: currentUser.avatar,
-        text: inputVal.trim(),
-        timestamp: new Date().toISOString(),
-        likesCount: 0,
-        isLiked: false,
-      };
-      setCommentsMap(prev => ({
-        ...prev,
-        [commentsVideoId]: [...(prev[commentsVideoId] || []), newEntry],
-      }));
+  const handleRefresh = async () => {
+    if (!commentsVideoId || isLoading) return;
+    setIsLoading(true);
+    try {
+      await fetchCommentsForVideo(commentsVideoId, true);
+    } finally {
+      setIsLoading(false);
     }
-
-    addCommentToVideo(commentsVideoId, inputVal.trim());
-    setInputVal('');
   };
 
-  const handleToggleLikeComment = (commentId: string) => {
-    setCommentsMap(prev => {
-      const list = prev[commentsVideoId] || [];
-      return {
-        ...prev,
-        [commentsVideoId]: list.map(c => {
-          if (c.id === commentId) {
-            const liked = !c.isLiked;
-            const likes = (c.likesCount || 0) + (liked ? 1 : -1);
-            return { ...c, isLiked: liked, likesCount: Math.max(0, likes) };
-          }
-          return c;
-        }),
-      };
-    });
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputVal.trim() || !currentUser || !commentsVideoId || isSubmitting) return;
+
+    const text = inputVal.trim();
+    const replyTarget = replyingTo;
+    setInputVal('');
+    setReplyingTo(null);
+    setIsSubmitting(true);
+    try {
+      await addCommentToVideo(commentsVideoId, text, replyTarget || undefined);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (commentId: string) => {
+    if (!commentsVideoId) return;
+    await deleteCommentFromVideo(commentsVideoId, commentId);
   };
 
   // --- Touch Drag Gesture Handlers ---
@@ -165,14 +107,11 @@ export const CommentsDrawer: React.FC = () => {
     setIsDragging(false);
     const finalH = currentHeightRef.current;
     if (finalH < 32) {
-      // Dragged down sufficiently -> close
       setCommentsVideoId(null);
     } else if (finalH > 65) {
-      // Snapped high -> expand to 85%
       setHeightPercent(85);
       currentHeightRef.current = 85;
     } else {
-      // Snapped to half -> 50%
       setHeightPercent(50);
       currentHeightRef.current = 50;
     }
@@ -243,7 +182,7 @@ export const CommentsDrawer: React.FC = () => {
             <div className="w-12 h-1.5 rounded-full bg-neutral-600 group-hover:bg-[#ff007a] transition-colors" />
           </div>
 
-          {/* Header: Title + Drag Hint + Expand/Collapse + Close */}
+          {/* Header: Title + Drag Hint + Expand/Collapse + Refresh + Close */}
           <div className="flex items-center justify-between px-5 pb-3 border-b border-neutral-800 shrink-0">
             <div className="flex items-center gap-2">
               <h2 className="text-sm sm:text-base font-bold text-white font-brand flex items-center gap-1.5">
@@ -259,6 +198,17 @@ export const CommentsDrawer: React.FC = () => {
             </div>
 
             <div className="flex items-center gap-1">
+              {/* Refresh button */}
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={isLoading}
+                className="p-1.5 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition-colors cursor-pointer disabled:opacity-50"
+                title="Refresh comments from Supabase"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-[#ff007a]' : ''}`} />
+              </button>
+
               {/* Quick toggle height button */}
               <button
                 type="button"
@@ -291,98 +241,149 @@ export const CommentsDrawer: React.FC = () => {
 
           {/* Scrollable Comments List */}
           <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-3 space-y-4 pr-2 min-h-0 text-left">
-            {currentComments.map(comment => (
-              <div key={comment.id} className="space-y-2">
-                <div className="flex items-start gap-3">
-                  <Avatar
-                    src={comment.avatar}
-                    alt={comment.name}
-                    size="sm"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-white truncate">
-                          {comment.name}
-                        </span>
-                        {comment.timestamp && (
-                          <span className="text-[10px] text-neutral-400 font-normal">
-                            {formatRealtimeAgo(comment.timestamp)}
-                          </span>
-                        )}
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleToggleLikeComment(comment.id)}
-                        className={`flex items-center gap-1 text-[11px] p-1 transition-colors cursor-pointer ${
-                          comment.isLiked
-                            ? 'text-[#ff007a]'
-                            : 'text-neutral-500 hover:text-[#ff007a]'
-                        }`}
-                      >
-                        <Heart
-                          className={`w-3.5 h-3.5 ${comment.isLiked ? 'fill-[#ff007a]' : ''}`}
-                        />
-                        {(comment.likesCount || 0) > 0 && (
-                          <span>{comment.likesCount}</span>
-                        )}
-                      </button>
-                    </div>
-
-                    <p className="text-xs text-neutral-200 mt-0.5 leading-relaxed break-words">
-                      {comment.text}
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setReplyingTo(comment.id);
-                        setInputVal(`@${comment.name} `);
-                      }}
-                      className="text-[11px] text-neutral-400 hover:text-[#ff007a] font-semibold mt-1 cursor-pointer"
-                    >
-                      reply
-                    </button>
-                  </div>
-                </div>
-
-                {/* Nested Replies */}
-                {comment.replies && comment.replies.length > 0 && (
-                  <div className="pl-9 space-y-2 border-l border-neutral-800 ml-4">
-                    {comment.replies.map(reply => (
-                      <div key={reply.id} className="flex items-start gap-2.5">
-                        <Avatar
-                          src={reply.avatar}
-                          alt={reply.name}
-                          size="xs"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[11px] font-bold text-white">
-                              {reply.name}
-                            </span>
-                            {reply.timestamp && (
-                              <span className="text-[9px] text-neutral-400">
-                                {formatRealtimeAgo(reply.timestamp)}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-neutral-300 mt-0.5 break-words">
-                            {reply.text}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+            {isLoading && currentComments.length === 0 ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-2 text-neutral-400">
+                <RefreshCw className="w-5 h-5 animate-spin text-[#ff007a]" />
+                <span className="text-xs">Loading comments from Supabase...</span>
               </div>
-            ))}
-
-            {currentComments.length === 0 && (
+            ) : currentComments.length === 0 ? (
               <div className="py-10 text-center text-xs text-neutral-400">
                 No comments yet. Be the first to comment on this video!
               </div>
+            ) : (
+              currentComments.map(comment => {
+                const isOwnComment = Boolean(
+                  currentUser &&
+                  comment.userId &&
+                  (isSameUser(comment.userId, currentUser.id) ||
+                   (currentUser.username && comment.name.toLowerCase() === currentUser.username.toLowerCase()) ||
+                   (currentUser.displayName && comment.name.toLowerCase() === currentUser.displayName.toLowerCase()))
+                );
+
+                return (
+                  <div key={comment.id} className="space-y-2">
+                    <div className="flex items-start gap-3">
+                      <Avatar
+                        src={comment.avatar}
+                        alt={comment.name}
+                        size="sm"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-white truncate">
+                              {comment.name}
+                            </span>
+                            {comment.timestamp && (
+                              <span className="text-[10px] text-neutral-400 font-normal">
+                                {formatRealtimeAgo(comment.timestamp)}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            {isOwnComment && (
+                              <button
+                                type="button"
+                                onClick={() => handleDelete(comment.id)}
+                                className="text-neutral-500 hover:text-red-400 p-1 transition-colors cursor-pointer"
+                                title="Delete comment"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+
+                            <button
+                              type="button"
+                              onClick={() => toggleLikeComment(commentsVideoId, comment.id)}
+                              className={`flex items-center gap-1 text-[11px] p-1 transition-colors cursor-pointer ${
+                                comment.isLiked
+                                  ? 'text-[#ff007a]'
+                                  : 'text-neutral-500 hover:text-[#ff007a]'
+                              }`}
+                            >
+                              <Heart
+                                className={`w-3.5 h-3.5 ${comment.isLiked ? 'fill-[#ff007a]' : ''}`}
+                              />
+                              {(comment.likesCount || 0) > 0 && (
+                                <span>{comment.likesCount}</span>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-neutral-200 mt-0.5 leading-relaxed break-words">
+                          {comment.text}
+                        </p>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReplyingTo(comment.id);
+                            setInputVal(`@${comment.name} `);
+                          }}
+                          className="text-[11px] text-neutral-400 hover:text-[#ff007a] font-semibold mt-1 cursor-pointer"
+                        >
+                          reply
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Nested Replies */}
+                    {comment.replies && comment.replies.length > 0 && (
+                      <div className="pl-9 space-y-2 border-l border-neutral-800 ml-4">
+                        {comment.replies.map(reply => {
+                          const isOwnReply = Boolean(
+                            currentUser &&
+                            reply.userId &&
+                            (isSameUser(reply.userId, currentUser.id) ||
+                             (currentUser.username && reply.name.toLowerCase() === currentUser.username.toLowerCase()) ||
+                             (currentUser.displayName && reply.name.toLowerCase() === currentUser.displayName.toLowerCase()))
+                          );
+
+                          return (
+                            <div key={reply.id} className="flex items-start gap-2.5">
+                              <Avatar
+                                src={reply.avatar}
+                                alt={reply.name}
+                                size="xs"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[11px] font-bold text-white">
+                                      {reply.name}
+                                    </span>
+                                    {reply.timestamp && (
+                                      <span className="text-[9px] text-neutral-400">
+                                        {formatRealtimeAgo(reply.timestamp)}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {isOwnReply && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDelete(reply.id)}
+                                      className="text-neutral-500 hover:text-red-400 p-1 transition-colors cursor-pointer"
+                                      title="Delete reply"
+                                    >
+                                      <Trash2 className="w-2.5 h-2.5" />
+                                    </button>
+                                  )}
+                                </div>
+                                <p className="text-xs text-neutral-300 mt-0.5 break-words">
+                                  {reply.text}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
 
@@ -427,7 +428,7 @@ export const CommentsDrawer: React.FC = () => {
               />
               <button
                 type="submit"
-                disabled={!inputVal.trim()}
+                disabled={!inputVal.trim() || isSubmitting}
                 className="p-1.5 rounded-xl text-white bg-[#ff007a] hover:bg-[#e0006c] disabled:opacity-30 disabled:hover:bg-[#ff007a] transition-all cursor-pointer shadow-[0_0_10px_rgba(255,0,122,0.4)]"
                 title="Send comment"
               >

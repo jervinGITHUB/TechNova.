@@ -875,18 +875,16 @@ export const ProfileView: React.FC = () => {
                 </span>
               </div>
 
-              {/* Comment Button */}
+              {/* Comment Button (Count only fetched on-demand inside comment section) */}
               <div className="flex flex-col items-center">
                 <button
                   type="button"
                   onClick={() => setCommentsVideoId(selectedVideoModal.id)}
                   className="p-2.5 rounded-full bg-black/40 backdrop-blur-md text-white hover:text-cyan-400 transition-all cursor-pointer"
+                  title="Comments"
                 >
                   <MessageCircle className="w-6 h-6" />
                 </button>
-                <span className="text-[11px] font-semibold text-white mt-1 drop-shadow">
-                  {formatCount(selectedVideoModal.commentsCount)}
-                </span>
               </div>
 
               {/* Share Button */}
