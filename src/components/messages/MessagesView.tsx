@@ -4,6 +4,7 @@ import { Conversation, User, MessageReplyInfo, Message, Video } from '../../type
 import { Avatar } from '../common/Avatar';
 import { MessageVideoCard } from './MessageVideoCard';
 import { toUuid, isSameUser, checkIsUserBanned } from '../../lib/supabase';
+import { toTimestampMillis } from '../../utils/time';
 import {
   Search,
   Send,
@@ -20,6 +21,32 @@ import {
   Plus,
   Lock
 } from 'lucide-react';
+
+export const resolveConversationClearTime = (
+  conv: Conversation | null | undefined,
+  currentUser: User | null | undefined
+): number => {
+  if (!conv || !currentUser) return 0;
+  const uid = currentUser.id;
+  const uUuid = toUuid(currentUser.id);
+
+  const t1 = getConversationClearedTimestamp(conv.id, uid);
+  const t2 = getConversationClearedTimestamp(toUuid(conv.id), uid);
+  const t3 = toTimestampMillis(conv.clearedHistoryAt?.[uid]);
+  const t4 = toTimestampMillis(conv.clearedHistoryAt?.[uUuid]);
+
+  let t5 = 0;
+  if (conv.clearedHistoryAt && typeof conv.clearedHistoryAt === 'object') {
+    for (const [k, v] of Object.entries(conv.clearedHistoryAt)) {
+      if (isSameUser(k, uid)) {
+        const ms = toTimestampMillis(v);
+        if (ms > t5) t5 = ms;
+      }
+    }
+  }
+
+  return Math.max(t1, t2, t3, t4, t5, 0);
+};
 
 const resolveSharedVideo = (
   msg: Message,
@@ -130,17 +157,12 @@ export const MessagesView: React.FC = () => {
       const isMarkedDeleted = conv.deletedForUserIds && conv.deletedForUserIds.some(id => isSameUser(id, currentUser.id));
       if (isMarkedDeleted) {
         // If there are new visible messages sent after clear timestamp, automatically unhide!
-        const convClearTime = Math.max(
-          getConversationClearedTimestamp(conv.id, currentUser.id),
-          getConversationClearedTimestamp(toUuid(conv.id), currentUser.id),
-          conv.clearedHistoryAt?.[currentUser.id] || 0,
-          conv.clearedHistoryAt?.[toUuid(currentUser.id)] || 0
-        );
+        const convClearTime = resolveConversationClearTime(conv, currentUser);
 
         const hasNewVisibleMsg = (conv.messages || []).some(m => {
           if (m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
           if (convClearTime > 0) {
-            const sentTime = m.sentAt ? new Date(m.sentAt).getTime() : 0;
+            const sentTime = toTimestampMillis(m.sentAt);
             if (sentTime > 0 && sentTime <= convClearTime) return false;
             if (typeof m.id === 'string' && m.id.startsWith('m_')) {
               const parts = m.id.split('_');
@@ -380,17 +402,13 @@ export const MessagesView: React.FC = () => {
               const unread = getUnreadCount(conv);
               const isSelected = activeConv?.id === conv.id;
 
-              const convClearTime = Math.max(
-                getConversationClearedTimestamp(conv.id, currentUser?.id),
-                getConversationClearedTimestamp(toUuid(conv.id), currentUser?.id),
-                conv.clearedHistoryAt?.[currentUser?.id || ''] || 0,
-                conv.clearedHistoryAt?.[toUuid(currentUser?.id || '')] || 0
-              );
+              const convClearTime = resolveConversationClearTime(conv, currentUser);
 
               const convVisibleMsgs = (conv.messages || []).filter(m => {
                 if (currentUser && m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
                 if (convClearTime > 0) {
-                  if (m.sentAt && new Date(m.sentAt).getTime() <= convClearTime) return false;
+                  const sentTime = toTimestampMillis(m.sentAt);
+                  if (sentTime > 0 && sentTime <= convClearTime) return false;
                   if (typeof m.id === 'string' && m.id.startsWith('m_')) {
                     const parts = m.id.split('_');
                     const t = parseInt(parts[1], 10);
@@ -669,12 +687,7 @@ export const MessagesView: React.FC = () => {
             {/* Messages Bubbles Stream */}
             <div className="flex-1 overflow-y-auto py-4 space-y-4 pr-1 text-left min-h-0">
               {(() => {
-                const userClearedTimestamp = Math.max(
-                  getConversationClearedTimestamp(activeConv.id, currentUser?.id),
-                  getConversationClearedTimestamp(toUuid(activeConv.id), currentUser?.id),
-                  activeConv.clearedHistoryAt?.[currentUser?.id || ''] || 0,
-                  activeConv.clearedHistoryAt?.[toUuid(currentUser?.id || '')] || 0
-                );
+                const userClearedTimestamp = resolveConversationClearTime(activeConv, currentUser);
                 const visibleMessages = (activeConv.messages || []).filter(msg => {
                   // Hide if explicitly marked deleted for this user
                   if (currentUser && msg.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) {
@@ -682,10 +695,8 @@ export const MessagesView: React.FC = () => {
                   }
                   // Hide if created on or before the conversation was cleared for this user
                   if (userClearedTimestamp > 0) {
-                    if (msg.sentAt) {
-                      const t = new Date(msg.sentAt).getTime();
-                      if (t > 0 && t <= userClearedTimestamp) return false;
-                    }
+                    const sentTime = toTimestampMillis(msg.sentAt);
+                    if (sentTime > 0 && sentTime <= userClearedTimestamp) return false;
                     if (typeof msg.id === 'string' && msg.id.startsWith('m_')) {
                       const parts = msg.id.split('_');
                       const t = parseInt(parts[1], 10);

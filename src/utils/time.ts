@@ -60,3 +60,27 @@ export const formatRealtimeAgo = (timestampOrDate?: string | number | null): str
   }
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
+
+/**
+ * Safely parses any timestamp (ISO string, Postgres timestamp, or milliseconds)
+ * into a valid UTC epoch millisecond number. Guarantees never returning NaN.
+ */
+export const toTimestampMillis = (timestampOrDate?: string | number | null): number => {
+  if (!timestampOrDate) return 0;
+  if (typeof timestampOrDate === 'number') {
+    return isNaN(timestampOrDate) ? 0 : timestampOrDate;
+  }
+  const str = String(timestampOrDate).trim();
+  if (!str || str.toLowerCase() === 'just now') return 0;
+
+  let parseTarget = str;
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(parseTarget)) {
+    parseTarget = parseTarget.replace(' ', 'T');
+    if (!parseTarget.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(parseTarget)) {
+      parseTarget += 'Z';
+    }
+  }
+
+  const parsed = new Date(parseTarget).getTime();
+  return isNaN(parsed) ? 0 : parsed;
+};

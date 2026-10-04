@@ -48,6 +48,7 @@ import {
   recordUserUnban,
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
+import { toTimestampMillis } from '../utils/time';
 
 /**
  * Deduplicates conversations so that only ONE canonical conversation
@@ -1082,23 +1083,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 };
 
               let remoteClearTime = 0;
-              if (rc.clearedHistory) {
-                if (typeof rc.clearedHistory === 'object' && rc.clearedHistory !== null) {
-                  const val = rc.clearedHistory[currentUser.id] || rc.clearedHistory[toUuid(currentUser.id)];
-                  if (val) {
-                    remoteClearTime = typeof val === 'number' ? val : new Date(val).getTime();
+              if (rc.clearedHistory && typeof rc.clearedHistory === 'object') {
+                for (const [k, v] of Object.entries(rc.clearedHistory)) {
+                  if (isSameUser(k, currentUser.id)) {
+                    const ms = toTimestampMillis(v as any);
+                    if (ms > remoteClearTime) remoteClearTime = ms;
                   }
-                } else if (typeof rc.clearedHistory === 'string') {
-                  remoteClearTime = new Date(rc.clearedHistory).getTime();
                 }
               }
 
               const clearTime = Math.max(
-                remoteClearTime || 0,
+                remoteClearTime,
                 getConversationClearedTimestamp(rc.id, currentUser.id),
                 getConversationClearedTimestamp(toUuid(rc.id), currentUser.id),
-                existingConv?.clearedHistoryAt?.[currentUser.id] || 0,
-                existingConv?.clearedHistoryAt?.[toUuid(currentUser.id)] || 0
+                toTimestampMillis(existingConv?.clearedHistoryAt?.[currentUser.id]),
+                toTimestampMillis(existingConv?.clearedHistoryAt?.[toUuid(currentUser.id)]),
+                0
               );
 
               // Persist cleared timestamp locally on this device so subsequent loads respect it
@@ -1133,14 +1133,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
                 // If conversation was cleared before or at this message's sentAt time, hide it for currentUser
                 if (clearTime > 0) {
-                  if (m.SentAt) {
-                    const sentTime = new Date(m.SentAt).getTime();
-                    if (sentTime > 0 && sentTime <= clearTime) {
-                      if (!deletedFor.some(id => isSameUser(id, currentUser.id))) {
-                        deletedFor.push(currentUser.id);
-                      }
+                  const sentTime = toTimestampMillis(m.SentAt);
+                  if (sentTime > 0 && sentTime <= clearTime) {
+                    if (!deletedFor.some(id => isSameUser(id, currentUser.id))) {
+                      deletedFor.push(currentUser.id);
                     }
-                  } else {
+                  } else if (!m.SentAt) {
                     if (!deletedFor.some(id => isSameUser(id, currentUser.id))) {
                       deletedFor.push(currentUser.id);
                     }
@@ -1172,7 +1170,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const visibleMsgs = allMsgs.filter(m => {
                 if (m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
                 if (clearTime > 0) {
-                  if (m.sentAt && new Date(m.sentAt).getTime() <= clearTime) return false;
+                  const sentTime = toTimestampMillis(m.sentAt);
+                  if (sentTime > 0 && sentTime <= clearTime) return false;
                   if (typeof m.id === 'string' && m.id.startsWith('m_')) {
                     const parts = m.id.split('_');
                     const t = parseInt(parts[1], 10);
@@ -1187,12 +1186,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               // Check if any incoming message from the partner arrived after clearTime (auto-unhide)
               const hasNewIncomingMsg = visibleMsgs.some(pm =>
                 !isSameUser(pm.senderId, currentUser.id) &&
-                (!clearTime || (pm.sentAt && new Date(pm.sentAt).getTime() > clearTime))
+                (!clearTime || (toTimestampMillis(pm.sentAt) > clearTime))
               );
 
               let convDeletedForUserIds = [...(existingConv?.deletedForUserIds || [])];
               if (hasNewIncomingMsg) {
                 convDeletedForUserIds = convDeletedForUserIds.filter(id => !isSameUser(id, currentUser.id));
+              }
+
+              // Normalize clearedHistoryAt to purely numbers so Math.max never evaluates to NaN!
+              const normalizedClearedHistory: Record<string, number> = {};
+              if (existingConv?.clearedHistoryAt && typeof existingConv.clearedHistoryAt === 'object') {
+                Object.entries(existingConv.clearedHistoryAt).forEach(([k, v]) => {
+                  const ms = toTimestampMillis(v as any);
+                  if (ms > 0) normalizedClearedHistory[k] = ms;
+                });
+              }
+              if (rc.clearedHistory && typeof rc.clearedHistory === 'object') {
+                Object.entries(rc.clearedHistory).forEach(([k, v]) => {
+                  const ms = toTimestampMillis(v as any);
+                  if (ms > 0) {
+                    normalizedClearedHistory[k] = ms;
+                    normalizedClearedHistory[toUuid(k)] = ms;
+                  }
+                });
+              }
+              if (clearTime > 0) {
+                normalizedClearedHistory[currentUser.id] = clearTime;
+                normalizedClearedHistory[toUuid(currentUser.id)] = clearTime;
               }
 
               return {
@@ -1208,11 +1229,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 messages: allMsgs,
                 isOnline: true,
                 deletedForUserIds: convDeletedForUserIds,
-                clearedHistoryAt: {
-                  ...(existingConv?.clearedHistoryAt || {}),
-                  ...(typeof rc.clearedHistory === 'object' && rc.clearedHistory ? rc.clearedHistory : {}),
-                  ...(clearTime > 0 ? { [currentUser.id]: clearTime, [toUuid(currentUser.id)]: clearTime } : {}),
-                },
+                clearedHistoryAt: normalizedClearedHistory,
               };
             });
 
