@@ -1947,7 +1947,21 @@ export const supabaseDb = {
 
       if (error || !data) return null;
 
-      const items: NotificationItem[] = data.map((r: any) => {
+      const items: NotificationItem[] = [];
+      for (const r of data) {
+        // Discard generic non-JSON duplicate trigger messages (e.g. "Someone commented on your video" or "Someone liked your video")
+        const rawMsg = typeof r.NotificationMessage === 'string' ? r.NotificationMessage.trim() : '';
+        const isGenericTrigger =
+          !rawMsg.startsWith('{') &&
+          (rawMsg.toLowerCase().includes('someone commented') ||
+           rawMsg.toLowerCase().includes('commented on your video') ||
+           rawMsg.toLowerCase().includes('someone liked'));
+
+        if (isGenericTrigger) {
+          // Skip redundant generic system notification so it never duplicates rich notifications!
+          continue;
+        }
+
         const isRevoked = r.NotificationType === 'video_revoked';
         const isAppeal = r.NotificationType === 'appeal_status';
 
@@ -1963,8 +1977,8 @@ export const supabaseDb = {
         let status: any = undefined;
         let appealStatus: any = isRevoked ? 'none' : undefined;
 
-        // Attempt to parse JSON payload
-        if (r.NotificationMessage && r.NotificationMessage.trim().startsWith('{')) {
+        // Attempt to parse rich JSON payload
+        if (rawMsg.startsWith('{')) {
           try {
             const parsed = JSON.parse(r.NotificationMessage);
             if (parsed.actor && parsed.actor.id) actor = parsed.actor;
@@ -1978,7 +1992,7 @@ export const supabaseDb = {
           }
         }
 
-        return {
+        items.push({
           id: r.NotificationID,
           recipientId: r.UserID,
           type: (r.NotificationType as any) || 'like',
@@ -1991,8 +2005,8 @@ export const supabaseDb = {
           requestId,
           status,
           appealStatus,
-        };
-      });
+        });
+      }
       return items;
     } catch (e) {
       console.warn('Supabase fetchNotifications fallback:', e);

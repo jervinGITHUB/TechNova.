@@ -1338,6 +1338,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (!row || !currentUser) return;
               const targetUserId = row.UserID;
               if (isSameUser(targetUserId, currentUser.id)) {
+                // Ignore redundant generic system triggers like "Someone commented on your video"
+                const rawMsg = typeof row.NotificationMessage === 'string' ? row.NotificationMessage.trim() : '';
+                if (
+                  !rawMsg.startsWith('{') &&
+                  (rawMsg.toLowerCase().includes('someone commented') ||
+                   rawMsg.toLowerCase().includes('commented on your video') ||
+                   rawMsg.toLowerCase().includes('someone liked'))
+                ) {
+                  return;
+                }
+
                 supabaseDb.fetchNotifications().then(notifs => {
                   if (notifs) {
                     setNotifications(notifs);

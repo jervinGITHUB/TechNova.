@@ -101,16 +101,28 @@ export const NotificationsView: React.FC = () => {
     }
   };
 
-  const unreadCount = notifications.filter(n => n.isUnread).length;
+  // Filter out redundant generic trigger notifications (e.g. "ViralHub Someone commented on your video")
+  const validNotifications = React.useMemo(() => {
+    return notifications.filter(item => {
+      const text = (item.targetText || '').toLowerCase();
+      const isGenericComment =
+        item.type === 'comment' &&
+        item.actor?.displayName === 'ViralHub' &&
+        (text.includes('someone commented') || text.includes('commented on your video'));
+      return !isGenericComment;
+    });
+  }, [notifications]);
+
+  const unreadCount = validNotifications.filter(n => n.isUnread).length;
 
   // Ensure new notifications are strictly on top across all devices
   const sortedNotifications = React.useMemo(() => {
-    return [...notifications].sort((a, b) => {
+    return [...validNotifications].sort((a, b) => {
       const timeA = new Date(a.createdAt || a.timestamp || 0).getTime() || 0;
       const timeB = new Date(b.createdAt || b.timestamp || 0).getTime() || 0;
       return timeB - timeA;
     });
-  }, [notifications]);
+  }, [validNotifications]);
 
   return (
     <div className="flex-1 p-4 sm:p-8 max-w-3xl mx-auto w-full select-none text-left">
