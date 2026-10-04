@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
-import { useApp } from '../../context/AppContext';
+import React, { useState, useMemo } from 'react';
+import { useApp, deduplicateConversations } from '../../context/AppContext';
 import { Conversation, User, MessageReplyInfo, Message, Video } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { MessageVideoCard } from './MessageVideoCard';
-import { toUuid } from '../../lib/supabase';
+import { toUuid, isSameUser } from '../../lib/supabase';
 import {
   Search,
   Send,
@@ -117,29 +117,35 @@ export const MessagesView: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<MessageReplyInfo | null>(null);
   const [newChatModalOpen, setNewChatModalOpen] = useState(false);
 
-  // Filter conversations specifically for currentUser
-  const accountConversations = conversations.filter(conv => {
-    if (!currentUser) return false;
-    const isPart = conv.participantIds && conv.participantIds.length > 0
-      ? conv.participantIds.includes(currentUser.id)
-      : conv.participant && conv.participant.id !== currentUser.id;
-    if (!isPart) return false;
-    if (conv.deletedForUserIds && conv.deletedForUserIds.includes(currentUser.id)) {
-      return false;
-    }
-    return true;
-  });
+  // Filter and deduplicate conversations specifically for currentUser
+  const accountConversations = useMemo(() => {
+    if (!currentUser) return [];
+    const valid = conversations.filter(conv => {
+      const isPart = conv.participantIds && conv.participantIds.length > 0
+        ? conv.participantIds.some(id => isSameUser(id, currentUser.id))
+        : conv.participant && !isSameUser(conv.participant.id, currentUser.id);
+      if (!isPart) return false;
+      if (conv.deletedForUserIds && conv.deletedForUserIds.some(id => isSameUser(id, currentUser.id))) {
+        return false;
+      }
+      return true;
+    });
+
+    return deduplicateConversations(valid, currentUser.id);
+  }, [conversations, currentUser]);
 
   // Determine the other participant in a conversation based on currentUser
   const getParticipant = (conv: Conversation): User => {
     if (conv.participantIds && conv.participantIds.length > 0 && currentUser) {
-      const otherId = conv.participantIds.find(id => id !== currentUser.id);
+      const otherId = conv.participantIds.find(id => !isSameUser(id, currentUser.id));
       if (otherId) {
-        const found = users.find(u => u.id === otherId);
+        const found = users.find(u => isSameUser(u.id, otherId));
         if (found) return found;
       }
     }
     if (conv.participant) {
+      const found = users.find(u => isSameUser(u.id, conv.participant.id));
+      if (found) return found;
       return conv.participant;
     }
     return {
@@ -166,8 +172,16 @@ export const MessagesView: React.FC = () => {
     return conv.unreadCount || 0;
   };
 
-  const activeConv =
-    accountConversations.find(c => c.id === activeConversationId) || (accountConversations.length > 0 ? accountConversations[0] : null);
+  const activeConv = useMemo(() => {
+    if (!accountConversations.length) return null;
+    if (activeConversationId) {
+      const found = accountConversations.find(
+        c => c.id === activeConversationId || toUuid(c.id) === toUuid(activeConversationId)
+      );
+      if (found) return found;
+    }
+    return accountConversations[0] || null;
+  }, [accountConversations, activeConversationId]);
 
   const activeParticipant = activeConv ? getParticipant(activeConv) : null;
 

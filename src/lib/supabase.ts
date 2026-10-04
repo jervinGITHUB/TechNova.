@@ -68,6 +68,18 @@ export const isSameUser = (id1?: string | null, id2?: string | null): boolean =>
   return toUuid(s1) === toUuid(s2);
 };
 
+/**
+ * Deterministically generates a stable, canonical conversation UUID
+ * between two users regardless of who initiated the message.
+ */
+export const getDirectConversationId = (userId1?: string | null, userId2?: string | null): string => {
+  if (!userId1 || !userId2) return crypto.randomUUID();
+  const u1 = toUuid(userId1).toLowerCase();
+  const u2 = toUuid(userId2).toLowerCase();
+  const [first, second] = [u1, u2].sort();
+  return toUuid(`dm_${first}_${second}`);
+};
+
 // =========================================================================
 // Deleted Users Registry (ensures immediate logout across all devices)
 // =========================================================================
@@ -1474,10 +1486,11 @@ export const supabaseDb = {
 
       // 1. Fetch from PascalCase 'Comment' table
       try {
+        const videoFilter = vUuid !== videoId ? `VideoID.eq.${vUuid},VideoID.eq.${videoId}` : `VideoID.eq.${vUuid}`;
         const res1 = await client
           .from('Comment')
           .select('*')
-          .eq('VideoID', vUuid);
+          .or(videoFilter);
 
         if (!res1.error && res1.data) {
           commentRows = res1.data;
@@ -1491,10 +1504,11 @@ export const supabaseDb = {
       // 2. Fallback to lowercase 'comments' table if 'Comment' table doesn't exist
       if (commentRows === null) {
         try {
+          const snakeFilter = vUuid !== videoId ? `video_id.eq.${vUuid},video_id.eq.${videoId}` : `video_id.eq.${vUuid}`;
           const res2 = await client
             .from('comments')
             .select('*')
-            .eq('video_id', vUuid);
+            .or(snakeFilter);
 
           if (!res2.error && res2.data) {
             commentRows = res2.data.map((r: any) => ({
@@ -1817,26 +1831,56 @@ export const supabaseDb = {
     if (!client) return false;
 
     try {
-      const convUuid = toUuid(conversationId);
       const senderUuid = toUuid(senderId);
       const recipientUuid = toUuid(recipientId);
-      const msgUuid = toUuid(messageId || `msg_${Date.now()}`);
+      const msgUuid = toUuid(messageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
 
-      // Ensure conversation record in Conversation table
-      await client.from('Conversation').upsert(
-        {
-          ConversationID: convUuid,
-          UserIDA: senderUuid,
-          UserIDB: recipientUuid,
-          CreatedAt: new Date().toISOString(),
-        },
-        { onConflict: 'ConversationID' }
-      );
+      // Determine canonical conversation ID
+      let actualConvUuid = isUuid(conversationId)
+        ? toUuid(conversationId)
+        : getDirectConversationId(senderId, recipientId);
 
-      // Insert message into Message table
+      // Check if a conversation record between these two users already exists in Supabase
+      try {
+        const { data: existingDbConv } = await client
+          .from('Conversation')
+          .select('ConversationID')
+          .or(`and(UserIDA.eq.${senderUuid},UserIDB.eq.${recipientUuid}),and(UserIDA.eq.${recipientUuid},UserIDB.eq.${senderUuid})`)
+          .limit(1)
+          .maybeSingle();
+
+        if (existingDbConv?.ConversationID) {
+          actualConvUuid = existingDbConv.ConversationID;
+        } else {
+          // If none exists, create the conversation row
+          await client.from('Conversation').upsert(
+            {
+              ConversationID: actualConvUuid,
+              UserIDA: senderUuid,
+              UserIDB: recipientUuid,
+              CreatedAt: new Date().toISOString(),
+            },
+            { onConflict: 'ConversationID' }
+          );
+        }
+      } catch {
+        try {
+          await client.from('Conversation').upsert(
+            {
+              ConversationID: actualConvUuid,
+              UserIDA: senderUuid,
+              UserIDB: recipientUuid,
+              CreatedAt: new Date().toISOString(),
+            },
+            { onConflict: 'ConversationID' }
+          );
+        } catch {}
+      }
+
+      // Insert message into Message table with actualConvUuid
       const { error } = await client.from('Message').insert({
         MessageID: msgUuid,
-        ConversationID: convUuid,
+        ConversationID: actualConvUuid,
         SenderUserID: senderUuid,
         MessageContent: text,
         SentAt: new Date().toISOString(),

@@ -507,7 +507,6 @@ const EmptyFeedLayoutCard: React.FC = () => {
           <div className="p-2.5 rounded-full bg-black/40 backdrop-blur-md text-neutral-400">
             <MessageCircle className="w-6 h-6" />
           </div>
-          <span className="text-[11px] font-semibold text-neutral-400 mt-1">0</span>
         </div>
         <div className="flex flex-col items-center">
           <div className="p-2.5 rounded-full bg-black/40 backdrop-blur-md text-neutral-400">
