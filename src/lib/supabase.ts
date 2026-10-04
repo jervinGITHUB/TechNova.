@@ -696,10 +696,11 @@ export const supabaseDb = {
       let error: any = null;
 
       // 1. Fetch from PascalCase 'Video' table with a reasonable limit (e.g. 80 most recent)
+      // Note: Use select('*') so it never throws 42703 column missing errors if extended columns aren't created yet
       try {
         const res1 = await client
           .from('Video')
-          .select('VideoID, UserID, AudioTrackID, VideoURL, ThumbnailURL, Caption, PublishedAt, ViewCount, Status, RejectionReason, AppealStatus, AppealReason')
+          .select('*')
           .order('PublishedAt', { ascending: false })
           .limit(80);
 
@@ -717,7 +718,7 @@ export const supabaseDb = {
         try {
           const res2 = await client
             .from('videos')
-            .select('id, video_id, user_id, userId, video_url, media_url, url, thumbnail_url, caption, created_at, published_at, views_count, view_count, status, rejection_reason, appeal_status, appeal_reason')
+            .select('*')
             .order('created_at', { ascending: false })
             .limit(80);
 
@@ -929,46 +930,69 @@ export const supabaseDb = {
         }
       }
 
-      // 2. Prepare payload
-      const payload: Record<string, any> = {
+      // 2. Base payload with the core columns guaranteed to exist in Supabase Video table
+      const corePayload: Record<string, any> = {
         VideoID: videoUuid,
         UserID: userUuid,
-        AudioTrackID: null, // Avoid foreign key violations on unseeded AudioTrack table
         VideoURL: video.mediaUrl,
         Caption: video.caption || '',
         PublishedAt: new Date().toISOString(),
         ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
-        Status: video.status || 'approved',
-        RejectionReason: video.rejectionReason || null,
-        AppealStatus: video.appealStatus || 'none',
-        AppealReason: video.appealReason || null,
       };
 
-      // 3. Upsert into Video table
-      let { error } = await client.from('Video').upsert(payload, { onConflict: 'VideoID' });
-
-      // Fallback 1: Column 'Status' or 'RejectionReason' does not exist
-      if (error && (error.code === '42703' || error.message?.includes('Status') || error.message?.includes('column'))) {
-        const { Status: _, RejectionReason: __, ...basicPayload } = payload;
-        const retry1 = await client.from('Video').upsert(basicPayload, { onConflict: 'VideoID' });
-        error = retry1.error;
+      // Only attach AudioTrackID if provided and valid UUID to avoid foreign key errors on unseeded track
+      if (video.audioTrack?.id && isUuid(video.audioTrack.id)) {
+        corePayload.AudioTrackID = toUuid(video.audioTrack.id);
       }
 
-      // Fallback 2: Foreign key violation on AudioTrackID or UserID
-      if (error && (error.code === '23503' || error.message?.includes('foreign key'))) {
-        const strippedPayload = {
-          VideoID: videoUuid,
-          UserID: userUuid,
-          VideoURL: video.mediaUrl,
-          Caption: video.caption || '',
-          PublishedAt: new Date().toISOString(),
-          ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
+      // Extended payload with optional moderation and appeal columns if table supports them
+      const extendedPayload: Record<string, any> = {
+        ...corePayload,
+        Status: video.status || 'approved',
+      };
+      if (video.rejectionReason) {
+        extendedPayload.RejectionReason = video.rejectionReason;
+      }
+      if (video.appealStatus && video.appealStatus !== 'none') {
+        extendedPayload.AppealStatus = video.appealStatus;
+      }
+      if (video.appealReason) {
+        extendedPayload.AppealReason = video.appealReason;
+      }
+
+      // 3. Attempt upserting with extended columns first
+      let { error } = await client.from('Video').upsert(extendedPayload, { onConflict: 'VideoID' });
+
+      // Fallback 1: Column error (code 42703) -> Retry with core columns + Status + RejectionReason
+      if (error && (error.code === '42703' || error.message?.includes('column') || error.message?.includes('does not exist'))) {
+        console.warn('[Supabase] Video table missing extended columns, retrying with core columns + Status + RejectionReason:', error.message);
+        const statusPayload: Record<string, any> = {
+          ...corePayload,
+          Status: video.status || 'approved',
         };
-        const retry2 = await client.from('Video').upsert(strippedPayload, { onConflict: 'VideoID' });
-        error = retry2.error;
+        if (video.rejectionReason !== undefined) {
+          statusPayload.RejectionReason = video.rejectionReason;
+        }
+        const retry1 = await client.from('Video').upsert(statusPayload, { onConflict: 'VideoID' });
+        error = retry1.error;
+
+        // If RejectionReason or Status column also does not exist in table, retry with pure corePayload
+        if (error && (error.code === '42703' || error.message?.includes('column'))) {
+          console.warn('[Supabase] Video table Status/RejectionReason column missing, retrying with pure core columns:', error.message);
+          const retry2 = await client.from('Video').upsert(corePayload, { onConflict: 'VideoID' });
+          error = retry2.error;
+        }
       }
 
-      // Fallback 3: Try lowercase 'videos' table
+      // Fallback 2: Foreign key violation on AudioTrackID (code 23503) -> Retry without AudioTrackID
+      if (error && (error.code === '23503' || error.message?.includes('foreign key'))) {
+        console.warn('[Supabase] Foreign key violation on Video, retrying without AudioTrackID:', error.message);
+        const { AudioTrackID: _, ...coreWithoutAudio } = corePayload;
+        const retryFk = await client.from('Video').upsert(coreWithoutAudio, { onConflict: 'VideoID' });
+        error = retryFk.error;
+      }
+
+      // Fallback 3: Lowercase 'videos' table if PascalCase doesn't exist (42P01)
       if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
         const snakePayload = {
           id: videoUuid,
@@ -984,24 +1008,48 @@ export const supabaseDb = {
       }
 
       if (error) {
-        console.warn('Supabase insertVideo error:', error.message);
+        console.error(
+          '[Supabase] Video insertion failed. Code:',
+          error.code,
+          '| Message:',
+          error.message,
+          '| Details:',
+          error.details,
+          '| Hint:',
+          error.hint
+        );
         return false;
       }
 
-      // 4. Insert hashtags into VideoHashtag table
+      // 4. Insert hashtags into VideoHashtag table (guaranteed since Video now exists in DB)
       if (Array.isArray(video.hashtags) && video.hashtags.length > 0) {
-        const tagRows = video.hashtags.map(tag => ({
-          VideoID: videoUuid,
-          HashtagName: tag.startsWith('#') ? tag : `#${tag}`,
-        }));
-        try {
-          await client.from('VideoHashtag').insert(tagRows);
-        } catch {
-          // ignore
+        const cleanTags = Array.from(
+          new Set(
+            video.hashtags
+              .map(tag => (tag.startsWith('#') ? tag : `#${tag}`).trim())
+              .filter(tag => tag.length > 1)
+          )
+        );
+
+        if (cleanTags.length > 0) {
+          const tagRows = cleanTags.map(tag => ({
+            VideoID: videoUuid,
+            HashtagName: tag,
+          }));
+          try {
+            // Delete existing tags for this video first, then insert new rows
+            await client.from('VideoHashtag').delete().eq('VideoID', videoUuid);
+            const { error: tagError } = await client.from('VideoHashtag').insert(tagRows);
+            if (tagError) {
+              console.warn('[Supabase] VideoHashtag insert note:', tagError.message);
+            }
+          } catch (tagErr) {
+            console.warn('[Supabase] VideoHashtag insert exception:', tagErr);
+          }
         }
       }
 
-      // 5. Upsert VideoStats
+      // 5. Upsert VideoStats if it's a table (safe try-catch for views)
       try {
         await client
           .from('VideoStats')
@@ -1016,12 +1064,12 @@ export const supabaseDb = {
             { onConflict: 'VideoID' }
           );
       } catch {
-        // ignore
+        // ignore - VideoStats is often a SQL view which cannot be directly inserted into
       }
 
       return true;
     } catch (e) {
-      console.warn('Supabase insertVideo fallback:', e);
+      console.error('[Supabase] insertVideo exception:', e);
       return false;
     }
   },
@@ -2381,7 +2429,10 @@ ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "Role" TEXT DEFAULT
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "IsPublic" BOOLEAN DEFAULT true;
 ALTER TABLE IF EXISTS public."User" ALTER COLUMN "IsPublic" SET DEFAULT true;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "Status" TEXT DEFAULT 'approved';
+ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "ThumbnailURL" TEXT;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "RejectionReason" TEXT;
+ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealStatus" TEXT DEFAULT 'none';
+ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealReason" TEXT;
 
 -- 3. ENABLE ROW LEVEL SECURITY (RLS) SAFELY ON BASE TABLES (Views like VideoStats are excluded)
 ALTER TABLE IF EXISTS public."User" ENABLE ROW LEVEL SECURITY;
