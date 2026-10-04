@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
+import { isSameUser, checkIsUserBanned } from '../../lib/supabase';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { Avatar } from '../common/Avatar';
 import {
@@ -537,6 +538,7 @@ const EmptyFeedLayoutCard: React.FC = () => {
 export const HomeFeed: React.FC = () => {
   const {
     currentUser,
+    users,
     videos,
     setActiveTab,
     setSearchQuery,
@@ -560,16 +562,20 @@ export const HomeFeed: React.FC = () => {
     }
   }, [feedRefreshKey]);
 
-  // Filter: Public feed only shows approved videos (or pending videos to their creator)
+  // Filter: Public feed only shows approved videos (or pending videos to their creator) & never shows banned creators
   const visibleApprovedVideos = useMemo(() => {
     return deduplicateVideos(videos).filter(v => {
       if (v.status === 'rejected') return false;
+      if (v.creator?.isBanned) return false;
+      if (checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned) return false;
+      const creatorUser = users.find(u => isSameUser(u.id, v.creatorId) || isSameUser(u.id, v.creator?.id));
+      if (creatorUser?.isBanned || (creatorUser && checkIsUserBanned(creatorUser.id, creatorUser.email, creatorUser).isBanned)) return false;
       if (v.status === 'pending') {
         return currentUser && v.creatorId === currentUser.id;
       }
       return true;
     });
-  }, [videos, currentUser]);
+  }, [videos, users, currentUser]);
 
   // Feed ordering rule:
   // "every user when logging in on the app will see their feed randomly videos , but the recently uploaded must be on the first feed, also when refreshing home the video will be random again/shuffle."

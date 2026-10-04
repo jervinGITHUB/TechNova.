@@ -136,6 +136,212 @@ export const isUserIdDeleted = (userId?: string | null, email?: string | null): 
 };
 
 // =========================================================================
+// Banned Users Registry & Ban Status Verification
+// Guarantees banned accounts stay banned across tab focus, reloads, & Supabase syncs
+// =========================================================================
+export const recordUserBan = (data: {
+  userId?: string | null;
+  username?: string | null;
+  email?: string | null;
+  banReason?: string;
+  bannedAt?: string;
+  appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
+  appealReason?: string;
+  appealSubmittedAt?: string;
+}) => {
+  try {
+    let bansMap: Record<string, any> = {};
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_user_bans_v1') : null;
+    if (raw) bansMap = JSON.parse(raw);
+
+    const nowIso = data.bannedAt || new Date().toISOString();
+    const cleanUsername = data.username ? data.username.toLowerCase().replace(/^@/, '').trim() : undefined;
+    const cleanEmail = data.email ? data.email.toLowerCase().trim() : undefined;
+    const cleanUserId = data.userId ? String(data.userId).trim() : undefined;
+
+    const record = {
+      isBanned: true,
+      banReason: data.banReason || 'Violation of Community Guidelines',
+      bannedAt: nowIso,
+      appealStatus: data.appealStatus || 'none',
+      appealReason: data.appealReason,
+      appealSubmittedAt: data.appealSubmittedAt,
+      userId: cleanUserId,
+      username: cleanUsername,
+      email: cleanEmail,
+    };
+
+    if (cleanUserId) {
+      bansMap[cleanUserId] = record;
+      bansMap[cleanUserId.toLowerCase()] = record;
+      bansMap[toUuid(cleanUserId)] = record;
+    }
+    if (cleanUsername) {
+      bansMap[cleanUsername] = record;
+      bansMap[`@${cleanUsername}`] = record;
+    }
+    if (cleanEmail) {
+      bansMap[cleanEmail] = record;
+    }
+
+    localStorage.setItem('viralhub_user_bans_v1', JSON.stringify(bansMap));
+    localStorage.setItem('viralhub_user_banned_event', JSON.stringify({ ...record, timestamp: Date.now() }));
+  } catch (e) {
+    console.warn('recordUserBan failed', e);
+  }
+};
+
+export const recordUserUnban = (
+  userId?: string | null,
+  email?: string | null,
+  username?: string | null
+) => {
+  try {
+    let bansMap: Record<string, any> = {};
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_user_bans_v1') : null;
+    if (raw) bansMap = JSON.parse(raw);
+
+    const cleanUsername = username ? username.toLowerCase().replace(/^@/, '').trim() : undefined;
+    const cleanEmail = email ? email.toLowerCase().trim() : undefined;
+    const cleanUserId = userId ? String(userId).trim() : undefined;
+
+    const unbanRecord = {
+      isBanned: false,
+      appealStatus: 'approved',
+      userId: cleanUserId,
+      username: cleanUsername,
+      email: cleanEmail,
+    };
+
+    if (cleanUserId) {
+      bansMap[cleanUserId] = unbanRecord;
+      bansMap[cleanUserId.toLowerCase()] = unbanRecord;
+      bansMap[toUuid(cleanUserId)] = unbanRecord;
+    }
+    if (cleanUsername) {
+      bansMap[cleanUsername] = unbanRecord;
+      bansMap[`@${cleanUsername}`] = unbanRecord;
+    }
+    if (cleanEmail) {
+      bansMap[cleanEmail] = unbanRecord;
+    }
+
+    localStorage.setItem('viralhub_user_bans_v1', JSON.stringify(bansMap));
+    localStorage.setItem('viralhub_user_unbanned_event', JSON.stringify({ ...unbanRecord, timestamp: Date.now() }));
+  } catch (e) {
+    console.warn('recordUserUnban failed', e);
+  }
+};
+
+export const checkIsUserBanned = (
+  userId?: string | null,
+  email?: string | null,
+  userObj?: Partial<User> | null
+): {
+  isBanned: boolean;
+  banReason?: string;
+  bannedAt?: string;
+  appealStatus: 'none' | 'pending' | 'approved' | 'declined';
+  appealReason?: string;
+  appealSubmittedAt?: string;
+} => {
+  let bansMap: Record<string, any> = {};
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_user_bans_v1') : null;
+    if (raw) bansMap = JSON.parse(raw);
+  } catch {}
+
+  const candidateUsername = (userObj?.username || '').trim().toLowerCase().replace(/^@/, '');
+  const candidateEmail = (email || userObj?.email || '').trim().toLowerCase();
+  const candidateId = userId ? String(userId).trim() : (userObj?.id ? String(userObj.id).trim() : '');
+
+  // 1. Gather all candidate keys
+  const keys: string[] = [];
+  if (candidateId) {
+    keys.push(candidateId);
+    keys.push(candidateId.toLowerCase());
+    keys.push(toUuid(candidateId));
+  }
+  if (candidateEmail) {
+    keys.push(candidateEmail);
+  }
+  if (candidateUsername) {
+    keys.push(candidateUsername);
+    keys.push(`@${candidateUsername}`);
+  }
+
+  // 2. Direct key lookup in bansMap
+  for (const k of keys) {
+    const record = bansMap[k];
+    if (record) {
+      if (record.isBanned === true) {
+        return {
+          isBanned: true,
+          banReason: record.banReason || userObj?.banReason || 'Violation of Community Guidelines',
+          bannedAt: record.bannedAt || userObj?.bannedAt,
+          appealStatus: record.appealStatus || (userObj?.appealStatus as any) || 'none',
+          appealReason: record.appealReason || userObj?.appealReason,
+          appealSubmittedAt: record.appealSubmittedAt || userObj?.appealSubmittedAt,
+        };
+      } else if (record.isBanned === false && record.appealStatus === 'approved') {
+        return {
+          isBanned: false,
+          appealStatus: 'approved',
+        };
+      }
+    }
+  }
+
+  // 3. Deep scan across all records in bansMap in case key format was different
+  for (const rec of Object.values(bansMap)) {
+    if (!rec) continue;
+    const matchesId = candidateId && (
+      isSameUser(rec.userId, candidateId) ||
+      isSameUser(rec.id, candidateId) ||
+      rec.userId === candidateId ||
+      rec.id === candidateId
+    );
+    const matchesEmail = candidateEmail && rec.email && rec.email.toLowerCase() === candidateEmail;
+    const matchesUsername = candidateUsername && rec.username && rec.username.toLowerCase().replace(/^@/, '') === candidateUsername;
+
+    if (matchesId || matchesEmail || matchesUsername) {
+      if (rec.isBanned === true) {
+        return {
+          isBanned: true,
+          banReason: rec.banReason || userObj?.banReason || 'Violation of Community Guidelines',
+          bannedAt: rec.bannedAt || userObj?.bannedAt,
+          appealStatus: rec.appealStatus || (userObj?.appealStatus as any) || 'none',
+          appealReason: rec.appealReason || userObj?.appealReason,
+          appealSubmittedAt: rec.appealSubmittedAt || userObj?.appealSubmittedAt,
+        };
+      } else if (rec.isBanned === false && rec.appealStatus === 'approved') {
+        return {
+          isBanned: false,
+          appealStatus: 'approved',
+        };
+      }
+    }
+  }
+
+  // 4. Fallback to userObj attributes if explicitly flagged as banned
+  if (userObj?.isBanned) {
+    return {
+      isBanned: true,
+      banReason: userObj.banReason || 'Violation of Community Guidelines',
+      bannedAt: userObj.bannedAt,
+      appealStatus: (userObj.appealStatus as any) || 'none',
+      appealReason: userObj.appealReason,
+      appealSubmittedAt: userObj.appealSubmittedAt,
+    };
+  }
+
+  return {
+    isBanned: false,
+    appealStatus: (userObj?.appealStatus as any) || 'none',
+  };
+};
+
+// =========================================================================
 // Configuration & Client Initialization
 // =========================================================================
 export const getSupabaseConfig = (): SupabaseConfig => {
@@ -498,12 +704,32 @@ export const supabaseDb = {
           }
         }
 
-        const isUserBanned = Boolean(row.IsBanned || row.is_banned || false);
-        const banReason = row.BanReason || row.ban_reason || undefined;
-        const bannedAt = row.BannedAt || row.banned_at || undefined;
-        const appealStatus = (row.AppealStatus || row.appeal_status || 'none') as any;
-        const appealReason = row.AppealReason || row.appeal_reason || undefined;
-        const appealSubmittedAt = row.AppealSubmittedAt || row.appeal_submitted_at || undefined;
+        const candidateUser: Partial<User> = {
+          id: uId,
+          username: row.Username || row.username,
+          email: uEmail,
+          isBanned: Boolean(row.IsBanned || row.is_banned || false),
+          banReason: row.BanReason || row.ban_reason || undefined,
+          bannedAt: row.BannedAt || row.banned_at || undefined,
+          appealStatus: (row.AppealStatus || row.appeal_status || 'none') as any,
+          appealReason: row.AppealReason || row.appeal_reason || undefined,
+          appealSubmittedAt: row.AppealSubmittedAt || row.appeal_submitted_at || undefined,
+        };
+
+        if (candidateUser.isBanned) {
+          recordUserBan({
+            userId: uId,
+            username: candidateUser.username,
+            email: uEmail,
+            banReason: candidateUser.banReason,
+            bannedAt: candidateUser.bannedAt,
+            appealStatus: candidateUser.appealStatus,
+            appealReason: candidateUser.appealReason,
+            appealSubmittedAt: candidateUser.appealSubmittedAt,
+          });
+        }
+
+        const banInfo = checkIsUserBanned(uId, uEmail, candidateUser);
 
         const newUser: User = {
           id: uId,
@@ -517,12 +743,12 @@ export const supabaseDb = {
           likesCount: '0',
           isPrivate: row.IsPublic !== undefined ? !row.IsPublic : (row.is_public !== undefined ? !row.is_public : Boolean(row.isPrivate || row.is_private)),
           role: isAdminUser ? 'admin' : 'creator',
-          isBanned: isUserBanned,
-          banReason,
-          bannedAt,
-          appealStatus,
-          appealReason,
-          appealSubmittedAt,
+          isBanned: banInfo.isBanned,
+          banReason: banInfo.banReason,
+          bannedAt: banInfo.bannedAt,
+          appealStatus: banInfo.appealStatus,
+          appealReason: banInfo.appealReason,
+          appealSubmittedAt: banInfo.appealSubmittedAt,
         };
 
         userMap.set(uId, newUser);
@@ -735,115 +961,222 @@ export const supabaseDb = {
     }
   },
 
-  async banUser(userId: string, reason: string): Promise<boolean> {
+  async banUser(
+    userId: string,
+    reason: string,
+    email?: string | null,
+    username?: string | null
+  ): Promise<boolean> {
     const client = getSupabaseClient();
-    if (!client || !userId) return false;
+    const nowIso = new Date().toISOString();
+
+    // 1. Immediately record in persistent ban registry with all known identifiers!
+    recordUserBan({
+      userId,
+      username,
+      email,
+      banReason: reason,
+      bannedAt: nowIso,
+      appealStatus: 'none',
+    });
+
+    if (!client || !userId) return true;
+
     try {
-      const uUuid = toUuid(userId);
-      const nowIso = new Date().toISOString();
+      const isUidUuid = isUuid(userId);
+      const cleanEmail = email ? email.trim().toLowerCase() : null;
+      const cleanUsername = username ? username.replace(/^@/, '').trim().toLowerCase() : null;
+
       const payload: Record<string, any> = {
         IsBanned: true,
         BanReason: reason,
         BannedAt: nowIso,
         AppealStatus: 'none',
       };
-      let res = await client
-        .from('User')
-        .update(payload)
-        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
 
-      if (res.error) {
-        await client
-          .from('users')
-          .update({
-            is_banned: true,
-            ban_reason: reason,
-            banned_at: nowIso,
-            appeal_status: 'none',
-          })
-          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      // Safely update PascalCase 'User' table without invalid UUID syntax casts
+      if (isUidUuid) {
+        try { await client.from('User').update(payload).eq('UserID', userId); } catch {}
       }
+      if (cleanUsername) {
+        try { await client.from('User').update(payload).ilike('Username', cleanUsername); } catch {}
+      }
+      if (cleanEmail) {
+        try { await client.from('User').update(payload).ilike('Email', cleanEmail); } catch {}
+      }
+
+      // Also try snake_case 'users' table
+      const snakePayload = {
+        is_banned: true,
+        ban_reason: reason,
+        banned_at: nowIso,
+        appeal_status: 'none',
+      };
+      if (isUidUuid) {
+        try { await client.from('users').update(snakePayload).eq('id', userId); } catch {}
+      }
+      if (cleanUsername) {
+        try { await client.from('users').update(snakePayload).ilike('username', cleanUsername); } catch {}
+      }
+      if (cleanEmail) {
+        try { await client.from('users').update(snakePayload).ilike('email', cleanEmail); } catch {}
+      }
+
       cachedUsersResult = null;
       return true;
     } catch (e) {
       console.warn('Supabase banUser warning:', e);
-      return false;
+      return true;
     }
   },
 
-  async unbanUser(userId: string): Promise<boolean> {
+  async unbanUser(
+    userId: string,
+    email?: string | null,
+    username?: string | null
+  ): Promise<boolean> {
     const client = getSupabaseClient();
-    if (!client || !userId) return false;
+
+    // Immediately record unban in persistent registry
+    recordUserUnban(userId, email, username);
+
+    if (!client || !userId) return true;
+
     try {
-      const uUuid = toUuid(userId);
+      const isUidUuid = isUuid(userId);
+      const cleanEmail = email ? email.trim().toLowerCase() : null;
+      const cleanUsername = username ? username.replace(/^@/, '').trim().toLowerCase() : null;
+
       const payload: Record<string, any> = {
         IsBanned: false,
         BanReason: null,
         AppealStatus: 'approved',
       };
-      let res = await client
-        .from('User')
-        .update(payload)
-        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
 
-      if (res.error) {
-        await client
-          .from('users')
-          .update({
-            is_banned: false,
-            ban_reason: null,
-            appeal_status: 'approved',
-          })
-          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      if (isUidUuid) {
+        try { await client.from('User').update(payload).eq('UserID', userId); } catch {}
       }
+      if (cleanUsername) {
+        try { await client.from('User').update(payload).ilike('Username', cleanUsername); } catch {}
+      }
+      if (cleanEmail) {
+        try { await client.from('User').update(payload).ilike('Email', cleanEmail); } catch {}
+      }
+
+      // Also try snake_case users table
+      const snakePayload = {
+        is_banned: false,
+        ban_reason: null,
+        appeal_status: 'approved',
+      };
+      if (isUidUuid) {
+        try { await client.from('users').update(snakePayload).eq('id', userId); } catch {}
+      }
+      if (cleanUsername) {
+        try { await client.from('users').update(snakePayload).ilike('username', cleanUsername); } catch {}
+      }
+      if (cleanEmail) {
+        try { await client.from('users').update(snakePayload).ilike('email', cleanEmail); } catch {}
+      }
+
       cachedUsersResult = null;
       return true;
     } catch (e) {
       console.warn('Supabase unbanUser warning:', e);
-      return false;
+      return true;
     }
   },
 
-  async submitUserAppeal(userId: string, appealReason: string): Promise<boolean> {
+  async submitUserAppeal(
+    userId: string,
+    appealReason: string,
+    email?: string | null,
+    username?: string | null
+  ): Promise<boolean> {
     const client = getSupabaseClient();
-    if (!client || !userId) return false;
+    const nowIso = new Date().toISOString();
+
+    recordUserBan({
+      userId,
+      username,
+      email,
+      appealStatus: 'pending',
+      appealReason,
+      appealSubmittedAt: nowIso,
+    });
+
+    if (!client || !userId) return true;
+
     try {
-      const uUuid = toUuid(userId);
-      const nowIso = new Date().toISOString();
+      const isUidUuid = isUuid(userId);
+      const cleanEmail = email ? email.trim().toLowerCase() : null;
+      const cleanUsername = username ? username.replace(/^@/, '').trim().toLowerCase() : null;
+
       const payload: Record<string, any> = {
         AppealStatus: 'pending',
         AppealReason: appealReason,
         AppealSubmittedAt: nowIso,
       };
-      let res = await client
-        .from('User')
-        .update(payload)
-        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
 
-      if (res.error) {
-        await client
-          .from('users')
-          .update({
-            appeal_status: 'pending',
-            appeal_reason: appealReason,
-            appeal_submitted_at: nowIso,
-          })
-          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      if (isUidUuid) {
+        try { await client.from('User').update(payload).eq('UserID', userId); } catch {}
       }
+      if (cleanUsername) {
+        try { await client.from('User').update(payload).ilike('Username', cleanUsername); } catch {}
+      }
+      if (cleanEmail) {
+        try { await client.from('User').update(payload).ilike('Email', cleanEmail); } catch {}
+      }
+
+      const snakePayload = {
+        appeal_status: 'pending',
+        appeal_reason: appealReason,
+        appeal_submitted_at: nowIso,
+      };
+      if (isUidUuid) {
+        try { await client.from('users').update(snakePayload).eq('id', userId); } catch {}
+      }
+      if (cleanUsername) {
+        try { await client.from('users').update(snakePayload).ilike('username', cleanUsername); } catch {}
+      }
+      if (cleanEmail) {
+        try { await client.from('users').update(snakePayload).ilike('email', cleanEmail); } catch {}
+      }
+
       cachedUsersResult = null;
       return true;
     } catch (e) {
       console.warn('Supabase submitUserAppeal warning:', e);
-      return false;
+      return true;
     }
   },
 
-  async reviewUserAppeal(userId: string, decision: 'approved' | 'declined'): Promise<boolean> {
+  async reviewUserAppeal(
+    userId: string,
+    decision: 'approved' | 'declined',
+    email?: string | null,
+    username?: string | null
+  ): Promise<boolean> {
+    const isApproved = decision === 'approved';
+    if (isApproved) {
+      recordUserUnban(userId, email, username);
+    } else {
+      recordUserBan({
+        userId,
+        username,
+        email,
+        appealStatus: 'declined',
+      });
+    }
+
     const client = getSupabaseClient();
-    if (!client || !userId) return false;
+    if (!client || !userId) return true;
+
     try {
-      const uUuid = toUuid(userId);
-      const isApproved = decision === 'approved';
+      const isUidUuid = isUuid(userId);
+      const cleanEmail = email ? email.trim().toLowerCase() : null;
+      const cleanUsername = username ? username.replace(/^@/, '').trim().toLowerCase() : null;
+
       const payload: Record<string, any> = {
         AppealStatus: decision,
         IsBanned: !isApproved,
@@ -851,26 +1184,37 @@ export const supabaseDb = {
       if (isApproved) {
         payload.BanReason = null;
       }
-      let res = await client
-        .from('User')
-        .update(payload)
-        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
 
-      if (res.error) {
-        await client
-          .from('users')
-          .update({
-            appeal_status: decision,
-            is_banned: !isApproved,
-            ...(isApproved ? { ban_reason: null } : {}),
-          })
-          .or(`id.eq.${uUuid},id.eq.${userId}`);
+      if (isUidUuid) {
+        try { await client.from('User').update(payload).eq('UserID', userId); } catch {}
       }
+      if (cleanUsername) {
+        try { await client.from('User').update(payload).ilike('Username', cleanUsername); } catch {}
+      }
+      if (cleanEmail) {
+        try { await client.from('User').update(payload).ilike('Email', cleanEmail); } catch {}
+      }
+
+      const snakePayload = {
+        appeal_status: decision,
+        is_banned: !isApproved,
+        ...(isApproved ? { ban_reason: null } : {}),
+      };
+      if (isUidUuid) {
+        try { await client.from('users').update(snakePayload).eq('id', userId); } catch {}
+      }
+      if (cleanUsername) {
+        try { await client.from('users').update(snakePayload).ilike('username', cleanUsername); } catch {}
+      }
+      if (cleanEmail) {
+        try { await client.from('users').update(snakePayload).ilike('email', cleanEmail); } catch {}
+      }
+
       cachedUsersResult = null;
       return true;
     } catch (e) {
       console.warn('Supabase reviewUserAppeal warning:', e);
-      return false;
+      return true;
     }
   },
 

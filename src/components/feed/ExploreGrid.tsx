@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
-import { isVideoUrl } from '../../lib/supabase';
+import { isVideoUrl, checkIsUserBanned, isSameUser } from '../../lib/supabase';
 import { Avatar } from '../common/Avatar';
 import {
   Play,
@@ -82,14 +82,16 @@ export const ExploreGrid: React.FC = () => {
 
   const cleanQuery = searchQuery.toLowerCase().replace('#', '').replace('@', '').trim();
 
-  // Filter matching creators (only highlighted when user explicitly searches)
+  // Filter matching creators (only highlighted when user explicitly searches, hide banned accounts)
   const matchedUsers = useMemo(() => {
     if (!cleanQuery) return [];
     return users.filter(
       u =>
-        u.displayName.toLowerCase().includes(cleanQuery) ||
+        !u.isBanned &&
+        !checkIsUserBanned(u.id, u.email, u).isBanned &&
+        (u.displayName.toLowerCase().includes(cleanQuery) ||
         u.username.toLowerCase().includes(cleanQuery) ||
-        u.bio.toLowerCase().includes(cleanQuery)
+        u.bio.toLowerCase().includes(cleanQuery))
     );
   }, [users, cleanQuery]);
 
@@ -97,6 +99,10 @@ export const ExploreGrid: React.FC = () => {
   const filteredVideos = useMemo(() => {
     return deduplicateVideos(videos).filter(v => {
       if (v.status === 'rejected') return false;
+      if (v.creator?.isBanned) return false;
+      if (checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned) return false;
+      const creatorUser = users.find(u => isSameUser(u.id, v.creatorId) || isSameUser(u.id, v.creator?.id));
+      if (creatorUser?.isBanned || (creatorUser && checkIsUserBanned(creatorUser.id, creatorUser.email, creatorUser).isBanned)) return false;
       if (v.status === 'pending') {
         if (!currentUser || v.creatorId !== currentUser.id) return false;
       }

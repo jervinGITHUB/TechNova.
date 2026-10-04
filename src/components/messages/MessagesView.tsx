@@ -3,7 +3,7 @@ import { useApp, deduplicateConversations, getConversationClearedTimestamp } fro
 import { Conversation, User, MessageReplyInfo, Message, Video } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { MessageVideoCard } from './MessageVideoCard';
-import { toUuid, isSameUser } from '../../lib/supabase';
+import { toUuid, isSameUser, checkIsUserBanned } from '../../lib/supabase';
 import {
   Search,
   Send,
@@ -272,7 +272,7 @@ export const MessagesView: React.FC = () => {
             </p>
             <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
               {users
-                .filter(u => u.id !== currentUser?.id)
+                .filter(u => u.id !== currentUser?.id && !u.isBanned && !checkIsUserBanned(u.id, u.email, u).isBanned)
                 .map(u => {
                   const allowed = canMessageUser(u.id);
                   return (
@@ -481,7 +481,7 @@ export const MessagesView: React.FC = () => {
                 </p>
                 <div className="space-y-1.5 text-left">
                   {users
-                    .filter(u => u.id !== currentUser?.id)
+                    .filter(u => u.id !== currentUser?.id && !u.isBanned && !checkIsUserBanned(u.id, u.email, u).isBanned)
                     .map(u => {
                       const allowed = canMessageUser(u.id);
                       return (

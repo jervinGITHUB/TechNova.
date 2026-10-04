@@ -30,7 +30,7 @@ import {
   Send,
   Loader2,
 } from 'lucide-react';
-import { isSameUser, isVideoUrl, toUuid } from '../../lib/supabase';
+import { isSameUser, isVideoUrl, toUuid, checkIsUserBanned } from '../../lib/supabase';
 
 export const ProfileView: React.FC = () => {
   const {
@@ -128,6 +128,41 @@ export const ProfileView: React.FC = () => {
 
   if (!targetUser) {
     return <div className="p-8 text-neutral-400">User not found</div>;
+  }
+
+  // If this other user's account is banned, show suspended account placeholder
+  const isTargetBanned = !isSelf && (
+    targetUser.isBanned ||
+    checkIsUserBanned(targetUser.id, targetUser.email, targetUser).isBanned
+  );
+
+  if (isTargetBanned) {
+    return (
+      <div className="flex-1 p-6 sm:p-12 max-w-2xl mx-auto w-full text-center flex flex-col items-center justify-center min-h-[60vh] space-y-6 animate-fadeIn">
+        <div className="w-20 h-20 rounded-3xl bg-red-500/15 border border-red-500/30 flex items-center justify-center text-red-500 shadow-[0_0_30px_rgba(239,68,68,0.2)]">
+          <Ban className="w-10 h-10" />
+        </div>
+        <div className="space-y-2">
+          <span className="px-3 py-1 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-bold uppercase tracking-wider">
+            Account Suspended
+          </span>
+          <h2 className="text-2xl font-bold font-brand text-white mt-2">
+            @{targetUser.username || 'user'} is unavailable
+          </h2>
+          <p className="text-sm text-neutral-400 max-w-md mx-auto leading-relaxed">
+            This account has been suspended for violating the Community Guidelines. Their content, profile, and activities are hidden from the platform.
+          </p>
+        </div>
+        <button
+          onClick={() => {
+            setActiveTab('home');
+          }}
+          className="px-6 py-2.5 rounded-2xl bg-[#1e1e2b] hover:bg-[#28283a] border border-neutral-700 text-white text-xs font-bold transition-all cursor-pointer shadow-lg"
+        >
+          Return to Feed
+        </button>
+      </div>
+    );
   }
 
   // Videos associated with this user (matched reliably by UUID or string)

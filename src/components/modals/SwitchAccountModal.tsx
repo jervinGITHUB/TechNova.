@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { User } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { ViralHubLogo } from '../common/ViralHubLogo';
+import { checkIsUserBanned } from '../../lib/supabase';
 import {
   X,
   UserCheck,
@@ -141,6 +142,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
               const isCurrent = currentUser?.id === u.id;
               const roleLower = String(u.role || '').toLowerCase();
               const isAdminAccount = roleLower === 'admin' || roleLower === 'super admin' || roleLower === 'administrator';
+              const isBannedAccount = u.isBanned || checkIsUserBanned(u.id, u.email, u).isBanned;
 
               return (
                 <div
@@ -148,6 +150,8 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                   className={`w-full flex items-center justify-between p-3 rounded-2xl border transition-all text-left ${
                     isCurrent
                       ? 'bg-[#181824]/60 border-neutral-800 opacity-80'
+                      : isBannedAccount
+                      ? 'bg-[#181824] hover:bg-[#202030] border-red-500/40 hover:border-red-500/60'
                       : 'bg-[#181824] hover:bg-[#202030] border-neutral-800/80 hover:border-neutral-700'
                   }`}
                 >
@@ -165,6 +169,11 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                         <span className="text-xs font-bold text-white truncate">
                           {u.displayName || u.username}
                         </span>
+                        {isBannedAccount && (
+                          <span className="px-1.5 py-0.2 rounded bg-red-500/20 text-red-400 border border-red-500/30 text-[9px] font-extrabold uppercase tracking-wider shrink-0">
+                            Banned
+                          </span>
+                        )}
                         {isAdminAccount && (
                           <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-extrabold uppercase tracking-wider shrink-0">
                             Admin

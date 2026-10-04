@@ -13,6 +13,7 @@ import {
   Film
 } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
+import { checkIsUserBanned } from '../../lib/supabase';
 
 interface ShareVideoModalProps {
   video: Video | null;
@@ -58,9 +59,10 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
     }
   };
 
-  // Eligible users: not currentUser, and either public OR mutual friends
+  // Eligible users: not currentUser, not banned, and either public OR mutual friends
   const eligibleUsers = users.filter(u => {
     if (u.id === currentUser?.id) return false;
+    if (u.isBanned || checkIsUserBanned(u.id, u.email, u).isBanned) return false;
     const followStatus = getFollowStatus(u.id);
     const isFriend = followStatus === 'friends';
     return !u.isPrivate || isFriend;

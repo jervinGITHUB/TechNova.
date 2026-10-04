@@ -43,6 +43,9 @@ import {
   getDirectConversationId,
   recordDeletedUserId,
   isUserIdDeleted,
+  checkIsUserBanned,
+  recordUserBan,
+  recordUserUnban,
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
 
@@ -425,7 +428,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = storage.get<User | null>('currentUser', null);
     if (saved && saved.id && (saved.username || saved.displayName) && saved.id !== 'user_main') {
-      return saved;
+      const banInfo = checkIsUserBanned(saved.id, saved.email, saved);
+      return {
+        ...saved,
+        isBanned: banInfo.isBanned,
+        banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+        bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+        appealStatus: banInfo.appealStatus,
+        appealReason: banInfo.appealReason,
+        appealSubmittedAt: banInfo.appealSubmittedAt,
+      };
     }
     return null;
   });
@@ -437,7 +449,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Core Data
   const [users, setUsers] = useState<User[]>(() => {
-    return storage.get<User[]>('users', INITIAL_USERS);
+    const raw = storage.get<User[]>('users', INITIAL_USERS);
+    return raw.map(u => {
+      const banInfo = checkIsUserBanned(u.id, u.email, u);
+      return {
+        ...u,
+        isBanned: banInfo.isBanned,
+        banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+        bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+        appealStatus: banInfo.appealStatus,
+        appealReason: banInfo.appealReason,
+        appealSubmittedAt: banInfo.appealSubmittedAt,
+      };
+    });
   });
 
   const [videos, setVideos] = useState<Video[]>(() => {
@@ -561,14 +585,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Saved accounts list for switching accounts on this device
   const [savedAccounts, setSavedAccounts] = useState<User[]>(() => {
     const rawSaved = storage.get<User[]>('saved_accounts_v2', []);
-    const saved = rawSaved.filter(a => a && a.id && !isUserIdDeleted(a.id, a.email));
+    const saved = rawSaved
+      .filter(a => a && a.id && !isUserIdDeleted(a.id, a.email))
+      .map(a => {
+        const banInfo = checkIsUserBanned(a.id, a.email, a);
+        return {
+          ...a,
+          isBanned: banInfo.isBanned,
+          banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+          bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+          appealStatus: banInfo.appealStatus,
+          appealReason: banInfo.appealReason,
+          appealSubmittedAt: banInfo.appealSubmittedAt,
+        };
+      });
     const current = storage.get<User | null>('currentUser', null);
     if (current && current.id && (current.username || current.displayName) && !isUserIdDeleted(current.id, current.email)) {
+      const banInfo = checkIsUserBanned(current.id, current.email, current);
+      const patchedCurrent = {
+        ...current,
+        isBanned: banInfo.isBanned,
+        banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+        bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+        appealStatus: banInfo.appealStatus,
+        appealReason: banInfo.appealReason,
+        appealSubmittedAt: banInfo.appealSubmittedAt,
+      };
       const exists = saved.some(
         s => isSameUser(s.id, current.id) || (s.email && current.email && s.email.toLowerCase() === current.email.toLowerCase())
       );
       if (!exists) {
-        const init = [current, ...saved];
+        const init = [patchedCurrent, ...saved];
         storage.set('saved_accounts_v2', init);
         return init;
       }
@@ -578,11 +625,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const recordSavedAccount = (acc: User) => {
     if (!acc || !acc.id || isUserIdDeleted(acc.id, acc.email)) return;
+    const banInfo = checkIsUserBanned(acc.id, acc.email, acc);
+    const patchedAcc: User = {
+      ...acc,
+      isBanned: banInfo.isBanned,
+      banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+      bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+      appealStatus: banInfo.appealStatus,
+      appealReason: banInfo.appealReason,
+      appealSubmittedAt: banInfo.appealSubmittedAt,
+    };
     setSavedAccounts(prev => {
       const filtered = prev.filter(
         a => !isSameUser(a.id, acc.id) && (!acc.email || !a.email || a.email.toLowerCase() !== acc.email.toLowerCase())
       );
-      const next = [acc, ...filtered].slice(0, 5); // Device limit of 5 logged-in accounts
+      const next = [patchedAcc, ...filtered].slice(0, 5); // Device limit of 5 logged-in accounts
       storage.set('saved_accounts_v2', next);
       return next;
     });
@@ -825,16 +882,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
 
-          // 2. Clean up savedAccounts to ONLY retain accounts currently existing in remoteUsers
+          // 2. Clean up savedAccounts to ONLY retain accounts currently existing in remoteUsers & apply ban checks
           setSavedAccounts(prevAccounts => {
-            const filtered = prevAccounts.filter(a => {
-              if (isUserIdDeleted(a.id, a.email)) return false;
-              return remoteUsers.some(
-                ru =>
-                  isSameUser(ru.id, a.id) ||
-                  (a.email && ru.email && a.email.toLowerCase() === ru.email.toLowerCase())
-              );
-            });
+            const filtered = prevAccounts
+              .filter(a => {
+                if (isUserIdDeleted(a.id, a.email)) return false;
+                return remoteUsers.some(
+                  ru =>
+                    isSameUser(ru.id, a.id) ||
+                    (a.email && ru.email && a.email.toLowerCase() === ru.email.toLowerCase())
+                );
+              })
+              .map(a => {
+                const banInfo = checkIsUserBanned(a.id, a.email, a);
+                return {
+                  ...a,
+                  isBanned: banInfo.isBanned,
+                  banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+                  bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+                  appealStatus: banInfo.appealStatus,
+                  appealReason: banInfo.appealReason,
+                  appealSubmittedAt: banInfo.appealSubmittedAt,
+                };
+              });
             storage.set('saved_accounts_v2', filtered);
             return filtered;
           });
@@ -845,22 +915,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           for (const u of remoteUsers) {
             if (isUserIdDeleted(u.id, u.email)) continue;
-            const emailKey = u.email ? u.email.trim().toLowerCase() : null;
+            const banInfo = checkIsUserBanned(u.id, u.email, u);
+            const patchedUser: User = {
+              ...u,
+              isBanned: banInfo.isBanned,
+              banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+              bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+              appealStatus: banInfo.appealStatus,
+              appealReason: banInfo.appealReason,
+              appealSubmittedAt: banInfo.appealSubmittedAt,
+            };
+
+            const emailKey = patchedUser.email ? patchedUser.email.trim().toLowerCase() : null;
             if (emailKey && emailMap.has(emailKey)) {
               const existingId = emailMap.get(emailKey)!;
               const existing = userMap.get(existingId);
-              if (existing && (u.role === 'admin' || existing.role !== 'admin')) {
-                existing.role = u.role === 'admin' ? 'admin' : existing.role;
+              if (existing) {
+                if (patchedUser.role === 'admin' || existing.role !== 'admin') {
+                  existing.role = patchedUser.role === 'admin' ? 'admin' : existing.role;
+                }
+                if (patchedUser.isBanned) {
+                  existing.isBanned = true;
+                  existing.banReason = patchedUser.banReason || existing.banReason;
+                  existing.bannedAt = patchedUser.bannedAt || existing.bannedAt;
+                  existing.appealStatus = patchedUser.appealStatus || existing.appealStatus;
+                }
               }
               continue; // Deduplicate
             }
-            userMap.set(u.id, u);
-            if (emailKey) emailMap.set(emailKey, u.id);
+            userMap.set(patchedUser.id, patchedUser);
+            if (emailKey) emailMap.set(emailKey, patchedUser.id);
           }
 
           const nextUsers = Array.from(userMap.values());
           setUsers(nextUsers);
           storage.set('users', nextUsers);
+
+          // 4. Synchronize currentUser ban status so user stays locked on BannedAccountView!
+          if (currentUser) {
+            const freshMe = nextUsers.find(
+              u =>
+                isSameUser(u.id, currentUser.id) ||
+                (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase()) ||
+                (currentUser.username && u.username && u.username.toLowerCase() === currentUser.username.toLowerCase())
+            );
+            const banInfo = checkIsUserBanned(
+              currentUser.id,
+              currentUser.email,
+              currentUser.isBanned ? currentUser : (freshMe || currentUser)
+            );
+
+            // Once banned, a user CANNOT be unbanned by background sync unless an appeal was approved or admin explicitly unbanned them
+            const finalIsBanned = currentUser.isBanned
+              ? (banInfo.appealStatus === 'approved' || freshMe?.appealStatus === 'approved' ? false : true)
+              : banInfo.isBanned;
+
+            const finalBanReason = finalIsBanned
+              ? (banInfo.banReason || currentUser.banReason || freshMe?.banReason || 'Violation of Community Guidelines')
+              : undefined;
+
+            const finalBannedAt = finalIsBanned
+              ? (banInfo.bannedAt || currentUser.bannedAt || freshMe?.bannedAt || new Date().toISOString())
+              : undefined;
+
+            if (
+              finalIsBanned !== currentUser.isBanned ||
+              banInfo.appealStatus !== currentUser.appealStatus ||
+              (freshMe && (freshMe.displayName !== currentUser.displayName || freshMe.avatar !== currentUser.avatar))
+            ) {
+              const updatedCurr: User = {
+                ...currentUser,
+                ...(freshMe || {}),
+                isBanned: finalIsBanned,
+                banReason: finalBanReason,
+                bannedAt: finalBannedAt,
+                appealStatus: banInfo.appealStatus,
+                appealReason: banInfo.appealReason,
+                appealSubmittedAt: banInfo.appealSubmittedAt,
+              };
+              setCurrentUser(updatedCurr);
+              storage.set('currentUser', updatedCurr);
+            }
+          }
         }
       }
 
@@ -1218,6 +1354,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Always re-use existing UserID if this email already has an account!
     const finalUserId = existingUser?.id || sbUser.id;
+    const activeStored = storage.get<User | null>('currentUser', null);
+    const wasBanned = activeStored?.isBanned || existingUser?.isBanned;
+
+    const banInfo = checkIsUserBanned(
+      finalUserId,
+      sbUser.email || email,
+      wasBanned ? (activeStored?.isBanned ? activeStored : existingUser) : existingUser
+    );
+
+    const isBannedFinal = wasBanned
+      ? (banInfo.appealStatus === 'approved' ? false : true)
+      : banInfo.isBanned;
 
     const finalUser: User = {
       id: finalUserId,
@@ -1231,6 +1379,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       likesCount: existingUser?.likesCount || '0',
       isPrivate: existingUser?.isPrivate || false,
       role: isAdminRole ? 'admin' : (existingUser?.role || 'creator'),
+      isBanned: isBannedFinal,
+      banReason: isBannedFinal ? (banInfo.banReason || activeStored?.banReason || existingUser?.banReason || 'Violation of Community Guidelines') : undefined,
+      bannedAt: isBannedFinal ? (banInfo.bannedAt || activeStored?.bannedAt || existingUser?.bannedAt || new Date().toISOString()) : undefined,
+      appealStatus: banInfo.appealStatus,
+      appealReason: banInfo.appealReason,
+      appealSubmittedAt: banInfo.appealSubmittedAt,
     };
 
     setCurrentUser(finalUser);
@@ -1344,8 +1498,138 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Local cross-tab realtime sync via storage events
       const handleStorageEvent = (e: StorageEvent) => {
+        const rawKey = e.key || '';
+        const cleanKey = rawKey.startsWith('viralhub_') ? rawKey.replace(/^viralhub_/, '') : rawKey;
+
+        if (cleanKey === 'user_banned_event') {
+          try {
+            const data = JSON.parse(e.newValue || '{}');
+            if (data.userId || data.email || data.username) {
+              const reason = data.reason || 'Violation of Community Guidelines';
+              // Update currentUser if matching
+              setCurrentUser(prev => {
+                if (!prev) return prev;
+                const matches =
+                  isSameUser(prev.id, data.userId) ||
+                  (data.email && prev.email && prev.email.toLowerCase() === data.email.toLowerCase()) ||
+                  (data.username && prev.username && prev.username.toLowerCase() === data.username.toLowerCase());
+                if (matches) {
+                  const updated: User = {
+                    ...prev,
+                    isBanned: true,
+                    banReason: reason,
+                    bannedAt: new Date().toISOString(),
+                    appealStatus: 'none',
+                  };
+                  storage.set('currentUser', updated);
+                  return updated;
+                }
+                return prev;
+              });
+
+              // Update users list
+              setUsers(prev =>
+                prev.map(u => {
+                  const matches =
+                    isSameUser(u.id, data.userId) ||
+                    (data.email && u.email && u.email.toLowerCase() === data.email.toLowerCase()) ||
+                    (data.username && u.username && u.username.toLowerCase() === data.username.toLowerCase());
+                  return matches ? { ...u, isBanned: true, banReason: reason } : u;
+                })
+              );
+
+              // Update savedAccounts
+              setSavedAccounts(prev => {
+                const next = prev.map(a => {
+                  const matches =
+                    isSameUser(a.id, data.userId) ||
+                    (data.email && a.email && a.email.toLowerCase() === data.email.toLowerCase()) ||
+                    (data.username && a.username && a.username.toLowerCase() === data.username.toLowerCase());
+                  return matches ? { ...a, isBanned: true, banReason: reason } : a;
+                });
+                storage.set('saved_accounts_v2', next);
+                return next;
+              });
+
+              // Hide videos from feed
+              setVideos(prev =>
+                prev.map(v => {
+                  const matches =
+                    isSameUser(v.creatorId, data.userId) ||
+                    (data.email && v.creator?.email && v.creator.email.toLowerCase() === data.email.toLowerCase());
+                  return matches ? { ...v, status: 'rejected', rejectionReason: `Creator account suspended: ${reason}` } : v;
+                })
+              );
+            }
+          } catch {}
+          return;
+        }
+
+        if (cleanKey === 'user_unbanned_event') {
+          try {
+            const data = JSON.parse(e.newValue || '{}');
+            if (data.userId || data.email) {
+              setCurrentUser(prev => {
+                if (!prev) return prev;
+                const matches =
+                  isSameUser(prev.id, data.userId) ||
+                  (data.email && prev.email && prev.email.toLowerCase() === data.email.toLowerCase());
+                if (matches) {
+                  const updated: User = {
+                    ...prev,
+                    isBanned: false,
+                    banReason: undefined,
+                    appealStatus: 'approved',
+                  };
+                  storage.set('currentUser', updated);
+                  return updated;
+                }
+                return prev;
+              });
+
+              setUsers(prev =>
+                prev.map(u => {
+                  const matches =
+                    isSameUser(u.id, data.userId) ||
+                    (data.email && u.email && u.email.toLowerCase() === data.email.toLowerCase());
+                  return matches ? { ...u, isBanned: false, banReason: undefined, appealStatus: 'approved' as const } : u;
+                })
+              );
+
+              setSavedAccounts(prev => {
+                const next = prev.map(a => {
+                  const matches =
+                    isSameUser(a.id, data.userId) ||
+                    (data.email && a.email && a.email.toLowerCase() === data.email.toLowerCase());
+                  return matches ? { ...a, isBanned: false, banReason: undefined, appealStatus: 'approved' as const } : a;
+                });
+                storage.set('saved_accounts_v2', next);
+                return next;
+              });
+            }
+          } catch {}
+          return;
+        }
+
+        if (cleanKey === 'currentUser' && e.newValue) {
+          try {
+            const parsed = JSON.parse(e.newValue);
+            if (parsed && parsed.id) {
+              const banInfo = checkIsUserBanned(parsed.id, parsed.email, parsed);
+              setCurrentUser({
+                ...parsed,
+                isBanned: banInfo.isBanned,
+                banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+                bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+                appealStatus: banInfo.appealStatus,
+              });
+            }
+          } catch {}
+          return;
+        }
+
         if (!currentUser) return;
-        if (e.key === 'notifications' && e.newValue) {
+        if ((cleanKey === 'notifications' || e.key === 'notifications') && e.newValue) {
           try {
             const parsedNotifs = JSON.parse(e.newValue) as NotificationItem[];
             if (Array.isArray(parsedNotifs)) {
@@ -1362,17 +1646,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
             }
           } catch {}
-        } else if (e.key === 'conversations' && e.newValue) {
+        } else if ((cleanKey === 'conversations' || e.key === 'conversations') && e.newValue) {
           try {
             const parsedConvs = JSON.parse(e.newValue);
             if (Array.isArray(parsedConvs)) setConversations(parsedConvs);
           } catch {}
-        } else if (e.key === 'follow_requests_v2' && e.newValue) {
+        } else if ((cleanKey === 'follow_requests_v2' || e.key === 'follow_requests_v2') && e.newValue) {
           try {
             const parsedReqs = JSON.parse(e.newValue);
             if (Array.isArray(parsedReqs)) setFollowRequests(parsedReqs);
           } catch {}
-        } else if (e.key === 'follow_relations_v2' && e.newValue) {
+        } else if ((cleanKey === 'follow_relations_v2' || e.key === 'follow_relations_v2') && e.newValue) {
           try {
             const parsedRels = JSON.parse(e.newValue);
             if (Array.isArray(parsedRels)) setFollowRelations(parsedRels);
@@ -1851,6 +2135,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             const rawRole = String(dbUser.Role || dbUser.role || '').toLowerCase();
             const isAdminRecord = rawRole === 'admin' || rawRole === 'super admin' || rawRole === 'administrator' || rawRole === 'content moderator';
+            const banInfo = checkIsUserBanned(dbUser.UserID || dbUser.id, dbUser.Email || dbUser.email, {
+              id: dbUser.UserID || dbUser.id,
+              username: dbUser.Username || dbUser.username,
+              isBanned: Boolean(dbUser.IsBanned || dbUser.is_banned),
+              banReason: dbUser.BanReason || dbUser.ban_reason,
+              bannedAt: dbUser.BannedAt || dbUser.banned_at,
+              appealStatus: dbUser.AppealStatus || dbUser.appeal_status,
+            });
+
             const loggedInUser: User = {
               id: dbUser.UserID || dbUser.id,
               username: dbUser.Username || dbUser.username,
@@ -1863,6 +2156,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               likesCount: '0',
               isPrivate: dbUser.IsPublic !== undefined ? !dbUser.IsPublic : false,
               role: isAdminRecord ? 'admin' : ((dbUser.Role || 'creator') as any),
+              isBanned: banInfo.isBanned,
+              banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+              bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+              appealStatus: banInfo.appealStatus,
+              appealReason: banInfo.appealReason,
+              appealSubmittedAt: banInfo.appealSubmittedAt,
             };
 
             setCurrentUser(loggedInUser);
@@ -1893,10 +2192,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
 
     if (found) {
-      setCurrentUser(found);
-      storage.set('currentUser', found);
-      recordSavedAccount(found);
-      if (found.role === 'admin') setIsAdmin(true);
+      const banInfo = checkIsUserBanned(found.id, found.email, found);
+      const patchedFound: User = {
+        ...found,
+        isBanned: banInfo.isBanned,
+        banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+        bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+        appealStatus: banInfo.appealStatus,
+        appealReason: banInfo.appealReason,
+        appealSubmittedAt: banInfo.appealSubmittedAt,
+      };
+      setCurrentUser(patchedFound);
+      storage.set('currentUser', patchedFound);
+      recordSavedAccount(patchedFound);
+      if (patchedFound.role === 'admin') setIsAdmin(true);
       setActiveConversationId(null);
       setMessagesMobileView('list');
       setSelectedUserId(null);
@@ -2115,9 +2424,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         (a.username && target.username && a.username.toLowerCase() === target.username.toLowerCase())
       );
 
+    const banInfo = checkIsUserBanned(target.id, target.email, target);
     const updatedTarget: User = {
       ...target,
       role: isTargetAdmin ? 'admin' : (target.role || 'creator'),
+      isBanned: banInfo.isBanned,
+      banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+      bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+      appealStatus: banInfo.appealStatus,
+      appealReason: banInfo.appealReason,
+      appealSubmittedAt: banInfo.appealSubmittedAt,
     };
 
     setCurrentUser(updatedTarget);
@@ -3852,10 +4168,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const finalReason = reason.trim() || 'Violation of Community Guidelines';
     const nowIso = new Date().toISOString();
 
-    // 1. Update user in users list
+    // Find the target user by ID, username, email, or reported subtitle
+    const relatedReport = reports.find(r => r.targetId === userId || r.id === userId);
+    const reportSubtitleUsername = relatedReport?.targetSubtitle
+      ? relatedReport.targetSubtitle.replace(/^@/, '').trim().toLowerCase()
+      : undefined;
+
+    const targetUser =
+      users.find(
+        u =>
+          isSameUser(u.id, userId) ||
+          (u.username && u.username.toLowerCase() === userId.toLowerCase()) ||
+          (reportSubtitleUsername && u.username && u.username.toLowerCase() === reportSubtitleUsername) ||
+          (u.email && u.email.toLowerCase() === userId.toLowerCase())
+      ) ||
+      savedAccounts.find(
+        u =>
+          isSameUser(u.id, userId) ||
+          (u.username && u.username.toLowerCase() === userId.toLowerCase()) ||
+          (reportSubtitleUsername && u.username && u.username.toLowerCase() === reportSubtitleUsername) ||
+          (u.email && u.email.toLowerCase() === userId.toLowerCase())
+      );
+    const resolvedUserId = targetUser ? targetUser.id : userId;
+    const resolvedEmail = targetUser?.email ? targetUser.email.toLowerCase() : null;
+    const resolvedUsername = targetUser?.username
+      ? targetUser.username.toLowerCase()
+      : (reportSubtitleUsername || (userId.startsWith('user_') ? null : userId.toLowerCase().replace(/^@/, '')));
+
+    // 1. Immediately record in persistent ban registry with all identifiers!
+    recordUserBan({
+      userId: resolvedUserId,
+      username: resolvedUsername,
+      email: resolvedEmail,
+      banReason: finalReason,
+      bannedAt: nowIso,
+      appealStatus: 'none',
+    });
+
+    // 2. Update user in users list
     setUsers(prev => {
       const next = prev.map(u => {
-        if (isSameUser(u.id, userId)) {
+        const matches =
+          isSameUser(u.id, resolvedUserId) ||
+          isSameUser(u.id, userId) ||
+          (resolvedEmail && u.email && u.email.toLowerCase() === resolvedEmail) ||
+          (resolvedUsername && u.username && u.username.toLowerCase() === resolvedUsername);
+        if (matches) {
           return {
             ...u,
             isBanned: true,
@@ -3870,29 +4228,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    // Save to user bans backup storage map so bans persist even before SQL migration
-    const bansMap = storage.get<Record<string, any>>('user_bans_v1', {});
-    bansMap[userId] = { isBanned: true, banReason: finalReason, bannedAt: nowIso, appealStatus: 'none' };
-    if (toUuid(userId)) bansMap[toUuid(userId)] = bansMap[userId];
-    storage.set('user_bans_v1', bansMap);
+    // 3. Update savedAccounts
+    setSavedAccounts(prev => {
+      const next = prev.map(a => {
+        const matches =
+          isSameUser(a.id, resolvedUserId) ||
+          isSameUser(a.id, userId) ||
+          (resolvedEmail && a.email && a.email.toLowerCase() === resolvedEmail) ||
+          (resolvedUsername && a.username && a.username.toLowerCase() === resolvedUsername);
+        if (matches) {
+          return {
+            ...a,
+            isBanned: true,
+            banReason: finalReason,
+            bannedAt: nowIso,
+            appealStatus: 'none' as const,
+          };
+        }
+        return a;
+      });
+      storage.set('saved_accounts_v2', next);
+      return next;
+    });
 
-    // 2. If banned user is currently logged in, update currentUser immediately!
-    if (currentUser && isSameUser(currentUser.id, userId)) {
-      const updatedUser: User = {
-        ...currentUser,
-        isBanned: true,
-        banReason: finalReason,
-        bannedAt: nowIso,
-        appealStatus: 'none',
-      };
-      setCurrentUser(updatedUser);
-      storage.set('currentUser', updatedUser);
+    // 4. If banned user is currently logged in, update currentUser immediately!
+    if (currentUser) {
+      const matches =
+        isSameUser(currentUser.id, resolvedUserId) ||
+        isSameUser(currentUser.id, userId) ||
+        (resolvedEmail && currentUser.email && currentUser.email.toLowerCase() === resolvedEmail) ||
+        (resolvedUsername && currentUser.username && currentUser.username.toLowerCase() === resolvedUsername);
+      if (matches) {
+        const updatedUser: User = {
+          ...currentUser,
+          isBanned: true,
+          banReason: finalReason,
+          bannedAt: nowIso,
+          appealStatus: 'none',
+        };
+        setCurrentUser(updatedUser);
+        storage.set('currentUser', updatedUser);
+      }
     }
 
-    // 3. Revoke their videos from public feed so feed stays clean
+    // 5. Revoke their videos from public feed so feed stays clean
     setVideos(prev => {
       const next = prev.map(v => {
-        if (isSameUser(v.creatorId, userId) || isSameUser(v.creator?.id, userId)) {
+        const matches =
+          isSameUser(v.creatorId, resolvedUserId) ||
+          isSameUser(v.creatorId, userId) ||
+          isSameUser(v.creator?.id, resolvedUserId) ||
+          isSameUser(v.creator?.id, userId) ||
+          (resolvedEmail && v.creator?.email && v.creator.email.toLowerCase() === resolvedEmail);
+        if (matches) {
           return {
             ...v,
             status: 'rejected' as const,
@@ -3905,12 +4293,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    // 4. Create and send account_banned notification to the banned user
-    const targetUser = users.find(u => isSameUser(u.id, userId));
+    // 6. Create and send account_banned notification to the banned user
     const banNotif: NotificationItem = {
       id: `notif_ban_${Date.now()}`,
-      recipientId: userId,
-      recipientEmail: targetUser?.email,
+      recipientId: resolvedUserId,
+      recipientEmail: resolvedEmail || undefined,
       type: 'account_banned',
       actor: {
         id: 'viralhub_moderation',
@@ -3930,22 +4317,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       storage.set('notifications', next);
       return next;
     });
-    supabaseDb.insertNotification(banNotif, userId);
+    supabaseDb.insertNotification(banNotif, resolvedUserId);
 
-    // 5. Update in Supabase
-    await supabaseDb.banUser(userId, finalReason);
+    // 7. Update in Supabase
+    await supabaseDb.banUser(resolvedUserId, finalReason, resolvedEmail || undefined, resolvedUsername || undefined);
 
-    // 6. Broadcast event so other open tabs update
-    storage.set('viralhub_user_banned_event', { userId, reason: finalReason, timestamp: Date.now() });
+    // 8. Broadcast event so other open tabs update
+    storage.set('user_banned_event', {
+      userId: resolvedUserId,
+      email: resolvedEmail,
+      username: resolvedUsername,
+      reason: finalReason,
+      timestamp: Date.now(),
+    });
 
     return true;
   };
 
   const unbanUserAdmin = async (userId: string): Promise<boolean> => {
+    // Find the target user by ID, username, or email
+    const targetUser =
+      users.find(
+        u =>
+          isSameUser(u.id, userId) ||
+          (u.username && u.username.toLowerCase() === userId.toLowerCase()) ||
+          (u.email && u.email.toLowerCase() === userId.toLowerCase())
+      ) ||
+      savedAccounts.find(
+        u =>
+          isSameUser(u.id, userId) ||
+          (u.username && u.username.toLowerCase() === userId.toLowerCase()) ||
+          (u.email && u.email.toLowerCase() === userId.toLowerCase())
+      );
+    const resolvedUserId = targetUser ? targetUser.id : userId;
+    const resolvedEmail = targetUser?.email ? targetUser.email.toLowerCase() : null;
+    const resolvedUsername = targetUser?.username ? targetUser.username.toLowerCase() : null;
+
+    // Immediately record unban in persistent registry
+    recordUserUnban(resolvedUserId, resolvedEmail, resolvedUsername);
+
     // 1. Update user in users list
     setUsers(prev => {
       const next = prev.map(u => {
-        if (isSameUser(u.id, userId)) {
+        const matches =
+          isSameUser(u.id, resolvedUserId) ||
+          isSameUser(u.id, userId) ||
+          (resolvedEmail && u.email && u.email.toLowerCase() === resolvedEmail) ||
+          (resolvedUsername && u.username && u.username.toLowerCase() === resolvedUsername);
+        if (matches) {
           return {
             ...u,
             isBanned: false,
@@ -3959,28 +4378,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    // Remove from user bans backup storage map
-    const bansMap = storage.get<Record<string, any>>('user_bans_v1', {});
-    delete bansMap[userId];
-    if (toUuid(userId)) delete bansMap[toUuid(userId)];
-    storage.set('user_bans_v1', bansMap);
+    // 2. Update savedAccounts
+    setSavedAccounts(prev => {
+      const next = prev.map(a => {
+        const matches =
+          isSameUser(a.id, resolvedUserId) ||
+          isSameUser(a.id, userId) ||
+          (resolvedEmail && a.email && a.email.toLowerCase() === resolvedEmail) ||
+          (resolvedUsername && a.username && a.username.toLowerCase() === resolvedUsername);
+        if (matches) {
+          return {
+            ...a,
+            isBanned: false,
+            banReason: undefined,
+            appealStatus: 'approved' as const,
+          };
+        }
+        return a;
+      });
+      storage.set('saved_accounts_v2', next);
+      return next;
+    });
 
-    // 2. If unbanned user is currently logged in, update currentUser
-    if (currentUser && isSameUser(currentUser.id, userId)) {
-      const updatedUser: User = {
-        ...currentUser,
-        isBanned: false,
-        banReason: undefined,
-        appealStatus: 'approved',
-      };
-      setCurrentUser(updatedUser);
-      storage.set('currentUser', updatedUser);
+    // 3. If unbanned user is currently logged in, update currentUser
+    if (currentUser) {
+      const matches =
+        isSameUser(currentUser.id, resolvedUserId) ||
+        isSameUser(currentUser.id, userId) ||
+        (resolvedEmail && currentUser.email && currentUser.email.toLowerCase() === resolvedEmail) ||
+        (resolvedUsername && currentUser.username && currentUser.username.toLowerCase() === resolvedUsername);
+      if (matches) {
+        const updatedUser: User = {
+          ...currentUser,
+          isBanned: false,
+          banReason: undefined,
+          appealStatus: 'approved',
+        };
+        setCurrentUser(updatedUser);
+        storage.set('currentUser', updatedUser);
+      }
     }
 
-    // 3. Reinstate user videos
+    // 4. Reinstate user videos
     setVideos(prev => {
       const next = prev.map(v => {
-        if (isSameUser(v.creatorId, userId) || isSameUser(v.creator?.id, userId)) {
+        const matches =
+          isSameUser(v.creatorId, resolvedUserId) ||
+          isSameUser(v.creatorId, userId) ||
+          isSameUser(v.creator?.id, resolvedUserId) ||
+          isSameUser(v.creator?.id, userId) ||
+          (resolvedEmail && v.creator?.email && v.creator.email.toLowerCase() === resolvedEmail);
+        if (matches) {
           return {
             ...v,
             status: 'approved' as const,
@@ -3993,11 +4441,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return next;
     });
 
-    // 4. Send appeal_status approved notification
+    // 5. Send appeal_status approved notification
     const nowIso = new Date().toISOString();
     const approvedNotif: NotificationItem = {
       id: `notif_unban_${Date.now()}`,
-      recipientId: userId,
+      recipientId: resolvedUserId,
       type: 'appeal_status',
       actor: {
         id: 'viralhub_moderation',
@@ -4017,13 +4465,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       storage.set('notifications', next);
       return next;
     });
-    supabaseDb.insertNotification(approvedNotif, userId);
+    supabaseDb.insertNotification(approvedNotif, resolvedUserId);
 
-    // 5. Update in Supabase
-    await supabaseDb.unbanUser(userId);
+    // 6. Update in Supabase
+    await supabaseDb.unbanUser(resolvedUserId, resolvedEmail || undefined, resolvedUsername || undefined);
 
-    // 6. Broadcast event
-    storage.set('viralhub_user_unbanned_event', { userId, timestamp: Date.now() });
+    // 7. Broadcast event
+    storage.set('user_unbanned_event', {
+      userId: resolvedUserId,
+      email: resolvedEmail,
+      username: resolvedUsername,
+      timestamp: Date.now(),
+    });
 
     return true;
   };
@@ -4108,7 +4561,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     supabaseDb.insertNotification(adminAppealNotif, 'admin');
 
     // 5. Update Supabase
-    await supabaseDb.submitUserAppeal(currentUser.id, cleanReason);
+    await supabaseDb.submitUserAppeal(currentUser.id, cleanReason, currentUser.email, currentUser.username);
 
     return true;
   };
@@ -4118,6 +4571,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return unbanUserAdmin(userId);
     }
 
+    const targetUser = users.find(u => isSameUser(u.id, userId)) || savedAccounts.find(u => isSameUser(u.id, userId));
     const nowIso = new Date().toISOString();
 
     // 1. Update user appealStatus to 'declined'
@@ -4138,6 +4592,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const bansMap = storage.get<Record<string, any>>('user_bans_v1', {});
     if (bansMap[userId]) bansMap[userId].appealStatus = 'declined';
     if (toUuid(userId) && bansMap[toUuid(userId)]) bansMap[toUuid(userId)].appealStatus = 'declined';
+    if (targetUser?.email && bansMap[targetUser.email.toLowerCase()]) bansMap[targetUser.email.toLowerCase()].appealStatus = 'declined';
     storage.set('user_bans_v1', bansMap);
 
     if (currentUser && isSameUser(currentUser.id, userId)) {
@@ -4153,6 +4608,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const declinedNotif: NotificationItem = {
       id: `notif_dec_ban_${Date.now()}`,
       recipientId: userId,
+      recipientEmail: targetUser?.email,
       type: 'appeal_status',
       actor: {
         id: 'viralhub_moderation',
@@ -4175,7 +4631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     supabaseDb.insertNotification(declinedNotif, userId);
 
     // 3. Update Supabase
-    await supabaseDb.reviewUserAppeal(userId, 'declined');
+    await supabaseDb.reviewUserAppeal(userId, 'declined', targetUser?.email, targetUser?.username);
 
     return true;
   };

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft } from 'lucide-react';
+import { checkIsUserBanned } from '../../lib/supabase';
 
 interface HeaderProps {
   onToggleMobileNav?: () => void;
@@ -50,22 +51,27 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
 
   const cleanQuery = searchQuery.trim().toLowerCase().replace('@', '').replace('#', '');
 
-  // Filter matching creators
+  // Filter matching creators - strictly hide banned accounts
   const matchedUsers = cleanQuery
     ? users.filter(
         u =>
-          u.username.toLowerCase().includes(cleanQuery) ||
+          !u.isBanned &&
+          !checkIsUserBanned(u.id, u.email, u).isBanned &&
+          (u.username.toLowerCase().includes(cleanQuery) ||
           u.displayName.toLowerCase().includes(cleanQuery) ||
-          u.bio.toLowerCase().includes(cleanQuery)
+          u.bio.toLowerCase().includes(cleanQuery))
       )
     : [];
 
-  // Filter matching videos
+  // Filter matching videos - hide videos from banned creators or rejected videos
   const matchedVideos = cleanQuery
     ? videos.filter(
         v =>
-          v.caption.toLowerCase().includes(cleanQuery) ||
-          v.hashtags.some(tag => tag.toLowerCase().includes(cleanQuery))
+          v.status !== 'rejected' &&
+          !v.creator?.isBanned &&
+          !checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned &&
+          (v.caption.toLowerCase().includes(cleanQuery) ||
+          v.hashtags.some(tag => tag.toLowerCase().includes(cleanQuery)))
       ).slice(0, 4)
     : [];
 
