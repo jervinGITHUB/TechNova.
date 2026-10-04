@@ -332,7 +332,9 @@ export const CommentsDrawer: React.FC = () => {
                     {/* Nested Replies */}
                     {comment.replies && comment.replies.length > 0 && (
                       <div className="pl-9 space-y-2 border-l border-neutral-800 ml-4">
-                        {comment.replies.map(reply => {
+                        {comment.replies
+                          .filter((reply, idx, arr) => arr.findIndex(r => r.id === reply.id || (r.text === reply.text && r.userId === reply.userId && r.timestamp === reply.timestamp)) === idx)
+                          .map(reply => {
                           const isOwnReply = Boolean(
                             currentUser &&
                             reply.userId &&

@@ -1042,24 +1042,6 @@ export const supabaseDb = {
         }
       }
 
-      // 5. Upsert VideoStats if it's a table (safe try-catch for views)
-      try {
-        await client
-          .from('VideoStats')
-          .upsert(
-            {
-              VideoID: videoUuid,
-              LikeCount: video.likesCount || 0,
-              CommentCount: video.commentsCount || 0,
-              ShareCount: video.sharesCount || 0,
-              ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
-            },
-            { onConflict: 'VideoID' }
-          );
-      } catch {
-        // ignore - VideoStats is often a SQL view which cannot be directly inserted into
-      }
-
       return true;
     } catch (e) {
       console.error('[Supabase] insertVideo exception:', e);
@@ -1415,20 +1397,6 @@ export const supabaseDb = {
       } else {
         await client.from('Like').delete().match({ VideoID: vUuid, UserID: uUuid });
       }
-
-      // Update VideoStats counter if table exists
-      try {
-        const { count } = await client
-          .from('Like')
-          .select('*', { count: 'exact', head: true })
-          .eq('VideoID', vUuid);
-
-        if (typeof count === 'number') {
-          await client.from('VideoStats').upsert({ VideoID: vUuid, LikeCount: count });
-        }
-      } catch {
-        // ignore
-      }
     } catch (e) {
       console.warn('Supabase toggleVideoLike fallback:', e);
     }
@@ -1633,9 +1601,25 @@ export const supabaseDb = {
       for (const comment of topLevel) {
         const key1 = comment.id.toLowerCase();
         const key2 = toUuid(comment.id).toLowerCase();
-        const replies = [...(repliesMap.get(key1) || []), ...(repliesMap.get(key2) || [])];
-        if (replies.length > 0) {
-          comment.replies = replies;
+        const list1 = repliesMap.get(key1) || [];
+        const list2 = key2 !== key1 ? (repliesMap.get(key2) || []) : [];
+        const rawReplies = [...list1, ...list2];
+
+        // Deduplicate replies strictly by ID
+        const seenReplyIds = new Set<string>();
+        const uniqueReplies: CommentReplyEntry[] = [];
+        for (const rep of rawReplies) {
+          const rId = (rep.id || '').toLowerCase();
+          if (rId && !seenReplyIds.has(rId)) {
+            seenReplyIds.add(rId);
+            uniqueReplies.push(rep);
+          } else if (!rId) {
+            uniqueReplies.push(rep);
+          }
+        }
+
+        if (uniqueReplies.length > 0) {
+          comment.replies = uniqueReplies;
           repliesMap.delete(key1);
           repliesMap.delete(key2);
         }
@@ -1699,19 +1683,6 @@ export const supabaseDb = {
         return false;
       }
 
-      // Update VideoStats counter if table exists
-      try {
-        const { count } = await client
-          .from('Comment')
-          .select('*', { count: 'exact', head: true })
-          .eq('VideoID', vUuid);
-        if (typeof count === 'number') {
-          await client.from('VideoStats').upsert({ VideoID: vUuid, CommentCount: count }, { onConflict: 'VideoID' });
-        }
-      } catch {
-        // ignore
-      }
-
       return true;
     } catch (e) {
       console.warn('Supabase insertComment fallback:', e);
@@ -1726,18 +1697,6 @@ export const supabaseDb = {
     try {
       const cUuid = toUuid(commentId);
       const { error } = await client.from('Comment').delete().or(`CommentID.eq.${cUuid},CommentID.eq.${commentId}`);
-      if (!error && videoId) {
-        const vUuid = toUuid(videoId);
-        try {
-          const { count } = await client
-            .from('Comment')
-            .select('*', { count: 'exact', head: true })
-            .eq('VideoID', vUuid);
-          if (typeof count === 'number') {
-            await client.from('VideoStats').upsert({ VideoID: vUuid, CommentCount: count }, { onConflict: 'VideoID' });
-          }
-        } catch {}
-      }
       return !error;
     } catch (e) {
       console.warn('Supabase deleteComment error:', e);

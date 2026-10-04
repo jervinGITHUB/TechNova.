@@ -625,10 +625,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCommentsMap(prev => {
           const existing = prev[videoId] || [];
           const likedIds = new Set(existing.filter(c => c.isLiked).map(c => c.id));
-          const merged = remote.map(c => ({
-            ...c,
-            isLiked: likedIds.has(c.id),
-          }));
+          const merged = remote.map(c => {
+            const seenReplyIds = new Set<string>();
+            const cleanReplies = (c.replies || []).filter(r => {
+              const k = (r.id || '').toLowerCase();
+              if (k && seenReplyIds.has(k)) return false;
+              if (k) seenReplyIds.add(k);
+              return true;
+            });
+            return {
+              ...c,
+              replies: cleanReplies,
+              isLiked: likedIds.has(c.id),
+            };
+          });
           const next = { ...prev, [videoId]: merged };
           storage.set('video_comments_v2', next);
           return next;
@@ -2549,8 +2559,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (replyToCommentId) {
         const updated = list.map(c => {
           if (c.id === replyToCommentId || toUuid(c.id) === toUuid(replyToCommentId)) {
+            const existingReplies = c.replies || [];
+            if (existingReplies.some(r => r.id === commentUuid)) {
+              return c;
+            }
             const replies = [
-              ...(c.replies || []),
+              ...existingReplies,
               {
                 id: commentUuid,
                 name: currentUser.displayName || currentUser.username || 'User',
