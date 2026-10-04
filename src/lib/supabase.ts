@@ -80,6 +80,23 @@ export const getDirectConversationId = (userId1?: string | null, userId2?: strin
   return toUuid(`dm_${first}_${second}`);
 };
 
+/**
+ * Checks if a URL points to a video stream/file rather than an image
+ */
+export const isVideoUrl = (url?: string | null): boolean => {
+  if (!url) return false;
+  const clean = url.trim().toLowerCase();
+  return (
+    clean.startsWith('blob:') ||
+    clean.endsWith('.mp4') ||
+    clean.endsWith('.webm') ||
+    clean.endsWith('.mov') ||
+    clean.includes('.mp4?') ||
+    clean.includes('.webm?') ||
+    clean.includes('.mov?')
+  );
+};
+
 // =========================================================================
 // Deleted Users Registry (ensures immediate logout across all devices)
 // =========================================================================
@@ -864,9 +881,17 @@ export const supabaseDb = {
         );
         let safeThumbnailUrl = '';
         if (rawThumb && !isThumbVid) {
-          safeThumbnailUrl = rawThumb;
-        } else if (creator.avatar && !/\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(creator.avatar)) {
-          safeThumbnailUrl = creator.avatar;
+          // If rawThumb is identical to creator.avatar or contains avatar_, it is an avatar, NOT a video thumbnail!
+          if (
+            (creator.avatar && rawThumb.trim().toLowerCase() === creator.avatar.trim().toLowerCase()) ||
+            rawThumb.includes('avatar_') ||
+            rawThumb.includes('profile%20picture') ||
+            rawThumb.includes('profile-picture')
+          ) {
+            safeThumbnailUrl = '';
+          } else {
+            safeThumbnailUrl = rawThumb;
+          }
         } else {
           safeThumbnailUrl = '';
         }
@@ -1299,7 +1324,7 @@ export const supabaseDb = {
       const cleanFileName = `avatar_${safeUserId}_${Date.now()}.${ext}`;
       const mimeType = file.type || (ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
 
-      // Candidate buckets - priority given to "profile picture" (matching the user's bucket in Supabase)
+      // Candidate buckets - strictly profile picture buckets only, NEVER fallback to videos!
       let candidateBuckets: string[] = [
         'profile picture',
         'Profile Picture',
@@ -1310,7 +1335,6 @@ export const supabaseDb = {
         'avatars',
         'images',
         'public',
-        'videos',
       ];
 
       try {
@@ -1319,8 +1343,7 @@ export const supabaseDb = {
           const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
           // Prioritize any bucket with "profile", "avatar", or "picture" in the name
           const profileBuckets = discovered.filter(b => /profile|avatar|picture/i.test(b));
-          const otherDiscovered = discovered.filter(b => !/profile|avatar|picture/i.test(b));
-          candidateBuckets = Array.from(new Set([...profileBuckets, ...candidateBuckets, ...otherDiscovered]));
+          candidateBuckets = Array.from(new Set([...profileBuckets, ...candidateBuckets]));
         }
       } catch {
         // ignore listBuckets failure
@@ -1329,9 +1352,32 @@ export const supabaseDb = {
       let lastError: any = null;
 
       for (const bucket of candidateBuckets) {
+        // Try root filename, and also uploads/ subdirectory
         const tryPaths = [cleanFileName, `avatars/${cleanFileName}`];
 
         for (const targetPath of tryPaths) {
+          // Attempt 1: Standard INSERT (upsert: false) - strictly matches Supabase RLS INSERT policy
+          try {
+            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
+              contentType: mimeType,
+              cacheControl: '3600',
+              upsert: false,
+            });
+
+            if (!error && data?.path) {
+              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
+              if (pubData?.publicUrl) {
+                return { url: pubData.publicUrl };
+              }
+            }
+            if (error) {
+              lastError = error;
+            }
+          } catch (err: any) {
+            lastError = err;
+          }
+
+          // Attempt 2: upsert: true in case file already exists or collision
           try {
             const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
               contentType: mimeType,

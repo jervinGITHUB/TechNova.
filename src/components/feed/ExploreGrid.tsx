@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
+import { isVideoUrl } from '../../lib/supabase';
 import { Avatar } from '../common/Avatar';
 import {
   Play,
@@ -353,6 +354,11 @@ export const ExploreGrid: React.FC = () => {
               {/* Thumbnail / Video Preview */}
               <div className="relative w-full h-full overflow-hidden bg-gradient-to-b from-[#181826] to-[#0d0d14]">
                 {video.thumbnailUrl &&
+                !isVideoUrl(video.thumbnailUrl) &&
+                video.thumbnailUrl !== video.creator?.avatar &&
+                !video.thumbnailUrl.includes('avatar_') &&
+                !video.thumbnailUrl.includes('profile%20picture') &&
+                !video.thumbnailUrl.includes('profile-picture') &&
                 (video.thumbnailUrl.startsWith('data:image/') ||
                   video.thumbnailUrl.endsWith('.jpg') ||
                   video.thumbnailUrl.endsWith('.jpeg') ||

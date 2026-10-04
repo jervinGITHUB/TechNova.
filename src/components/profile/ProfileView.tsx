@@ -26,7 +26,7 @@ import {
   Trash2,
   AlertTriangle,
 } from 'lucide-react';
-import { isSameUser } from '../../lib/supabase';
+import { isSameUser, isVideoUrl } from '../../lib/supabase';
 
 export const ProfileView: React.FC = () => {
   const {
@@ -503,7 +503,12 @@ export const ProfileView: React.FC = () => {
           ) : (
             (activeTabSub === 'videos' ? userVideos : likedVideos).map((video, idx) => {
               const isImageThumbnail =
-                video.thumbnailUrl &&
+                Boolean(video.thumbnailUrl) &&
+                !isVideoUrl(video.thumbnailUrl) &&
+                video.thumbnailUrl !== video.creator?.avatar &&
+                !video.thumbnailUrl.includes('avatar_') &&
+                !video.thumbnailUrl.includes('profile%20picture') &&
+                !video.thumbnailUrl.includes('profile-picture') &&
                 (video.thumbnailUrl.startsWith('data:image/') ||
                   video.thumbnailUrl.endsWith('.jpg') ||
                   video.thumbnailUrl.endsWith('.jpeg') ||
@@ -831,7 +836,9 @@ export const ProfileView: React.FC = () => {
                 controls
                 className="w-full h-full object-cover"
               />
-            ) : selectedVideoModal.thumbnailUrl ? (
+            ) : selectedVideoModal.thumbnailUrl &&
+                selectedVideoModal.thumbnailUrl !== selectedVideoModal.creator?.avatar &&
+                !selectedVideoModal.thumbnailUrl.includes('avatar_') ? (
               <img
                 src={selectedVideoModal.thumbnailUrl}
                 alt={selectedVideoModal.caption}

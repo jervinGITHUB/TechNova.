@@ -467,10 +467,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Resolve valid image cover: never treat video URL (.mp4, .webm, blob:) as an image!
       const validCover =
-        v.thumbnailUrl && !isVideoUrl(v.thumbnailUrl)
+        v.thumbnailUrl && !isVideoUrl(v.thumbnailUrl) && !v.thumbnailUrl.includes('avatar_')
           ? v.thumbnailUrl
-          : v.creator?.avatar && !isVideoUrl(v.creator?.avatar)
-          ? v.creator.avatar
           : '';
 
       if (v.audioTrack && v.audioTrack.id) {
@@ -2899,10 +2897,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const videoId = crypto.randomUUID();
 
     const validThumb =
-      newVideo.thumbnailUrl && !isVideoUrl(newVideo.thumbnailUrl)
+      newVideo.thumbnailUrl && !isVideoUrl(newVideo.thumbnailUrl) && !newVideo.thumbnailUrl.includes('avatar_')
         ? newVideo.thumbnailUrl
-        : currentUser.avatar && !isVideoUrl(currentUser.avatar)
-        ? currentUser.avatar
         : '';
 
     const created: Video = {
