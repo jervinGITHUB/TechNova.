@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useApp, deduplicateConversations, getConversationClearedTimestamp } from '../../context/AppContext';
+import { useApp, deduplicateConversations, getConversationClearedTimestamp, deduplicateMessages } from '../../context/AppContext';
 import { Conversation, User, MessageReplyInfo, Message, Video } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { MessageVideoCard } from './MessageVideoCard';
@@ -404,7 +404,7 @@ export const MessagesView: React.FC = () => {
 
               const convClearTime = resolveConversationClearTime(conv, currentUser);
 
-              const convVisibleMsgs = (conv.messages || []).filter(m => {
+              const convVisibleMsgs = deduplicateMessages((conv.messages || []).filter(m => {
                 if (currentUser && m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
                 if (convClearTime > 0) {
                   const sentTime = toTimestampMillis(m.sentAt);
@@ -416,7 +416,7 @@ export const MessagesView: React.FC = () => {
                   }
                 }
                 return true;
-              });
+              }));
 
               const lastVisible = convVisibleMsgs[convVisibleMsgs.length - 1];
               const displayLastMessage = lastVisible
@@ -688,7 +688,7 @@ export const MessagesView: React.FC = () => {
             <div className="flex-1 overflow-y-auto py-4 space-y-4 pr-1 text-left min-h-0">
               {(() => {
                 const userClearedTimestamp = resolveConversationClearTime(activeConv, currentUser);
-                const visibleMessages = (activeConv.messages || []).filter(msg => {
+                const visibleMessages = deduplicateMessages((activeConv.messages || []).filter(msg => {
                   // Hide if explicitly marked deleted for this user
                   if (currentUser && msg.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) {
                     return false;
@@ -704,7 +704,7 @@ export const MessagesView: React.FC = () => {
                     }
                   }
                   return true;
-                });
+                }));
 
                 if (visibleMessages.length === 0) {
                   return (

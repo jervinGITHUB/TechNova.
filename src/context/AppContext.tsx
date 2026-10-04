@@ -51,6 +51,73 @@ import { deduplicateNotifications } from '../utils/notifications';
 import { toTimestampMillis } from '../utils/time';
 
 /**
+ * Deduplicates an array of messages so identical messages sent by the same user
+ * (e.g. optimistic local message vs. confirmed Supabase message) are unified
+ * without duplicating chat bubbles!
+ */
+export const deduplicateMessages = (messages: Message[]): Message[] => {
+  if (!messages || messages.length <= 1) return messages || [];
+
+  const result: Message[] = [];
+
+  for (const m of messages) {
+    if (!m) continue;
+    const cleanText = (m.text || '').trim();
+    const mTime = toTimestampMillis(m.sentAt);
+
+    const isDup = result.some(existing => {
+      // 1. Direct ID match
+      if (existing.id && m.id && (existing.id === m.id || toUuid(existing.id) === toUuid(m.id))) {
+        return true;
+      }
+
+      // 2. Exact same sender + exact same text
+      if (
+        cleanText &&
+        cleanText === (existing.text || '').trim() &&
+        isSameUser(existing.senderId, m.senderId)
+      ) {
+        const isOneLocal =
+          (m.id && (m.id.startsWith('m_') || m.id.startsWith('msg_'))) ||
+          (existing.id && (existing.id.startsWith('m_') || existing.id.startsWith('msg_')));
+
+        const exTime = toTimestampMillis(existing.sentAt);
+        if (mTime > 0 && exTime > 0) {
+          if (Math.abs(mTime - exTime) < 5 * 60 * 1000) {
+            return true;
+          }
+        } else if (isOneLocal) {
+          return true;
+        }
+      }
+
+      return false;
+    });
+
+    if (!isDup) {
+      result.push(m);
+    } else {
+      // If the incoming message is confirmed from Supabase, prefer it over a temporary local optimistic message
+      const idx = result.findIndex(existing => {
+        if (existing.id && m.id && (existing.id === m.id || toUuid(existing.id) === toUuid(m.id))) return true;
+        if (cleanText && cleanText === (existing.text || '').trim() && isSameUser(existing.senderId, m.senderId)) return true;
+        return false;
+      });
+      if (idx !== -1) {
+        const existing = result[idx];
+        const isMRemote = m.sentAt && isUuid(m.id);
+        const isExistingLocal = existing.id && (existing.id.startsWith('m_') || existing.id.startsWith('msg_'));
+        if (isMRemote && isExistingLocal) {
+          result[idx] = m;
+        }
+      }
+    }
+  }
+
+  return result;
+};
+
+/**
  * Deduplicates conversations so that only ONE canonical conversation
  * exists per partner user, and merges all messages from duplicate threads together.
  */
@@ -84,15 +151,7 @@ export const deduplicateConversations = (
       const existing = partnerMap.get(canonicalKey)!;
 
       // Merge messages from both conversations without duplicate message IDs or text/timestamp
-      const msgMap = new Map<string, Message>();
-      (existing.messages || []).forEach(m => msgMap.set(m.id || `${m.text}_${m.timestamp}`, m));
-      (c.messages || []).forEach(m => {
-        const key = m.id || `${m.text}_${m.timestamp}`;
-        if (!msgMap.has(key)) {
-          msgMap.set(key, m);
-        }
-      });
-      const combinedMessages = Array.from(msgMap.values());
+      const combinedMessages = deduplicateMessages([...(existing.messages || []), ...(c.messages || [])]);
 
       // Canonical conversation ID: prefer valid deterministic UUID
       const canonicalId = (currentUserId && partnerId)
@@ -1145,12 +1204,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   }
                 }
 
+                const sentMs = toTimestampMillis(m.SentAt);
+                const displayTime = sentMs > 0
+                  ? new Date(sentMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : 'Today';
+
                 return {
                   id: m.MessageID || `msg_${Date.now()}`,
                   conversationId: rc.id,
                   senderId: m.SenderUserID,
                   text: msgContent,
-                  timestamp: m.SentAt ? new Date(m.SentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Today',
+                  timestamp: displayTime,
                   sentAt: m.SentAt,
                   isMine,
                   status: 'read' as const,
@@ -1162,9 +1226,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               // Merge local messages that may not have reached remote yet
               const localOnlyMsgs = (existingConv?.messages || []).filter(
-                lm => !parsedMessages.some(pm => pm.id === lm.id || (pm.text === lm.text && pm.timestamp === lm.timestamp))
+                lm => !parsedMessages.some(pm =>
+                  pm.id === lm.id ||
+                  toUuid(pm.id) === toUuid(lm.id) ||
+                  (pm.text.trim() === lm.text.trim() && isSameUser(pm.senderId, lm.senderId))
+                )
               );
-              const allMsgs = [...parsedMessages, ...localOnlyMsgs];
+              const allMsgs = deduplicateMessages([...parsedMessages, ...localOnlyMsgs]);
 
               // Filter out messages that are deleted for this user
               const visibleMsgs = allMsgs.filter(m => {
@@ -1897,9 +1965,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   if (isThisConv) {
                     matched = true;
                     const exists = c.messages.some(
-                      m => m.id === incomingMsg.id || (m.text === incomingMsg.text && m.timestamp === incomingMsg.timestamp)
+                      m =>
+                        m.id === incomingMsg.id ||
+                        toUuid(m.id) === toUuid(incomingMsg.id) ||
+                        (m.text.trim() === incomingMsg.text.trim() && isSameUser(m.senderId, incomingMsg.senderId))
                     );
-                    const newMessages = exists ? c.messages : [...c.messages, incomingMsg];
+                    const newMessages = exists ? c.messages : deduplicateMessages([...c.messages, incomingMsg]);
                     const curUnread = c.unreadCounts?.[currentUser.id] || 0;
 
                     return {
