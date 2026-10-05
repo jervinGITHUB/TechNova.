@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { LiveStreamCanvas } from './LiveStreamCanvas';
 import { Avatar } from '../common/Avatar';
 import { createLiveViewerSession } from '../../services/liveBroadcastService';
+import { supabaseDb } from '../../lib/supabase';
 import {
   Send,
   X,
@@ -18,6 +19,9 @@ export const LiveStreamViewer: React.FC = () => {
   const {
     currentLiveStream,
     sendLiveComment,
+    sendLiveLike,
+    liveHeartTrigger,
+    removeActiveLiveStream,
     toggleFollowUser,
     users,
     setActiveTab,
@@ -36,23 +40,59 @@ export const LiveStreamViewer: React.FC = () => {
 
   useEffect(() => {
     if (!currentLiveStream.id) return;
+    let hasReceivedSignalOrStream = false;
+
     const cleanup = createLiveViewerSession(currentLiveStream.id, {
       onRemoteStream: stream => {
+        hasReceivedSignalOrStream = true;
         setRemoteStream(stream);
         setConnectionStatus('connected');
       },
       onSnapshot: url => {
+        hasReceivedSignalOrStream = true;
         setSnapshotUrl(url);
       },
       onStreamEnded: () => {
         setIsLiveEnded(true);
       },
       onConnectionStateChange: state => {
+        if (state === 'connected') {
+          hasReceivedSignalOrStream = true;
+        }
         setConnectionStatus(state);
       },
     });
-    return cleanup;
+
+    // Offline stream auto-detection:
+    // If after 7 seconds, no stream, snapshot, or WebRTC offer has arrived from host:
+    const watchdogTimeout = window.setTimeout(() => {
+      if (!hasReceivedSignalOrStream) {
+        setIsLiveEnded(true);
+        setConnectionStatus('offline');
+        // Clean up ghost stream in Supabase so it no longer appears for any users
+        if (currentLiveStream.id) {
+          supabaseDb.endLiveStream(currentLiveStream.id);
+          removeActiveLiveStream(currentLiveStream.id);
+        }
+      }
+    }, 7000);
+
+    return () => {
+      clearTimeout(watchdogTimeout);
+      cleanup();
+    };
   }, [currentLiveStream.id]);
+
+  // Real-time floating hearts on likes from any user
+  useEffect(() => {
+    if (liveHeartTrigger > 0) {
+      setLikeFloatingHearts(prev => [...prev, liveHeartTrigger]);
+      const timer = setTimeout(() => {
+        setLikeFloatingHearts(prev => prev.slice(1));
+      }, 1800);
+      return () => clearTimeout(timer);
+    }
+  }, [liveHeartTrigger]);
 
   const handleSendChat = (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,10 +102,7 @@ export const LiveStreamViewer: React.FC = () => {
   };
 
   const handleFloatHeart = () => {
-    setLikeFloatingHearts(prev => [...prev, Date.now()]);
-    setTimeout(() => {
-      setLikeFloatingHearts(prev => prev.slice(1));
-    }, 1800);
+    sendLiveLike();
   };
 
   return (
@@ -124,10 +161,10 @@ export const LiveStreamViewer: React.FC = () => {
               <p className="text-sm text-neutral-400 mt-1 font-semibold">Live Ended</p>
 
               <button
-                onClick={() => setIsLiveEnded(false)}
-                className="mt-6 text-xs text-[#ff007a] hover:underline cursor-pointer"
+                onClick={() => setActiveTab('live')}
+                className="mt-6 px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all shadow-lg cursor-pointer"
               >
-                Return to stream preview
+                Return to Live Streams
               </button>
             </div>
           ) : (

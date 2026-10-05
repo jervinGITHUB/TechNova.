@@ -8,6 +8,7 @@ import {
 import { Avatar } from '../common/Avatar';
 import { CanvasSourceTransform } from '../../types';
 import { liveBroadcastService } from '../../services/liveBroadcastService';
+import { supabaseDb, toUuid } from '../../lib/supabase';
 import {
   Camera,
   Mic,
@@ -557,13 +558,33 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     if (gameCustomStream) {
       liveBroadcastService.setScreenStream(gameCustomStream, gameSource);
     }
-    const streamId = currentLiveStream.id || `stream_${currentUser?.id || 'host'}_${Date.now()}`;
+    const streamId = `stream_${toUuid(currentUser?.id || 'host')}_${Date.now()}`;
     if (currentUser) {
       liveBroadcastService.startBroadcasting(streamId, currentUser);
     }
-    startHostLiveStream(streamTitle, streamTopic, streamAbout);
+    startHostLiveStream(streamTitle, streamTopic, streamAbout, streamId);
     setMode('active');
   };
+
+  // Host Cleanup Watchdog: guarantees abandoned/closed streams are marked ended in Supabase
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (mode === 'active' && currentLiveStream.id) {
+        liveBroadcastService.endBroadcasting();
+        supabaseDb.endLiveStream(currentLiveStream.id);
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+      if (mode === 'active' && currentLiveStream.id) {
+        liveBroadcastService.endBroadcasting();
+        supabaseDb.endLiveStream(currentLiveStream.id);
+      }
+    };
+  }, [mode, currentLiveStream.id]);
 
   const handleEndLive = () => {
     liveBroadcastService.endBroadcasting();

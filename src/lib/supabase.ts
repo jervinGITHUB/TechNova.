@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { User, Video, AudioTrack, NotificationItem, ReportItem, LiveStream, AdminRecord, SystemStats, CommentEntry, CommentReplyEntry } from '../types';
+import { User, Video, AudioTrack, NotificationItem, ReportItem, LiveStream, LiveStreamMessage, AdminRecord, SystemStats, CommentEntry, CommentReplyEntry } from '../types';
 import { deduplicateNotifications } from '../utils/notifications';
 
 export interface SupabaseConfig {
@@ -3501,7 +3501,7 @@ export const supabaseDb = {
     }
   },
 
-  async fetchActiveLiveStreams(): Promise<LiveStream[]> {
+  async fetchActiveLiveStreams(currentUserId?: string, isHostBroadcastingLocally = false): Promise<LiveStream[]> {
     const client = getSupabaseClient();
     if (!client) return [];
 
@@ -3523,7 +3523,9 @@ export const supabaseDb = {
         `)
         .is('EndedAt', null)
         .order('StartedAt', { ascending: false })
-        .limit(20);
+        .limit(25);
+
+      let rows: any[] = [];
 
       if (error || !data) {
         // Fallback: if foreign key join syntax failed or PascalCase differences
@@ -3532,42 +3534,57 @@ export const supabaseDb = {
           .select('*')
           .is('EndedAt', null)
           .order('StartedAt', { ascending: false })
-          .limit(20);
+          .limit(25);
 
         if (simpleRes.data) {
-          return simpleRes.data.map((row: any) => ({
-            id: row.LivestreamID,
-            host: {
-              id: row.HostUserID,
-              username: 'creator',
-              displayName: 'Live Creator',
-              email: '',
-              avatar: '',
-              bio: '',
-              followingCount: 0,
-              followersCount: 0,
-              likesCount: '0',
-              isPrivate: false,
-              role: 'creator',
-            },
-            title: row.Title || 'Live Stream',
-            topic: 'Gaming & Chat',
-            aboutMe: '',
-            viewersCount: 1,
-            viewers: [],
-            isLive: true,
-            timerSeconds: 0,
-            followerGoal: { current: 4083, target: 4100 },
-            messages: [],
-            cameraEnabled: true,
-            micEnabled: true,
-            screenShareEnabled: true,
-          }));
+          rows = simpleRes.data;
+        } else {
+          return [];
         }
-        return [];
+      } else {
+        rows = data;
       }
 
-      return data.map((row: any) => {
+      // Auto-cleanup stale ghost streams (e.g. started > 60 minutes ago without EndedAt, or started by current user who is not broadcasting locally)
+      const now = Date.now();
+      const MAX_STREAM_AGE_MS = 60 * 60 * 1000; // 60 minutes
+      const activeRows: any[] = [];
+      const staleIdsToClose: string[] = [];
+
+      const currentUidUuid = currentUserId ? toUuid(currentUserId) : '';
+
+      for (const row of rows) {
+        const startedTime = row.StartedAt ? new Date(row.StartedAt).getTime() : 0;
+        const isOlderThanMax = startedTime > 0 && (now - startedTime > MAX_STREAM_AGE_MS);
+        const hostId = row.HostUserID || (row.User ? (Array.isArray(row.User) ? row.User[0]?.UserID : row.User?.UserID) : '');
+        
+        // If current user is recorded as host in Supabase, but this client is NOT actually broadcasting:
+        // this is an abandoned stream from this user's prior test/session!
+        const isMyDeadStream = Boolean(
+          currentUserId &&
+          !isHostBroadcastingLocally &&
+          hostId &&
+          (isSameUser(hostId, currentUserId) || hostId === currentUidUuid)
+        );
+
+        if (isOlderThanMax || isMyDeadStream) {
+          if (row.LivestreamID) staleIdsToClose.push(row.LivestreamID);
+        } else {
+          activeRows.push(row);
+        }
+      }
+
+      // Automatically mark stale/abandoned streams as ended in Supabase (single query, minimal disk IO!)
+      if (staleIdsToClose.length > 0) {
+        Promise.resolve(
+          client
+            .from('Livestream')
+            .update({ EndedAt: new Date().toISOString() })
+            .in('LivestreamID', staleIdsToClose)
+        ).catch(() => {});
+      }
+
+      return activeRows.map((row: any) => {
         const u = Array.isArray(row.User) ? row.User[0] : (row.User || {});
         return {
           id: row.LivestreamID,
@@ -3604,20 +3621,101 @@ export const supabaseDb = {
     }
   },
 
+  async fetchLiveComments(streamId: string): Promise<LiveStreamMessage[]> {
+    const client = getSupabaseClient();
+    if (!client || !streamId) return [];
+
+    try {
+      const streamUuid = toUuid(streamId);
+
+      // Attempt PascalCase query with User relation
+      const { data, error } = await client
+        .from('LiveComment')
+        .select(`
+          LiveCommentID,
+          LiveStreamID,
+          UserID,
+          LiveText,
+          LiveCommentAt,
+          User:UserID (
+            UserID,
+            Username,
+            DisplayName,
+            ProfilePictureURL
+          )
+        `)
+        .eq('LiveStreamID', streamUuid)
+        .order('LiveCommentAt', { ascending: true })
+        .limit(40);
+
+      if (!error && data && data.length > 0) {
+        return data.map((r: any) => {
+          const u = Array.isArray(r.User) ? r.User[0] : (r.User || {});
+          return {
+            id: r.LiveCommentID || `lm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            userId: r.UserID || u.UserID || '',
+            username: u.Username || 'viewer',
+            displayName: u.DisplayName || u.Username || 'Viewer',
+            avatar: u.ProfilePictureURL || '',
+            text: r.LiveText || '',
+            timestamp: r.LiveCommentAt ? new Date(r.LiveCommentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
+          };
+        });
+      }
+
+      // Fallback simple query
+      const simple = await client
+        .from('LiveComment')
+        .select('*')
+        .eq('LiveStreamID', streamUuid)
+        .order('LiveCommentAt', { ascending: true })
+        .limit(40);
+
+      if (simple.data && simple.data.length > 0) {
+        return simple.data.map((r: any) => ({
+          id: r.LiveCommentID || `lm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          userId: r.UserID || '',
+          username: 'viewer',
+          displayName: 'Viewer',
+          avatar: '',
+          text: r.LiveText || '',
+          timestamp: r.LiveCommentAt ? new Date(r.LiveCommentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
+        }));
+      }
+
+      return [];
+    } catch (e) {
+      console.warn('fetchLiveComments fallback:', e);
+      return [];
+    }
+  },
+
   async insertLiveComment(streamId: string, user: User, text: string): Promise<boolean> {
     const client = getSupabaseClient();
-    if (!client) return false;
+    if (!client || !streamId || !text.trim()) return false;
 
     try {
       const streamUuid = toUuid(streamId);
       const userUuid = toUuid(user.id);
+      const nowIso = new Date().toISOString();
 
-      const { error } = await client.from('LiveComment').insert({
+      let { error } = await client.from('LiveComment').insert({
         LiveStreamID: streamUuid,
         UserID: userUuid,
-        LiveText: text,
-        LiveCommentAt: new Date().toISOString(),
+        LiveText: text.trim(),
+        LiveCommentAt: nowIso,
       });
+
+      // If PascalCase failed, try snake_case fallback
+      if (error && (error.code === '42P01' || error.message?.includes('column') || error.message?.includes('does not exist'))) {
+        const resSnake = await client.from('live_comments').insert({
+          live_stream_id: streamUuid,
+          user_id: userUuid,
+          comment_text: text.trim(),
+          created_at: nowIso,
+        });
+        error = resSnake.error;
+      }
 
       return !error;
     } catch (e) {
@@ -3915,7 +4013,31 @@ CREATE TABLE IF NOT EXISTS public."Notification" (
   "NotificationDate" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 4. USER & VIDEO SCHEMA COMPATIBILITY (Ensures Role, IsPublic, IsBanned, Appeals on User and Status on Video)
+-- 4. LIVESTREAM TABLES (Real-time live broadcasting, comments, and viewer counts)
+CREATE TABLE IF NOT EXISTS public."Livestream" (
+  "LivestreamID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "HostUserID" UUID REFERENCES public."User"("UserID") ON DELETE CASCADE,
+  "Title" TEXT NOT NULL,
+  "StartedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  "EndedAt" TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS public."LiveComment" (
+  "LiveCommentID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "LiveStreamID" UUID REFERENCES public."Livestream"("LivestreamID") ON DELETE CASCADE,
+  "UserID" UUID REFERENCES public."User"("UserID") ON DELETE SET NULL,
+  "LiveText" TEXT NOT NULL,
+  "LiveCommentAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public."LivestreamViewer" (
+  "ViewerRecordID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "LiveStreamID" UUID REFERENCES public."Livestream"("LivestreamID") ON DELETE CASCADE,
+  "ViewerID" UUID REFERENCES public."User"("UserID") ON DELETE CASCADE,
+  "JoinedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 5. USER & VIDEO SCHEMA COMPATIBILITY (Ensures Role, IsPublic, IsBanned, Appeals on User and Status on Video)
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "Role" TEXT DEFAULT 'creator';
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "IsPublic" BOOLEAN DEFAULT true;
 ALTER TABLE IF EXISTS public."User" ALTER COLUMN "IsPublic" SET DEFAULT true;
@@ -3934,7 +4056,7 @@ ALTER TABLE IF EXISTS public."Conversation" ADD COLUMN IF NOT EXISTS "ClearedHis
 ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "LikedBy" TEXT[] DEFAULT ARRAY[]::text[];
 ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "LikesCount" INTEGER DEFAULT 0;
 
--- 5. INDEXES (Guarantees sub-millisecond lookups & protects Supabase Disk IO!)
+-- 6. INDEXES (Guarantees sub-millisecond lookups & protects Supabase Disk IO!)
 CREATE INDEX IF NOT EXISTS "idx_user_isbanned" ON public."User"("IsBanned");
 CREATE INDEX IF NOT EXISTS "idx_user_appealstatus" ON public."User"("AppealStatus");
 CREATE INDEX IF NOT EXISTS "idx_video_status" ON public."Video"("Status");
@@ -3944,6 +4066,8 @@ CREATE INDEX IF NOT EXISTS "idx_notification_user_unread" ON public."Notificatio
 CREATE INDEX IF NOT EXISTS "idx_message_conversationid" ON public."Message"("ConversationID");
 CREATE INDEX IF NOT EXISTS "idx_message_sentat" ON public."Message"("SentAt");
 CREATE INDEX IF NOT EXISTS "idx_conversation_userida_useridb" ON public."Conversation"("UserIDA", "UserIDB");
+CREATE INDEX IF NOT EXISTS "idx_livestream_endedat" ON public."Livestream"("EndedAt");
+CREATE INDEX IF NOT EXISTS "idx_livecomment_streamid" ON public."LiveComment"("LiveStreamID");
 
 -- 3. ENABLE ROW LEVEL SECURITY (RLS) SAFELY ON BASE TABLES (Views like VideoStats are excluded)
 ALTER TABLE IF EXISTS public."User" ENABLE ROW LEVEL SECURITY;

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
 import {
   User,
   Video,
@@ -49,6 +49,7 @@ import {
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
 import { toTimestampMillis } from '../utils/time';
+import { liveBroadcastService } from '../services/liveBroadcastService';
 
 /**
  * Deduplicates an array of messages so identical messages sent by the same user
@@ -389,7 +390,10 @@ interface AppContextType {
   refreshActiveLiveStreams: () => Promise<void>;
   openLiveStreamAsViewer: (streamId: string) => void;
   sendLiveComment: (text: string) => void;
-  startHostLiveStream: (title: string, topic: string, aboutMe: string) => void;
+  sendLiveLike: () => void;
+  liveHeartTrigger: number;
+  removeActiveLiveStream: (streamId: string) => void;
+  startHostLiveStream: (title: string, topic: string, aboutMe: string, customStreamId?: string) => void;
   endHostLiveStream: () => void;
   toggleLiveSource: (source: 'camera' | 'mic' | 'screen') => void;
 
@@ -634,8 +638,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [reports, setReports] = useState<ReportItem[]>(() => storage.get('reports', INITIAL_REPORTS));
   const [admins, setAdmins] = useState<AdminRecord[]>(() => storage.get('admins', []));
-  const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream>(() => storage.get('livestream', INITIAL_LIVESTREAM));
+  const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream>(() => {
+    const stored = storage.get<LiveStream>('livestream', INITIAL_LIVESTREAM);
+    // Guarantee isLive defaults to false on boot so stale sessions never revive as active ghost streams
+    return {
+      ...stored,
+      isLive: false,
+    };
+  });
   const [activeLiveStreams, setActiveLiveStreams] = useState<LiveStream[]>([]);
+  const liveStreamChannelRef = useRef<any>(null);
+  const liveStreamBroadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  const [liveHeartTrigger, setLiveHeartTrigger] = useState<number>(0);
 
   // Per-User Likes storage map: { [userId: string]: string[] (videoIds) }
   const [userLikes, setUserLikes] = useState<Record<string, string[]>>(() =>
@@ -2341,7 +2355,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [reports]);
 
   useEffect(() => {
-    storage.set('livestream', currentLiveStream);
+    storage.set('livestream', { ...currentLiveStream, isLive: false });
   }, [currentLiveStream]);
 
   // Account-specific conversation filtering: only conversations current user is part of, and NOT deleted by currentUser!
@@ -4366,10 +4380,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Live Stream handling (BR-003, BR-004, BR-010, BR-026, BR-027)
   const refreshActiveLiveStreams = async () => {
     try {
-      const streams = await supabaseDb.fetchActiveLiveStreams();
+      const isLocallyBroadcasting = liveBroadcastService.getState().isBroadcasting;
+      const streams = await supabaseDb.fetchActiveLiveStreams(currentUser?.id, isLocallyBroadcasting);
       setActiveLiveStreams(prev => {
         const streamMap = new Map<string, LiveStream>();
-        if (currentLiveStream.isLive && currentLiveStream.id) {
+        // Only include currentLiveStream if this client is ACTUALLY broadcasting via live studio!
+        if (isLocallyBroadcasting && currentLiveStream.isLive && currentLiveStream.id) {
           streamMap.set(currentLiveStream.id, currentLiveStream);
         }
         streams.forEach(s => {
@@ -4388,47 +4404,232 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [activeTab]);
 
+  // Real-Time Live Chat & Event WebSocket Subscription (<50ms delivery, 0 Disk IO!)
+  useEffect(() => {
+    const streamId = currentLiveStream.id;
+    const isLiveActive = activeTab === 'live_viewer' || activeTab === 'live_host_active';
+
+    if (!streamId || !isLiveActive) {
+      if (liveStreamChannelRef.current) {
+        try { liveStreamChannelRef.current.unsubscribe(); } catch {}
+        liveStreamChannelRef.current = null;
+      }
+      if (liveStreamBroadcastChannelRef.current) {
+        try { liveStreamBroadcastChannelRef.current.close(); } catch {}
+        liveStreamBroadcastChannelRef.current = null;
+      }
+      return;
+    }
+
+    // 1. Fetch initial past comments once from database (single read, zero polling!)
+    supabaseDb.fetchLiveComments(streamId).then(pastComments => {
+      if (pastComments && pastComments.length > 0) {
+        setCurrentLiveStream(prev => {
+          if (prev.id !== streamId) return prev;
+          const existingIds = new Set(prev.messages.map(m => m.id));
+          const toAdd = pastComments.filter(c => !existingIds.has(c.id));
+          if (toAdd.length === 0) return prev;
+          return {
+            ...prev,
+            messages: [...prev.messages, ...toAdd],
+          };
+        });
+      }
+    });
+
+    const handleIncomingComment = (msg: LiveStreamMessage) => {
+      if (!msg || !msg.text) return;
+      setCurrentLiveStream(prev => {
+        if (prev.messages.some(m => m.id === msg.id)) return prev;
+        return {
+          ...prev,
+          messages: [...prev.messages, msg],
+        };
+      });
+    };
+
+    // 2. Setup local BroadcastChannel for same-device cross-tab testing
+    try {
+      const bc = new BroadcastChannel(`live_chat_${streamId}`);
+      bc.onmessage = (e) => {
+        const data = e.data;
+        if (!data) return;
+        if (data.type === 'comment' && data.payload) {
+          handleIncomingComment(data.payload);
+        } else if (data.type === 'like') {
+          setLiveHeartTrigger(Date.now());
+        } else if (data.type === 'stream_ended') {
+          setCurrentLiveStream(prev => ({ ...prev, isLive: false }));
+        }
+      };
+      liveStreamBroadcastChannelRef.current = bc;
+    } catch {}
+
+    // 3. Setup Supabase Realtime Channel (in-memory WebSocket broadcast, 0 Disk IO!)
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const chan = client.channel(`live_chat_${streamId}`, {
+          config: {
+            broadcast: { ack: false, self: false },
+            presence: { key: currentUser?.id || `viewer_${Date.now()}` },
+          },
+        });
+
+        chan
+          .on('broadcast', { event: 'comment' }, ({ payload }: { payload: LiveStreamMessage }) => {
+            if (payload) {
+              handleIncomingComment(payload);
+            }
+          })
+          .on('broadcast', { event: 'like' }, () => {
+            setLiveHeartTrigger(Date.now());
+          })
+          .on('broadcast', { event: 'stream_ended' }, () => {
+            setCurrentLiveStream(prev => ({ ...prev, isLive: false }));
+          })
+          .on('presence', { event: 'sync' }, () => {
+            const state = chan.presenceState();
+            const totalViewers = Object.keys(state).length;
+            if (totalViewers > 0) {
+              setCurrentLiveStream(prev => ({
+                ...prev,
+                viewersCount: Math.max(1, totalViewers),
+              }));
+            }
+          })
+          .subscribe((status: string) => {
+            if (status === 'SUBSCRIBED') {
+              chan.track({
+                user_id: currentUser?.id,
+                username: currentUser?.username,
+                displayName: currentUser?.displayName,
+                online_at: new Date().toISOString(),
+                is_host: activeTab === 'live_host_active',
+              });
+            }
+          });
+
+        liveStreamChannelRef.current = chan;
+      } catch (err) {
+        console.warn('Realtime channel error in AppContext:', err);
+      }
+    }
+
+    return () => {
+      if (liveStreamChannelRef.current) {
+        try { liveStreamChannelRef.current.unsubscribe(); } catch {}
+        liveStreamChannelRef.current = null;
+      }
+      if (liveStreamBroadcastChannelRef.current) {
+        try { liveStreamBroadcastChannelRef.current.close(); } catch {}
+        liveStreamBroadcastChannelRef.current = null;
+      }
+    };
+  }, [currentLiveStream.id, activeTab, currentUser?.id]);
+
   const openLiveStreamAsViewer = (streamId: string) => {
     const target = activeLiveStreams.find(s => s.id === streamId || toUuid(s.id) === toUuid(streamId));
     if (target) {
-      setCurrentLiveStream(target);
+      setCurrentLiveStream({
+        ...target,
+        messages: target.messages || [],
+      });
     }
     setActiveTab('live_viewer');
   };
 
+  const removeActiveLiveStream = (streamId: string) => {
+    setActiveLiveStreams(prev => prev.filter(s => s.id !== streamId && toUuid(s.id) !== toUuid(streamId)));
+    if (currentLiveStream.id === streamId || toUuid(currentLiveStream.id) === toUuid(streamId)) {
+      setCurrentLiveStream(prev => ({ ...prev, isLive: false }));
+    }
+  };
+
   const sendLiveComment = (text: string) => {
-    if (!currentUser || !text.trim()) return;
+    if (!currentUser || !text.trim() || !currentLiveStream.id) return;
+    const cleanText = text.trim();
+    const msgId = `lm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const newLiveMsg: LiveStreamMessage = {
-      id: `lm_${Date.now()}`,
+      id: msgId,
       userId: currentUser.id,
       username: currentUser.username,
-      displayName: currentUser.displayName,
-      avatar: currentUser.avatar,
-      text: text.trim(),
+      displayName: currentUser.displayName || currentUser.username || 'User',
+      avatar: currentUser.avatar || '',
+      text: cleanText,
       timestamp: 'Just now',
     };
+
+    // 1. Optimistic update so sender sees comment with 0 latency
     setCurrentLiveStream(prev => ({
       ...prev,
       messages: [...prev.messages, newLiveMsg],
     }));
-    if (currentLiveStream.id) {
-      supabaseDb.insertLiveComment(currentLiveStream.id, currentUser, text.trim());
+
+    // 2. Realtime WebSocket Broadcast to Host Studio and all Viewers (0 Disk IO!)
+    try {
+      if (liveStreamChannelRef.current) {
+        liveStreamChannelRef.current.send({
+          type: 'broadcast',
+          event: 'comment',
+          payload: newLiveMsg,
+        });
+      }
+    } catch (err) {
+      console.warn('Live comment broadcast error', err);
     }
+
+    // 3. Local BroadcastChannel for same-device cross-tab testing
+    try {
+      if (liveStreamBroadcastChannelRef.current) {
+        liveStreamBroadcastChannelRef.current.postMessage({
+          type: 'comment',
+          payload: newLiveMsg,
+        });
+      }
+    } catch {}
+
+    // 4. Async database persistence (single insert, safe fallback)
+    supabaseDb.insertLiveComment(currentLiveStream.id, currentUser, cleanText);
   };
 
-  const startHostLiveStream = (title: string, topic: string, aboutMe: string) => {
+  const sendLiveLike = () => {
+    if (!currentLiveStream.id) return;
+    setLiveHeartTrigger(Date.now());
+    try {
+      if (liveStreamChannelRef.current) {
+        liveStreamChannelRef.current.send({
+          type: 'broadcast',
+          event: 'like',
+          payload: { userId: currentUser?.id, timestamp: Date.now() },
+        });
+      }
+    } catch {}
+    try {
+      if (liveStreamBroadcastChannelRef.current) {
+        liveStreamBroadcastChannelRef.current.postMessage({
+          type: 'like',
+          payload: { userId: currentUser?.id, timestamp: Date.now() },
+        });
+      }
+    } catch {}
+  };
+
+  const startHostLiveStream = (title: string, topic: string, aboutMe: string, customStreamId?: string) => {
     if (!currentUser) return;
-    const streamId = currentLiveStream.id || `stream_${currentUser.id}_${Date.now()}`;
+    // Always generate a fresh unique stream ID for every new broadcast!
+    const streamId = customStreamId || `stream_${toUuid(currentUser.id)}_${Date.now()}`;
     const newStream: LiveStream = {
       ...currentLiveStream,
       id: streamId,
       host: currentUser,
-      title: title || "Let's play",
+      title: title || 'Live Stream',
       topic: topic || 'Gaming',
       aboutMe: aboutMe || 'Welcome to my stream!',
       isLive: true,
       timerSeconds: 0,
       viewersCount: 1,
+      messages: [],
     };
     setCurrentLiveStream(newStream);
     setActiveLiveStreams(prev => {
@@ -4440,14 +4641,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const endHostLiveStream = () => {
-    if (currentLiveStream.id) {
-      supabaseDb.endLiveStream(currentLiveStream.id);
+    const streamId = currentLiveStream.id;
+    if (streamId) {
+      supabaseDb.endLiveStream(streamId);
+      try {
+        if (liveStreamChannelRef.current) {
+          liveStreamChannelRef.current.send({
+            type: 'broadcast',
+            event: 'stream_ended',
+            payload: { streamId },
+          });
+        }
+      } catch {}
+      try {
+        if (liveStreamBroadcastChannelRef.current) {
+          liveStreamBroadcastChannelRef.current.postMessage({
+            type: 'stream_ended',
+            streamId,
+          });
+        }
+      } catch {}
     }
     setCurrentLiveStream(prev => ({
       ...prev,
       isLive: false,
     }));
-    setActiveLiveStreams(prev => prev.filter(s => s.id !== currentLiveStream.id));
+    setActiveLiveStreams(prev => prev.filter(s => s.id !== streamId));
     setActiveTab('live');
   };
 
@@ -5599,6 +5818,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshActiveLiveStreams,
         openLiveStreamAsViewer,
         sendLiveComment,
+        sendLiveLike,
+        liveHeartTrigger,
+        removeActiveLiveStream,
         startHostLiveStream,
         endHostLiveStream,
         toggleLiveSource,
