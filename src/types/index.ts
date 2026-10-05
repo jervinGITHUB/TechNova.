@@ -231,6 +231,23 @@ export interface LiveStreamMessage {
   isSystemEvent?: boolean;
 }
 
+export interface CanvasSourceTransform {
+  id: 'camera' | 'screen' | 'chat_overlay' | 'goal_bar' | 'music_banner' | 'watermark';
+  name: string;
+  type: 'camera' | 'screen' | 'overlay';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  zIndex: number;
+  visible: boolean;
+  locked: boolean;
+  mirrored?: boolean;
+  borderRadius?: number;
+  borderStyle?: 'none' | 'pink' | 'cyan' | 'hairline';
+  opacity?: number;
+}
+
 export interface LiveStream {
   id: string;
   host: User;

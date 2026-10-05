@@ -17,7 +17,11 @@ import {
   Database,
 } from 'lucide-react';
 
-export const Sidebar: React.FC = () => {
+interface SidebarProps {
+  onNavigate?: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
   const {
     currentUser,
     users,
@@ -72,6 +76,7 @@ export const Sidebar: React.FC = () => {
           onClick={() => {
             setActiveTab('home');
             refreshFeed();
+            onNavigate?.();
           }}
           className="cursor-pointer py-1 px-2 mb-8 hover:opacity-90 transition-opacity"
         >
@@ -96,6 +101,7 @@ export const Sidebar: React.FC = () => {
                     refreshFeed();
                   }
                   setActiveTab(item.tab);
+                  onNavigate?.();
                 }}
                 className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl font-medium text-sm transition-all cursor-pointer ${
                   isActive
@@ -160,6 +166,7 @@ export const Sidebar: React.FC = () => {
                     onClick={() => {
                       setProfileMenuOpen(false);
                       navigateToUserProfile(currentUser.id);
+                      onNavigate?.();
                     }}
                     className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-white hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
                   >
@@ -171,6 +178,7 @@ export const Sidebar: React.FC = () => {
                     onClick={() => {
                       setProfileMenuOpen(false);
                       setActiveTab('edit_profile');
+                      onNavigate?.();
                     }}
                     className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-white hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
                   >
@@ -182,6 +190,7 @@ export const Sidebar: React.FC = () => {
                     onClick={() => {
                       setProfileMenuOpen(false);
                       setSwitchAccountModalOpen(true);
+                      onNavigate?.();
                     }}
                     className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-white hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
                   >
@@ -193,6 +202,7 @@ export const Sidebar: React.FC = () => {
                     onClick={() => {
                       setProfileMenuOpen(false);
                       setActiveTab('report_history');
+                      onNavigate?.();
                     }}
                     className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-white hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
                   >

@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
+import { ViralHubLogo } from '../common/ViralHubLogo';
 import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft } from 'lucide-react';
 import { checkIsUserBanned } from '../../lib/supabase';
 
@@ -19,6 +20,8 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     videos,
     navigateToUserProfile,
   } = useApp();
+
+  const isLiveStudioSetup = activeTab === 'live_host_setup';
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -48,6 +51,52 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
       mobileInputRef.current.focus();
     }
   }, [mobileSearchOpen]);
+
+  // In Live Studio Setup: hide search bar, notification icon, and upload button. Show 3 lines menu icon to keep layout wide.
+  if (isLiveStudioSetup) {
+    return (
+      <header className="h-14 sm:h-16 px-3 sm:px-6 border-b border-neutral-800/80 bg-[#0d0d12]/95 backdrop-blur-md sticky top-0 z-30 flex items-center justify-between gap-3 select-none">
+        {/* Left: 3-Lines (Hamburger) Button + Logo + Title */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onToggleMobileNav}
+            className="p-2 text-neutral-300 hover:text-white rounded-xl hover:bg-neutral-800/80 transition-colors flex items-center justify-center cursor-pointer border border-neutral-800 hover:border-neutral-700"
+            aria-label="Toggle navigation menu"
+            title="Navigation Menu"
+          >
+            <Menu className="w-5 h-5 text-white" />
+          </button>
+
+          <div
+            onClick={() => setActiveTab('home')}
+            className="cursor-pointer py-1 px-1 hover:opacity-90 transition-opacity"
+            title="ViralHub Home"
+          >
+            <ViralHubLogo size="sm" />
+          </div>
+
+          <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-neutral-800">
+            <span className="w-2 h-2 rounded-full bg-[#ff007a] animate-pulse" />
+            <span className="text-xs font-bold font-brand text-white tracking-wider">
+              LIVE STUDIO SETUP
+            </span>
+          </div>
+        </div>
+
+        {/* Right: Exit Studio Button (Search bar, Notification Bell, and + Upload are hidden) */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setActiveTab('live')}
+            className="px-3 py-1.5 rounded-xl text-xs font-semibold text-neutral-400 hover:text-white hover:bg-neutral-800/80 transition-colors flex items-center gap-1.5 cursor-pointer border border-neutral-800 hover:border-neutral-700"
+            title="Exit Live Studio Setup"
+          >
+            <X className="w-4 h-4" />
+            <span className="hidden sm:inline">Exit Studio</span>
+          </button>
+        </div>
+      </header>
+    );
+  }
 
   const cleanQuery = searchQuery.trim().toLowerCase().replace('@', '').replace('#', '');
 

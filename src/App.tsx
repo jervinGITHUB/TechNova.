@@ -145,30 +145,35 @@ const AppContent: React.FC = () => {
     }
   };
 
+  const isLiveStudioSetup = activeTab === 'live_host_setup';
+
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#0c0c10] text-white flex flex-col md:flex-row antialiased selection:bg-[#ff007a] selection:text-white">
-      {/* Desktop Fixed Sidebar */}
-      <div className="hidden md:block h-full shrink-0">
-        <Sidebar />
-      </div>
+      {/* Desktop Fixed Sidebar: Hidden in Live Studio Setup so workspace is wide */}
+      {!isLiveStudioSetup && (
+        <div className="hidden md:block h-full shrink-0">
+          <Sidebar />
+        </div>
+      )}
 
-      {/* Mobile Drawer Navigation */}
+      {/* Slide-over Drawer Navigation: Available on mobile, and on desktop when in Live Studio Setup */}
       {mobileNavOpen && (
-        <div className="fixed inset-0 z-50 flex md:hidden">
+        <div className={`fixed inset-0 z-50 flex ${!isLiveStudioSetup ? 'md:hidden' : ''}`}>
           <div
-            className="fixed inset-0 bg-black/80 backdrop-blur-sm"
+            className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
             onClick={() => setMobileNavOpen(false)}
           />
-          <div className="relative w-72 bg-[#0d0d12] h-full shadow-2xl z-10 flex flex-col">
+          <div className="relative w-72 bg-[#0d0d12] h-full shadow-2xl z-10 flex flex-col border-r border-neutral-800">
             <div className="absolute top-4 right-4 z-20">
               <button
                 onClick={() => setMobileNavOpen(false)}
-                className="p-1.5 text-neutral-400 hover:text-white"
+                className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 cursor-pointer"
+                title="Close Navigation"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <Sidebar />
+            <Sidebar onNavigate={() => setMobileNavOpen(false)} />
           </div>
         </div>
       )}
