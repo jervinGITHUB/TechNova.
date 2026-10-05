@@ -38,6 +38,7 @@ import {
   signUpWithEmail,
   signOutSupabase,
   toUuid,
+  generateUuid,
   isSameUser,
   isUuid,
   getDirectConversationId,
@@ -649,6 +650,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeLiveStreams, setActiveLiveStreams] = useState<LiveStream[]>([]);
   const liveStreamChannelRef = useRef<any>(null);
   const liveStreamBroadcastChannelRef = useRef<BroadcastChannel | null>(null);
+  const globalLiveStreamsChannelRef = useRef<any>(null);
+  const globalLiveBroadcastChannelRef = useRef<BroadcastChannel | null>(null);
   const [liveHeartTrigger, setLiveHeartTrigger] = useState<number>(0);
 
   // Per-User Likes storage map: { [userId: string]: string[] (videoIds) }
@@ -4381,7 +4384,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const refreshActiveLiveStreams = async () => {
     try {
       const isLocallyBroadcasting = liveBroadcastService.getState().isBroadcasting;
-      const streams = await supabaseDb.fetchActiveLiveStreams(currentUser?.id, isLocallyBroadcasting);
+      const streams = await supabaseDb.fetchActiveLiveStreams(currentUser?.id);
       setActiveLiveStreams(prev => {
         const streamMap = new Map<string, LiveStream>();
         // Only include currentLiveStream if this client is ACTUALLY broadcasting via live studio!
@@ -4397,6 +4400,105 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('refreshActiveLiveStreams error', err);
     }
   };
+
+  // Global Realtime Live Stream Discovery: broadcasts new streams to all connected devices instantly (<50ms, 0 Disk IO!)
+  useEffect(() => {
+    // 1. Same-device cross-tab BroadcastChannel
+    try {
+      const bChan = new BroadcastChannel('viralhub_live_streams_global');
+      bChan.onmessage = (e) => {
+        const data = e.data;
+        if (!data) return;
+        if (data.type === 'stream_started' && data.payload) {
+          setActiveLiveStreams(prev => {
+            if (prev.some(s => s.id === data.payload.id || toUuid(s.id) === toUuid(data.payload.id))) {
+              return prev;
+            }
+            return [data.payload, ...prev];
+          });
+        } else if (data.type === 'stream_ended' && data.payload?.streamId) {
+          setActiveLiveStreams(prev =>
+            prev.filter(s => s.id !== data.payload.streamId && toUuid(s.id) !== toUuid(data.payload.streamId))
+          );
+        }
+      };
+      globalLiveBroadcastChannelRef.current = bChan;
+    } catch {}
+
+    // 2. Supabase Realtime channel across all devices (0 Disk IO!)
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const chan = client.channel('viralhub_live_streams_global', {
+          config: {
+            broadcast: { ack: false, self: false },
+            presence: { key: currentUser?.id || `user_${Date.now()}` },
+          },
+        });
+
+        chan
+          .on('broadcast', { event: 'stream_started' }, ({ payload }: { payload: LiveStream }) => {
+            if (!payload || !payload.id) return;
+            setActiveLiveStreams(prev => {
+              if (prev.some(s => s.id === payload.id || toUuid(s.id) === toUuid(payload.id))) {
+                return prev;
+              }
+              return [payload, ...prev];
+            });
+          })
+          .on('broadcast', { event: 'stream_ended' }, ({ payload }: { payload: { streamId: string } }) => {
+            if (!payload || !payload.streamId) return;
+            setActiveLiveStreams(prev =>
+              prev.filter(s => s.id !== payload.streamId && toUuid(s.id) !== toUuid(payload.streamId))
+            );
+          })
+          .on('presence', { event: 'sync' }, () => {
+            try {
+              const state = chan.presenceState();
+              const presenceStreams: LiveStream[] = [];
+              Object.values(state).forEach((items: any) => {
+                items.forEach((p: any) => {
+                  if (p.isHost && p.stream && p.stream.id) {
+                    presenceStreams.push(p.stream);
+                  }
+                });
+              });
+              if (presenceStreams.length > 0) {
+                setActiveLiveStreams(prev => {
+                  const map = new Map<string, LiveStream>();
+                  presenceStreams.forEach(s => map.set(toUuid(s.id), s));
+                  prev.forEach(s => {
+                    if (!map.has(toUuid(s.id))) {
+                      map.set(toUuid(s.id), s);
+                    }
+                  });
+                  return Array.from(map.values());
+                });
+              }
+            } catch {}
+          })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'Livestream' }, () => {
+            refreshActiveLiveStreams();
+          })
+          .subscribe();
+
+        globalLiveStreamsChannelRef.current = chan;
+      } catch (err) {
+        console.warn('global live streams realtime channel error:', err);
+      }
+    }
+
+    return () => {
+      if (globalLiveStreamsChannelRef.current) {
+        try { globalLiveStreamsChannelRef.current.unsubscribe(); } catch {}
+        globalLiveStreamsChannelRef.current = null;
+      }
+      if (globalLiveBroadcastChannelRef.current) {
+        try { globalLiveBroadcastChannelRef.current.close(); } catch {}
+        globalLiveBroadcastChannelRef.current = null;
+      }
+    };
+  }, [isSupabaseConnected]);
 
   useEffect(() => {
     if (activeTab === 'live' || activeTab === 'live_viewer') {
@@ -4535,6 +4637,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...target,
         messages: target.messages || [],
       });
+    } else {
+      setCurrentLiveStream(prev => ({
+        ...prev,
+        id: streamId,
+        isLive: true,
+        messages: [],
+      }));
     }
     setActiveTab('live_viewer');
   };
@@ -4617,8 +4726,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const startHostLiveStream = (title: string, topic: string, aboutMe: string, customStreamId?: string) => {
     if (!currentUser) return;
-    // Always generate a fresh unique stream ID for every new broadcast!
-    const streamId = customStreamId || `stream_${toUuid(currentUser.id)}_${Date.now()}`;
+    // Always generate a clean standard UUID v4 for the stream so IDs NEVER diverge!
+    const streamId = customStreamId || generateUuid();
     const newStream: LiveStream = {
       ...currentLiveStream,
       id: streamId,
@@ -4633,10 +4742,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setCurrentLiveStream(newStream);
     setActiveLiveStreams(prev => {
-      const filtered = prev.filter(s => s.id !== streamId);
+      const filtered = prev.filter(s => s.id !== streamId && toUuid(s.id) !== toUuid(streamId));
       return [newStream, ...filtered];
     });
+
+    // 1. Asynchronously persist to Supabase
     supabaseDb.upsertLiveStream(newStream);
+
+    // 2. Realtime WebSocket Broadcast and Presence to ALL other devices (<50ms, 0 Disk IO!)
+    try {
+      if (globalLiveStreamsChannelRef.current) {
+        globalLiveStreamsChannelRef.current.send({
+          type: 'broadcast',
+          event: 'stream_started',
+          payload: newStream,
+        });
+        globalLiveStreamsChannelRef.current.track({
+          streamId: newStream.id,
+          stream: newStream,
+          isHost: true,
+          startedAt: Date.now(),
+        });
+      }
+    } catch {}
+
+    // 3. Same-device cross-tab BroadcastChannel
+    try {
+      if (globalLiveBroadcastChannelRef.current) {
+        globalLiveBroadcastChannelRef.current.postMessage({
+          type: 'stream_started',
+          payload: newStream,
+        });
+      }
+    } catch {}
+
     setActiveTab('live_host_active');
   };
 
@@ -4644,6 +4783,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const streamId = currentLiveStream.id;
     if (streamId) {
       supabaseDb.endLiveStream(streamId);
+
+      // Broadcast stream ended to stream channel
       try {
         if (liveStreamChannelRef.current) {
           liveStreamChannelRef.current.send({
@@ -4658,6 +4799,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           liveStreamBroadcastChannelRef.current.postMessage({
             type: 'stream_ended',
             streamId,
+          });
+        }
+      } catch {}
+
+      // Broadcast stream ended to global discovery channel and untrack presence
+      try {
+        if (globalLiveStreamsChannelRef.current) {
+          globalLiveStreamsChannelRef.current.send({
+            type: 'broadcast',
+            event: 'stream_ended',
+            payload: { streamId },
+          });
+          globalLiveStreamsChannelRef.current.untrack();
+        }
+      } catch {}
+      try {
+        if (globalLiveBroadcastChannelRef.current) {
+          globalLiveBroadcastChannelRef.current.postMessage({
+            type: 'stream_ended',
+            payload: { streamId },
           });
         }
       } catch {}

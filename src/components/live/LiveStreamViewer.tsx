@@ -63,19 +63,13 @@ export const LiveStreamViewer: React.FC = () => {
       },
     });
 
-    // Offline stream auto-detection:
-    // If after 7 seconds, no stream, snapshot, or WebRTC offer has arrived from host:
+    // Connection watchdog:
+    // If after 12 seconds, no stream or snapshot has arrived from host, indicate waiting status to viewer
     const watchdogTimeout = window.setTimeout(() => {
       if (!hasReceivedSignalOrStream) {
-        setIsLiveEnded(true);
         setConnectionStatus('offline');
-        // Clean up ghost stream in Supabase so it no longer appears for any users
-        if (currentLiveStream.id) {
-          supabaseDb.endLiveStream(currentLiveStream.id);
-          removeActiveLiveStream(currentLiveStream.id);
-        }
       }
-    }, 7000);
+    }, 12000);
 
     return () => {
       clearTimeout(watchdogTimeout);

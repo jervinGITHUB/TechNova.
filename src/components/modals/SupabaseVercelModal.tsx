@@ -5,6 +5,7 @@ import {
   saveSupabaseCredentials,
   testSupabaseConnection,
   SUPABASE_SQL_SCHEMA,
+  LIVESTREAM_SQL_SNIPPET,
 } from '../../lib/supabase';
 import {
   Database,
@@ -38,6 +39,7 @@ export const SupabaseVercelModal: React.FC<SupabaseVercelModalProps> = ({
   const [anonKey, setAnonKey] = useState(currentConfig.anonKey);
   const [copied, setCopied] = useState(false);
   const [copiedAdminSql, setCopiedAdminSql] = useState(false);
+  const [copiedLivestreamSql, setCopiedLivestreamSql] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
@@ -80,6 +82,12 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
     navigator.clipboard?.writeText(SUPABASE_SQL_SCHEMA);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyLivestreamSql = () => {
+    navigator.clipboard?.writeText(LIVESTREAM_SQL_SNIPPET);
+    setCopiedLivestreamSql(true);
+    setTimeout(() => setCopiedLivestreamSql(false), 2000);
   };
 
   const handleTestConnection = async () => {
@@ -265,13 +273,23 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
                 <ShieldCheck className="w-4 h-4 text-emerald-400" />
                 <span>2. Supabase SQL Schema (Tables & Policies)</span>
               </h3>
-              <button
-                onClick={handleCopySchema}
-                className="py-1 px-3 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
-              >
-                {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copied ? 'Copied SQL!' : 'Copy SQL Schema'}</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleCopyLivestreamSql}
+                  className="py-1 px-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white font-bold text-[10px] flex items-center gap-1 transition-colors cursor-pointer border border-neutral-700"
+                  title="Copy SQL for Livestream & LiveComment tables only"
+                >
+                  {copiedLivestreamSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                  <span>{copiedLivestreamSql ? 'Copied Live SQL!' : 'Copy Livestream SQL'}</span>
+                </button>
+                <button
+                  onClick={handleCopySchema}
+                  className="py-1 px-3 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  <span>{copied ? 'Copied Full SQL!' : 'Copy Full Schema'}</span>
+                </button>
+              </div>
             </div>
             <p className="text-neutral-400 mb-2">
               Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to initialize all 11 tables with Row Level Security.

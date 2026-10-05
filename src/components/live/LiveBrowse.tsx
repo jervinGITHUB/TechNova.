@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
-import { Radio, Users, Sparkles, RefreshCw, X, Plus } from 'lucide-react';
+import { Radio, Users, Sparkles, RefreshCw, X, Plus, Database, Copy, Check, Info } from 'lucide-react';
 import { liveBroadcastService } from '../../services/liveBroadcastService';
-import { supabaseDb, toUuid, isSameUser } from '../../lib/supabase';
+import { supabaseDb, toUuid, isSameUser, LIVESTREAM_SQL_SNIPPET, checkLivestreamTableExists } from '../../lib/supabase';
 
 export const LiveBrowse: React.FC = () => {
   const {
@@ -14,12 +14,23 @@ export const LiveBrowse: React.FC = () => {
     refreshActiveLiveStreams,
     removeActiveLiveStream,
     currentUser,
+    isSupabaseConnected,
+    setSupabaseModalOpen,
   } = useApp();
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
+  const [tableExists, setTableExists] = useState<boolean | null>(null);
 
-  React.useEffect(() => {
+  useEffect(() => {
     refreshActiveLiveStreams();
+    checkLivestreamTableExists().then(res => setTableExists(res));
+
+    // Gentle 12s polling interval while browsing to ensure cross-device consistency with minimal disk IO
+    const interval = setInterval(() => {
+      refreshActiveLiveStreams();
+    }, 12000);
+    return () => clearInterval(interval);
   }, []);
 
   const streams = (() => {
@@ -37,7 +48,15 @@ export const LiveBrowse: React.FC = () => {
   const handleRefresh = async () => {
     setIsRefreshing(true);
     await refreshActiveLiveStreams();
+    const exists = await checkLivestreamTableExists();
+    setTableExists(exists);
     setTimeout(() => setIsRefreshing(false), 500);
+  };
+
+  const handleCopySql = () => {
+    navigator.clipboard?.writeText(LIVESTREAM_SQL_SNIPPET);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2500);
   };
 
   const handleDismissStream = (e: React.MouseEvent, streamId: string) => {
@@ -188,6 +207,60 @@ export const LiveBrowse: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Supabase Realtime & Database Status Card (Protects Supabase Disk IO & clarifies status) */}
+      <div className="mt-8 p-4 rounded-2xl bg-[#12121a] border border-neutral-800 text-xs text-neutral-400 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-xl bg-neutral-800 text-[#ff007a]">
+            <Database className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="text-neutral-200 font-semibold flex items-center gap-2">
+              <span>Supabase Real-Time Streaming</span>
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">
+                0 Disk IO (In-Memory Broadcast)
+              </span>
+            </div>
+            <p className="text-[11px] text-neutral-400 mt-0.5">
+              Live broadcast discovery, comments, and presence use low-latency WebSockets.
+              {isSupabaseConnected && tableExists === false && (
+                <span className="text-amber-400 block mt-0.5">
+                  Notice: 'Livestream' table not detected in Supabase yet. Run the SQL snippet to enable cloud history.
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 self-end sm:self-center">
+          <button
+            onClick={handleCopySql}
+            className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white font-medium text-[11px] border border-neutral-700 transition-all cursor-pointer"
+            title="Copy Livestream SQL Script for Supabase SQL Editor"
+          >
+            {copiedSql ? (
+              <>
+                <Check className="w-3.5 h-3.5 text-emerald-400" />
+                <span className="text-emerald-400">Copied SQL!</span>
+              </>
+            ) : (
+              <>
+                <Copy className="w-3.5 h-3.5" />
+                <span>Copy Livestream SQL</span>
+              </>
+            )}
+          </button>
+
+          {!isSupabaseConnected && (
+            <button
+              onClick={() => setSupabaseModalOpen(true)}
+              className="py-2 px-3 rounded-xl bg-[#ff007a]/10 hover:bg-[#ff007a]/20 text-[#ff007a] font-semibold text-[11px] border border-[#ff007a]/30 transition-all cursor-pointer"
+            >
+              Connect Cloud DB
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 };

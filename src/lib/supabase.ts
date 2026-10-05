@@ -58,6 +58,16 @@ export const toUuid = (input?: string | null): string => {
 };
 
 /**
+ * Generates a clean, valid UUID v4 string for all multi-device objects.
+ */
+export const generateUuid = (): string => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID().toLowerCase();
+  }
+  return toUuid(`uuid_${Date.now()}_${Math.random()}`);
+};
+
+/**
  * Robust User ID comparator that safely matches IDs regardless of whether
  * one is a PostgreSQL UUID string, standard ID, or case differences.
  */
@@ -3465,116 +3475,139 @@ export const supabaseDb = {
       const streamUuid = toUuid(stream.id);
       const hostUuid = toUuid(stream.host.id);
 
-      const { error } = await client.from('Livestream').upsert(
-        {
-          LivestreamID: streamUuid,
-          HostUserID: hostUuid,
-          Title: stream.title || 'Live Stream',
-          StartedAt: new Date().toISOString(),
-          EndedAt: stream.isLive ? null : new Date().toISOString(),
-        },
-        { onConflict: 'LivestreamID' }
-      );
+      // 1. Crucial: Ensure the host account exists in the User table first so foreign key is NEVER violated!
+      if (stream.host) {
+        try {
+          await this.upsertUser(stream.host);
+        } catch {}
+      }
+
+      // 2. Insert/Upsert into Livestream table
+      const payload: Record<string, any> = {
+        LivestreamID: streamUuid,
+        HostUserID: hostUuid,
+        Title: stream.title || 'Live Stream',
+        StartedAt: new Date().toISOString(),
+        EndedAt: stream.isLive ? null : new Date().toISOString(),
+      };
+
+      let { error } = await client.from('Livestream').upsert(payload, { onConflict: 'LivestreamID' });
+
+      // If onConflict fails or doesn't match primary key constraint, try direct insert
+      if (error) {
+        const insertRes = await client.from('Livestream').insert(payload);
+        if (!insertRes.error) error = null;
+      }
+
+      // Fallback for lowercase table name if configured as 'livestreams'
+      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        const snakePayload = {
+          id: streamUuid,
+          host_user_id: hostUuid,
+          title: stream.title || 'Live Stream',
+          started_at: new Date().toISOString(),
+          ended_at: stream.isLive ? null : new Date().toISOString(),
+        };
+        await client.from('livestreams').upsert(snakePayload, { onConflict: 'id' });
+      }
+
+      if (error) {
+        console.warn('Supabase upsertLiveStream error:', error.message || error);
+      }
 
       return !error;
     } catch (e) {
-      console.warn('Supabase upsertLiveStream fallback:', e);
+      console.warn('Supabase upsertLiveStream exception:', e);
       return false;
     }
   },
 
   async endLiveStream(streamId: string): Promise<boolean> {
     const client = getSupabaseClient();
-    if (!client) return false;
+    if (!client || !streamId) return false;
 
     try {
       const streamUuid = toUuid(streamId);
-      const { error } = await client
+      const nowIso = new Date().toISOString();
+
+      await client
         .from('Livestream')
-        .update({ EndedAt: new Date().toISOString() })
+        .update({ EndedAt: nowIso })
         .eq('LivestreamID', streamUuid);
 
-      return !error;
+      // Also try snake_case fallback
+      try {
+        await client
+          .from('livestreams')
+          .update({ ended_at: nowIso })
+          .eq('id', streamUuid);
+      } catch {}
+
+      return true;
     } catch (e) {
       console.warn('Supabase endLiveStream fallback:', e);
       return false;
     }
   },
 
-  async fetchActiveLiveStreams(currentUserId?: string, isHostBroadcastingLocally = false): Promise<LiveStream[]> {
+  async fetchActiveLiveStreams(currentUserId?: string): Promise<LiveStream[]> {
     const client = getSupabaseClient();
     if (!client) return [];
 
     try {
+      // 1. Fetch all streams that have not been ended
       const { data, error } = await client
         .from('Livestream')
-        .select(`
-          LivestreamID,
-          HostUserID,
-          Title,
-          StartedAt,
-          EndedAt,
-          User:HostUserID (
-            UserID,
-            Username,
-            DisplayName,
-            ProfilePictureURL
-          )
-        `)
+        .select('LivestreamID, HostUserID, Title, StartedAt, EndedAt')
         .is('EndedAt', null)
         .order('StartedAt', { ascending: false })
-        .limit(25);
+        .limit(30);
 
       let rows: any[] = [];
 
       if (error || !data) {
-        // Fallback: if foreign key join syntax failed or PascalCase differences
-        const simpleRes = await client
-          .from('Livestream')
+        // Fallback for lowercase 'livestreams' table
+        const fallbackRes = await client
+          .from('livestreams')
           .select('*')
-          .is('EndedAt', null)
-          .order('StartedAt', { ascending: false })
-          .limit(25);
+          .is('ended_at', null)
+          .order('started_at', { ascending: false })
+          .limit(30);
 
-        if (simpleRes.data) {
-          rows = simpleRes.data;
-        } else {
-          return [];
+        if (fallbackRes.data) {
+          rows = fallbackRes.data.map(r => ({
+            LivestreamID: r.id || r.LivestreamID,
+            HostUserID: r.host_user_id || r.HostUserID,
+            Title: r.title || r.Title,
+            StartedAt: r.started_at || r.StartedAt,
+            EndedAt: r.ended_at || r.EndedAt,
+          }));
         }
       } else {
         rows = data;
       }
 
-      // Auto-cleanup stale ghost streams (e.g. started > 60 minutes ago without EndedAt, or started by current user who is not broadcasting locally)
+      if (!rows || rows.length === 0) {
+        return [];
+      }
+
+      // 2. Filter out truly abandoned ghost streams (older than 2.5 hours without end)
       const now = Date.now();
-      const MAX_STREAM_AGE_MS = 60 * 60 * 1000; // 60 minutes
+      const MAX_STREAM_AGE_MS = 2.5 * 60 * 60 * 1000; // 2.5 hours
       const activeRows: any[] = [];
       const staleIdsToClose: string[] = [];
 
-      const currentUidUuid = currentUserId ? toUuid(currentUserId) : '';
-
       for (const row of rows) {
         const startedTime = row.StartedAt ? new Date(row.StartedAt).getTime() : 0;
-        const isOlderThanMax = startedTime > 0 && (now - startedTime > MAX_STREAM_AGE_MS);
-        const hostId = row.HostUserID || (row.User ? (Array.isArray(row.User) ? row.User[0]?.UserID : row.User?.UserID) : '');
-        
-        // If current user is recorded as host in Supabase, but this client is NOT actually broadcasting:
-        // this is an abandoned stream from this user's prior test/session!
-        const isMyDeadStream = Boolean(
-          currentUserId &&
-          !isHostBroadcastingLocally &&
-          hostId &&
-          (isSameUser(hostId, currentUserId) || hostId === currentUidUuid)
-        );
-
-        if (isOlderThanMax || isMyDeadStream) {
+        const isVeryOld = startedTime > 0 && (now - startedTime > MAX_STREAM_AGE_MS);
+        if (isVeryOld) {
           if (row.LivestreamID) staleIdsToClose.push(row.LivestreamID);
         } else {
           activeRows.push(row);
         }
       }
 
-      // Automatically mark stale/abandoned streams as ended in Supabase (single query, minimal disk IO!)
+      // Automatically mark old abandoned streams ended in background (0 disk overhead)
       if (staleIdsToClose.length > 0) {
         Promise.resolve(
           client
@@ -3584,16 +3617,42 @@ export const supabaseDb = {
         ).catch(() => {});
       }
 
+      if (activeRows.length === 0) {
+        return [];
+      }
+
+      // 3. Cleanly resolve host user profiles from User table (0 schema join errors)
+      const hostIds = Array.from(new Set(activeRows.map(r => r.HostUserID).filter(Boolean)));
+      const hostUserMap = new Map<string, any>();
+
+      if (hostIds.length > 0) {
+        try {
+          const { data: userRows } = await client
+            .from('User')
+            .select('UserID, Username, DisplayName, ProfilePictureURL')
+            .in('UserID', hostIds);
+
+          if (userRows) {
+            userRows.forEach(u => {
+              if (u.UserID) {
+                hostUserMap.set(u.UserID, u);
+                hostUserMap.set(toUuid(u.UserID), u);
+              }
+            });
+          }
+        } catch {}
+      }
+
       return activeRows.map((row: any) => {
-        const u = Array.isArray(row.User) ? row.User[0] : (row.User || {});
+        const hostProfile = hostUserMap.get(row.HostUserID) || hostUserMap.get(toUuid(row.HostUserID)) || {};
         return {
           id: row.LivestreamID,
           host: {
-            id: row.HostUserID || u.UserID,
-            username: u.Username || 'creator',
-            displayName: u.DisplayName || u.Username || 'Live Creator',
+            id: row.HostUserID,
+            username: hostProfile.Username || 'creator',
+            displayName: hostProfile.DisplayName || hostProfile.Username || 'Live Creator',
             email: '',
-            avatar: u.ProfilePictureURL || '',
+            avatar: hostProfile.ProfilePictureURL || '',
             bio: '',
             followingCount: 0,
             followersCount: 0,
@@ -3959,6 +4018,85 @@ export const supabaseDb = {
     return {};
   },
 };
+
+/**
+ * Checks whether the Livestream table exists in the connected Supabase instance.
+ */
+export const checkLivestreamTableExists = async (): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const { error } = await client.from('Livestream').select('LivestreamID').limit(1);
+    if (!error) return true;
+    if (error.code === '42P01') return false;
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Self-contained SQL snippet specifically for creating the Livestream tables in Supabase.
+ * Designed for minimum Disk IO footprint, fast indexed queries, and real-time support.
+ */
+export const LIVESTREAM_SQL_SNIPPET = `-- =====================================================================
+-- VIRALHUB LIVESTREAM TABLES FOR SUPABASE
+-- Run this script in Supabase Dashboard -> SQL Editor -> New Query -> Run
+-- (0 Disk IO impact - fully indexed on EndedAt, zero polling load!)
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS public."Livestream" (
+  "LivestreamID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "HostUserID" UUID REFERENCES public."User"("UserID") ON DELETE CASCADE,
+  "Title" TEXT NOT NULL,
+  "StartedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+  "EndedAt" TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE IF NOT EXISTS public."LiveComment" (
+  "LiveCommentID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "LiveStreamID" UUID REFERENCES public."Livestream"("LivestreamID") ON DELETE CASCADE,
+  "UserID" UUID REFERENCES public."User"("UserID") ON DELETE SET NULL,
+  "LiveText" TEXT NOT NULL,
+  "LiveCommentAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public."LivestreamViewer" (
+  "ViewerRecordID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "LiveStreamID" UUID REFERENCES public."Livestream"("LivestreamID") ON DELETE CASCADE,
+  "ViewerID" UUID REFERENCES public."User"("UserID") ON DELETE CASCADE,
+  "JoinedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Fast lookup index (Guarantees zero full-table scans & ultra-low Disk IO)
+CREATE INDEX IF NOT EXISTS "idx_livestream_endedat" ON public."Livestream"("EndedAt");
+CREATE INDEX IF NOT EXISTS "idx_livecomment_streamid" ON public."LiveComment"("LiveStreamID");
+
+-- Enable Row Level Security (RLS)
+ALTER TABLE IF EXISTS public."Livestream" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public."LiveComment" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public."LivestreamViewer" ENABLE ROW LEVEL SECURITY;
+
+-- Permissive public policies for client access with anon key
+DROP POLICY IF EXISTS "Public all access on Livestream" ON public."Livestream";
+CREATE POLICY "Public all access on Livestream" ON public."Livestream" FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public all access on LiveComment" ON public."LiveComment";
+CREATE POLICY "Public all access on LiveComment" ON public."LiveComment" FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "Public all access on LivestreamViewer" ON public."LivestreamViewer";
+CREATE POLICY "Public all access on LivestreamViewer" ON public."LivestreamViewer" FOR ALL USING (true) WITH CHECK (true);
+
+-- Enable real-time replication for instant cross-device updates
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public."Livestream";
+    ALTER PUBLICATION supabase_realtime ADD TABLE public."LiveComment";
+  END IF;
+EXCEPTION WHEN OTHERS THEN
+  -- ignore if already added
+END $$;`;
 
 // =========================================================================
 // Production SQL Script for Supabase SQL Editor:

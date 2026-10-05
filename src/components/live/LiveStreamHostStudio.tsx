@@ -8,7 +8,7 @@ import {
 import { Avatar } from '../common/Avatar';
 import { CanvasSourceTransform } from '../../types';
 import { liveBroadcastService } from '../../services/liveBroadcastService';
-import { supabaseDb, toUuid } from '../../lib/supabase';
+import { supabaseDb, toUuid, generateUuid } from '../../lib/supabase';
 import {
   Camera,
   Mic,
@@ -558,7 +558,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     if (gameCustomStream) {
       liveBroadcastService.setScreenStream(gameCustomStream, gameSource);
     }
-    const streamId = `stream_${toUuid(currentUser?.id || 'host')}_${Date.now()}`;
+    const streamId = generateUuid();
     if (currentUser) {
       liveBroadcastService.startBroadcasting(streamId, currentUser);
     }
@@ -566,12 +566,18 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     setMode('active');
   };
 
+  const activeStreamIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeStreamIdRef.current = mode === 'active' ? currentLiveStream.id : null;
+  }, [mode, currentLiveStream.id]);
+
   // Host Cleanup Watchdog: guarantees abandoned/closed streams are marked ended in Supabase
+  // Runs ONLY on real page unload/tab close or component unmount, NOT on re-render!
   useEffect(() => {
     const handleBeforeUnload = () => {
-      if (mode === 'active' && currentLiveStream.id) {
+      if (activeStreamIdRef.current) {
         liveBroadcastService.endBroadcasting();
-        supabaseDb.endLiveStream(currentLiveStream.id);
+        supabaseDb.endLiveStream(activeStreamIdRef.current);
       }
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -579,12 +585,12 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
-      if (mode === 'active' && currentLiveStream.id) {
+      if (activeStreamIdRef.current) {
         liveBroadcastService.endBroadcasting();
-        supabaseDb.endLiveStream(currentLiveStream.id);
+        supabaseDb.endLiveStream(activeStreamIdRef.current);
       }
     };
-  }, [mode, currentLiveStream.id]);
+  }, []);
 
   const handleEndLive = () => {
     liveBroadcastService.endBroadcasting();
@@ -599,6 +605,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     liveBroadcastService.setCameraStream(null, 'preset');
     liveBroadcastService.setScreenStream(null, 'genshin');
     setMobileEndConfirmOpen(false);
+    activeStreamIdRef.current = null;
     endHostLiveStream();
   };
 
