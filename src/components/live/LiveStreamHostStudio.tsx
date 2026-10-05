@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   LiveStreamCanvas,
-  LayoutMode,
   GamePreset,
   GoalWidgetConfig,
 } from './LiveStreamCanvas';
@@ -34,9 +33,20 @@ import {
   Info,
   Smile,
   LogOut,
-  Maximize2,
   ChevronDown,
   X,
+  RotateCcw,
+  Wand2,
+  Settings as SettingsIcon,
+  Heart,
+  Share2,
+  Shield,
+  Home,
+  Coins,
+  Edit3,
+  Award,
+  Gamepad2,
+  Check,
 } from 'lucide-react';
 
 interface LiveStreamHostStudioProps {
@@ -52,13 +62,30 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     startHostLiveStream,
     endHostLiveStream,
     sendLiveComment,
+    setActiveTab,
   } = useApp();
 
   const [mode, setMode] = useState<'setup' | 'active'>(initialMode);
 
+  // Automatic Mobile Viewport Detection (< 768px)
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth < 768;
+    }
+    return false;
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobileViewport(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Stream Info Fields (Editable before live; Locked read-only while live)
-  const [streamTitle, setStreamTitle] = useState(currentLiveStream.title || '');
-  const [streamTopic, setStreamTopic] = useState(currentLiveStream.topic || 'Gaming');
+  const [streamTitle, setStreamTitle] = useState(currentLiveStream.title || 'TikTok Live');
+  const [streamTopic, setStreamTopic] = useState(currentLiveStream.topic || 'Just Chatting');
   const [streamAbout, setStreamAbout] = useState(currentLiveStream.aboutMe || '');
 
   // Studio Display Mode: Portrait 9:16 (TikTok Mobile standard) vs Landscape 16:9 (Gaming/Desktop)
@@ -66,7 +93,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   const [showGrid, setShowGrid] = useState(false);
   const [showSafeArea, setShowSafeArea] = useState(false);
 
-  // Freeform Transform States for Canvas Sources (TikTok Live Studio Engine)
+  // Freeform Transform States for Canvas Sources
   const [cameraTransform, setCameraTransform] = useState<CanvasSourceTransform>({
     id: 'camera',
     name: 'Camera (Facecam)',
@@ -150,6 +177,47 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   // Chat auto-scroll anchor ref
   const commentsEndRef = useRef<HTMLDivElement>(null);
 
+  // Studio Controls Dropdown in Live Broadcast mode
+  const studioDropdownRef = useRef<HTMLDivElement>(null);
+  const [studioDropdownOpen, setStudioDropdownOpen] = useState(false);
+
+  // Mobile Device Camera Dedicated State
+  const mobileVideoRef = useRef<HTMLVideoElement>(null);
+  const [mobileFacingMode, setMobileFacingMode] = useState<'user' | 'environment'>('user');
+  const [mobileBeautyEnhance, setMobileBeautyEnhance] = useState(false);
+  const [mobileFilter, setMobileFilter] = useState<'none' | 'glow' | 'warm' | 'cool' | 'cyber'>('none');
+  const [mobileBannerDismissed, setMobileBannerDismissed] = useState(false);
+  const [mobileShowTitleModal, setMobileShowTitleModal] = useState(false);
+  const [mobileShowSettingsModal, setMobileShowSettingsModal] = useState(false);
+  const [mobileShowRewardsModal, setMobileShowRewardsModal] = useState(false);
+  const [mobileShowEffectsSheet, setMobileShowEffectsSheet] = useState(false);
+  const [mobileFloatingHearts, setMobileFloatingHearts] = useState<number[]>([]);
+  const [mobileEndConfirmOpen, setMobileEndConfirmOpen] = useState(false);
+
+  // Hook real camera to mobile video preview
+  useEffect(() => {
+    if (mobileVideoRef.current && cameraRealStream) {
+      mobileVideoRef.current.srcObject = cameraRealStream;
+    }
+  }, [cameraRealStream, isMobileViewport, mode]);
+
+  // Click outside handler for desktop studio dropdown
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        studioDropdownRef.current &&
+        !studioDropdownRef.current.contains(e.target as Node)
+      ) {
+        setStudioDropdownOpen(false);
+      }
+    };
+    if (studioDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [studioDropdownOpen]);
+
+  // Audio meter simulation
   useEffect(() => {
     const audioInterval = setInterval(() => {
       if (micActive) {
@@ -179,36 +247,49 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
   // Scroll to bottom when new chat messages arrive in live broadcast
   useEffect(() => {
-    if (mode === 'active' && liveActiveRightTab === 'chat') {
+    if (mode === 'active') {
       commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [currentLiveStream.messages.length, mode, liveActiveRightTab]);
 
-  // Studio Controls Dropdown in Live Broadcast mode
-  const studioDropdownRef = useRef<HTMLDivElement>(null);
-  const [studioDropdownOpen, setStudioDropdownOpen] = useState(false);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (
-        studioDropdownRef.current &&
-        !studioDropdownRef.current.contains(e.target as Node)
-      ) {
-        setStudioDropdownOpen(false);
+  // Toggle mobile camera flip (Front selfie / Back camera)
+  const handleToggleMobileCameraFacing = async () => {
+    const nextFacing = mobileFacingMode === 'user' ? 'environment' : 'user';
+    setMobileFacingMode(nextFacing);
+    if (navigator.mediaDevices?.getUserMedia) {
+      try {
+        if (cameraRealStream) {
+          cameraRealStream.getTracks().forEach(t => t.stop());
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: nextFacing },
+          audio: micActive,
+        });
+        setCameraRealStream(stream);
+        setCameraSource('webcam');
+        setCameraEnabled(true);
+      } catch {
+        setCameraTransform(prev => ({ ...prev, mirrored: !prev.mirrored }));
       }
-    };
-    if (studioDropdownOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
+    } else {
+      setCameraTransform(prev => ({ ...prev, mirrored: !prev.mirrored }));
     }
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [studioDropdownOpen]);
+  };
+
+  // Trigger floating heart on mobile
+  const handleTriggerMobileHeart = () => {
+    setMobileFloatingHearts(prev => [...prev, Date.now()]);
+    setTimeout(() => {
+      setMobileFloatingHearts(prev => prev.slice(1));
+    }, 2000);
+  };
 
   // Request physical webcam
   const handleEnableRealWebcam = async () => {
     try {
       if (navigator.mediaDevices?.getUserMedia) {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: { facingMode: mobileFacingMode },
           audio: micActive,
         });
         setCameraRealStream(stream);
@@ -216,8 +297,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         setCameraEnabled(true);
         setCameraTransform(prev => ({ ...prev, visible: true }));
       }
-    } catch (err) {
-      alert('Unable to access webcam. Keeping high-definition streamer camera preset.');
+    } catch {
       setCameraSource('preset');
       setCameraEnabled(true);
     }
@@ -240,9 +320,9 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     }
   };
 
-  // Quick Preset Layout Applicators
+  // Quick Preset Layout Applicators for desktop
   const applyPresetLayout = (
-    preset: 'split' | 'pip' | 'game_focus' | 'cam_focus' | 'screen_only' | 'cam_only'
+    preset: 'split' | 'pip' | 'game_focus' | 'cam_focus'
   ) => {
     if (preset === 'split') {
       setCameraTransform(prev => ({
@@ -379,6 +459,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     if (gameCustomStream) {
       gameCustomStream.getTracks().forEach(t => t.stop());
     }
+    setMobileEndConfirmOpen(false);
     endHostLiveStream();
   };
 
@@ -391,8 +472,33 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
   const QUICK_REACTION_EMOJIS = ['❤️', '🔥', '👏', '🎮', '💖', '✨', '👋', '💯'];
 
+  // Calculate CSS filters for mobile camera preview
+  const getCameraFilterStyle = () => {
+    let filter = '';
+    if (mobileBeautyEnhance) {
+      filter += 'brightness(1.08) contrast(1.04) saturate(1.1) ';
+    }
+    switch (mobileFilter) {
+      case 'glow':
+        filter += 'brightness(1.15) contrast(1.05) drop-shadow(0 0 8px rgba(255,0,122,0.25)) ';
+        break;
+      case 'warm':
+        filter += 'sepia(0.2) saturate(1.25) ';
+        break;
+      case 'cool':
+        filter += 'hue-rotate(180deg) saturate(0.9) ';
+        break;
+      case 'cyber':
+        filter += 'contrast(1.2) hue-rotate(290deg) saturate(1.4) ';
+        break;
+      default:
+        break;
+    }
+    return filter || undefined;
+  };
+
   // ==========================================================================
-  // SHARED COMPONENT: Scene Sources Layer Stack
+  // SHARED COMPONENT: Scene Sources Layer Stack (Desktop)
   // ==========================================================================
   const renderSceneSourcesStack = () => (
     <div className="bg-[#121218] rounded-3xl border border-neutral-800 p-4 shadow-xl space-y-3">
@@ -429,7 +535,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            {/* Mirror Toggle */}
             <button
               type="button"
               onClick={e => {
@@ -444,7 +549,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               <FlipHorizontal className="w-3.5 h-3.5" />
             </button>
 
-            {/* Lock Toggle */}
             <button
               type="button"
               onClick={e => {
@@ -459,7 +563,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               {cameraTransform.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
             </button>
 
-            {/* Visibility Toggle */}
             <button
               type="button"
               onClick={e => {
@@ -498,7 +601,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            {/* Lock Toggle */}
             <button
               type="button"
               onClick={e => {
@@ -513,7 +615,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               {screenTransform.locked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
             </button>
 
-            {/* Visibility Toggle */}
             <button
               type="button"
               onClick={e => {
@@ -530,7 +631,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
         </div>
 
-        {/* Source Item 3: Follower Goal Widget (Adjustable Widget) */}
+        {/* Source Item 3: Follower Goal Widget */}
         <div
           onClick={() => setSelectedSourceId('goal_bar')}
           className={`p-3 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
@@ -552,7 +653,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
 
           <div className="flex items-center gap-1 shrink-0">
-            {/* Toggle Widget */}
             <button
               type="button"
               onClick={e => {
@@ -601,10 +701,9 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   );
 
   // ==========================================================================
-  // SHARED COMPONENT: Selected Source Inspector (Camera, Screen, or Goal Widget)
+  // SHARED COMPONENT: Selected Source Inspector (Desktop)
   // ==========================================================================
   const renderSourceInspector = () => {
-    // 1. Goal Widget Inspector (Adjustable Widget Controls)
     if (selectedSourceId === 'goal_bar') {
       return (
         <div className="bg-[#121218] rounded-3xl border border-neutral-800 p-4 shadow-xl space-y-3.5">
@@ -636,9 +735,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 }
                 className="w-full h-1.5 bg-neutral-700 rounded-lg cursor-pointer accent-purple-400"
               />
-              <span className="text-[10px] text-neutral-500 mt-0.5 block">
-                Tip: You can also drag the widget directly on the monitor!
-              </span>
             </div>
 
             <div>
@@ -705,45 +801,11 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 />
               </div>
             </div>
-
-            <div>
-              <span className="text-[11px] font-semibold text-neutral-400 block mb-1.5">
-                Color Theme:
-              </span>
-              <div className="grid grid-cols-4 gap-1.5">
-                {[
-                  { id: 'pink', name: 'Pink', bg: 'bg-[#ff007a]' },
-                  { id: 'cyan', name: 'Cyan', bg: 'bg-cyan-400' },
-                  { id: 'purple', name: 'Purple', bg: 'bg-purple-500' },
-                  { id: 'gold', name: 'Gold', bg: 'bg-amber-400' },
-                ].map(th => (
-                  <button
-                    key={th.id}
-                    type="button"
-                    onClick={() =>
-                      setGoalWidgetConfig(prev => ({
-                        ...prev,
-                        theme: th.id as GoalWidgetConfig['theme'],
-                      }))
-                    }
-                    className={`py-1.5 px-2 rounded-xl text-[10px] font-bold border transition-all cursor-pointer flex items-center justify-center gap-1 ${
-                      goalWidgetConfig.theme === th.id
-                        ? 'border-white bg-white/10 text-white font-extrabold'
-                        : 'border-neutral-800 bg-[#181824] text-neutral-400 hover:text-white'
-                    }`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${th.bg}`} />
-                    <span>{th.name}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       );
     }
 
-    // 2. Camera or Screen Transform Inspector
     if (!activeSourceTransform) return null;
 
     return (
@@ -760,7 +822,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </span>
         </div>
 
-        {/* Quick Alignment Actions */}
         <div>
           <span className="text-[11px] font-semibold text-neutral-400 block mb-1.5">
             Quick Alignments:
@@ -812,7 +873,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
         </div>
 
-        {/* Width & Height Sliders */}
         <div className="space-y-2.5">
           <div>
             <div className="flex justify-between text-[11px] text-neutral-400 mb-1">
@@ -858,77 +918,12 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             />
           </div>
         </div>
-
-        {/* X & Y Coordinates */}
-        <div className="grid grid-cols-2 gap-2 pt-1 border-t border-neutral-800">
-          <div>
-            <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-              <span>Pos X:</span>
-              <span className="font-mono text-white">{activeSourceTransform.x}%</span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max={100 - activeSourceTransform.width}
-              value={activeSourceTransform.x}
-              onChange={e => updateActiveTransform({ x: Number(e.target.value) })}
-              className="w-full h-1 bg-neutral-700 rounded-lg cursor-pointer accent-[#ff007a]"
-            />
-          </div>
-
-          <div>
-            <div className="flex justify-between text-[10px] text-neutral-400 mb-1">
-              <span>Pos Y:</span>
-              <span className="font-mono text-white">{activeSourceTransform.y}%</span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max={100 - activeSourceTransform.height}
-              value={activeSourceTransform.y}
-              onChange={e => updateActiveTransform({ y: Number(e.target.value) })}
-              className="w-full h-1 bg-neutral-700 rounded-lg cursor-pointer accent-[#ff007a]"
-            />
-          </div>
-        </div>
-
-        {/* Border Glow Style */}
-        <div>
-          <span className="text-[11px] font-semibold text-neutral-400 block mb-1.5">
-            Border Glow:
-          </span>
-          <div className="grid grid-cols-4 gap-1.5">
-            {[
-              { id: 'none', label: 'None' },
-              { id: 'pink', label: 'Pink' },
-              { id: 'cyan', label: 'Cyan' },
-              { id: 'hairline', label: 'White' },
-            ].map(b => (
-              <button
-                key={b.id}
-                type="button"
-                onClick={() =>
-                  updateActiveTransform({
-                    borderStyle: b.id as CanvasSourceTransform['borderStyle'],
-                  })
-                }
-                className={`py-1 rounded-xl text-[10px] font-bold border transition-all cursor-pointer ${
-                  activeSourceTransform.borderStyle === b.id
-                    ? 'border-[#ff007a] bg-[#ff007a]/20 text-white font-bold'
-                    : 'border-neutral-800 bg-[#181824] text-neutral-400 hover:text-white'
-                }`}
-              >
-                {b.label}
-              </button>
-            ))}
-          </div>
-        </div>
       </div>
     );
   };
 
   // ==========================================================================
-  // SHARED COMPONENT: Audio Mixer Panel
+  // SHARED COMPONENT: Audio Mixer Panel (Desktop)
   // ==========================================================================
   const renderAudioMixer = () => (
     <div className="bg-[#121218] rounded-3xl border border-neutral-800 p-4 shadow-xl space-y-4 text-left">
@@ -944,7 +939,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         </span>
       </div>
 
-      {/* Channel 1: Microphone */}
       <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800 space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -962,7 +956,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </button>
         </div>
 
-        {/* Animated Peak Level Meter */}
         <div className="space-y-1">
           <div className="h-2 w-full bg-neutral-900 rounded-full overflow-hidden flex">
             <div
@@ -997,7 +990,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         />
       </div>
 
-      {/* Channel 2: System / Desktop Game Audio */}
       <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800 space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -1021,18 +1013,12 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </button>
         </div>
 
-        {/* Peak Meter */}
         <div className="space-y-1">
           <div className="h-2 w-full bg-neutral-900 rounded-full overflow-hidden flex">
             <div
               style={{ width: `${desktopMeterLevel}%` }}
               className="h-full bg-cyan-400 transition-all duration-100"
             />
-          </div>
-          <div className="flex justify-between text-[9px] text-neutral-500 font-mono">
-            <span>-40dB</span>
-            <span>-12dB</span>
-            <span>0dB</span>
           </div>
         </div>
 
@@ -1053,7 +1039,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   );
 
   // ==========================================================================
-  // SHARED COMPONENT: Locked Stream Info Details (Read-only during broadcast)
+  // SHARED COMPONENT: Locked Stream Info (Desktop)
   // ==========================================================================
   const renderLockedStreamInfo = () => (
     <div className="bg-[#121218] rounded-3xl border border-neutral-800 p-4 shadow-xl space-y-3.5 text-left">
@@ -1071,7 +1057,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
       </div>
 
       <div className="space-y-3">
-        {/* Stream Title */}
         <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800/80">
           <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
             Stream Title:
@@ -1081,7 +1066,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
         </div>
 
-        {/* Category / Topic */}
         <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800/80">
           <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
             Category / Topic:
@@ -1090,29 +1074,633 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             {streamTopic || 'General'}
           </div>
         </div>
-
-        {/* Stream Bio */}
-        <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800/80">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-neutral-400 mb-1">
-            Stream Bio / About:
-          </div>
-          <div className="text-xs text-neutral-300 leading-relaxed break-words whitespace-pre-wrap">
-            {streamAbout || 'Welcome to my stream! Enjoy the broadcast.'}
-          </div>
-        </div>
-
-        <div className="p-3 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-300 flex items-start gap-2">
-          <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
-          <span>
-            Stream metadata (Title, Category, Bio) cannot be edited while broadcasting to keep search indexing consistent. You can still adjust your layout, camera, screen, and overlays anytime!
-          </span>
-        </div>
       </div>
     </div>
   );
 
   // ==========================================================================
-  // MODE A: Live Studio Setup Workstation (Before Starting Live)
+  // 📱 MOBILE VIEW: MODE 1 DEVICE CAMERA SETUP (Matching Screenshot 1)
+  // ==========================================================================
+  if (isMobileViewport && mode === 'setup') {
+    return (
+      <div className="fixed inset-0 z-40 bg-black text-white flex flex-col justify-between overflow-hidden select-none">
+        {/* Fullscreen Camera Preview Background */}
+        <div className="absolute inset-0 z-0 bg-neutral-900 overflow-hidden">
+          {cameraSource === 'webcam' && cameraRealStream ? (
+            <video
+              ref={mobileVideoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{ filter: getCameraFilterStyle() }}
+              className={`w-full h-full object-cover ${
+                mobileFacingMode === 'user' ? 'scale-x-[-1]' : ''
+              }`}
+            />
+          ) : (
+            <div
+              style={{ filter: getCameraFilterStyle() }}
+              className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-[#1c1c28] via-[#101018] to-[#07070d] text-center p-6"
+            >
+              <div className="w-24 h-24 rounded-full bg-pink-500/10 border border-[#ff007a]/30 flex items-center justify-center mb-4 shadow-[0_0_30px_rgba(255,0,122,0.3)]">
+                <Camera className="w-10 h-10 text-[#ff007a]" />
+              </div>
+              <p className="text-sm font-bold text-white mb-1">Mobile Camera Preview</p>
+              <p className="text-xs text-neutral-400 max-w-xs mb-4">
+                Tap Flip or Enable Camera to activate your device selfie/rear lens
+              </p>
+              <button
+                type="button"
+                onClick={handleEnableRealWebcam}
+                className="px-4 py-2 rounded-full bg-[#ff007a] text-white text-xs font-bold shadow-lg active:scale-95"
+              >
+                Enable Device Camera
+              </button>
+            </div>
+          )}
+          {/* Subtle gradient vignette */}
+          <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/85 pointer-events-none" />
+        </div>
+
+        {/* Top Floating Action Row (Screenshot 1 top) */}
+        <div className="relative z-10 p-3 pt-4 flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            {/* Close Button */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('live')}
+              className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 active:scale-90 transition-transform cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {/* Scaled LIVE Rewards Badge */}
+            <button
+              type="button"
+              onClick={() => setMobileShowRewardsModal(true)}
+              className="flex items-center gap-1.5 py-1 px-3 rounded-full bg-black/45 backdrop-blur-md border border-white/15 text-xs font-bold text-white shadow-md active:scale-95 cursor-pointer"
+            >
+              <Coins className="w-4 h-4 text-emerald-400" />
+              <span>Scaled LIVE Rewards</span>
+            </button>
+
+            {/* Top Right Utilities */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMobileShowSettingsModal(true)}
+                className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 active:scale-90 cursor-pointer"
+              >
+                <Shield className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('home')}
+                className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 active:scale-90 cursor-pointer"
+              >
+                <Home className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          {/* Dismissible TikTok Banner (Screenshot 1) */}
+          {!mobileBannerDismissed && (
+            <div className="relative mx-1 p-2.5 bg-black/55 backdrop-blur-md rounded-2xl border border-white/10 text-white flex items-center justify-between shadow-lg">
+              <div className="flex items-center gap-2.5 min-w-0 pr-6">
+                <span className="text-xl">✈️</span>
+                <span className="text-[11px] font-medium leading-snug">
+                  Continue your progress and get the full LIVE experience
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileBannerDismissed(true)}
+                className="absolute top-2 right-2 text-neutral-400 hover:text-white p-1 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Middle-Right TikTok Quick Tool Icons Grid (Screenshot 1) */}
+        <div className="relative z-10 px-4 flex flex-col items-center">
+          <div className="w-full max-w-sm grid grid-cols-5 gap-y-3 gap-x-2 text-center my-auto pb-3">
+            {/* 1. Flip Camera */}
+            <button
+              type="button"
+              onClick={handleToggleMobileCameraFacing}
+              className="flex flex-col items-center gap-1 group active:scale-90 transition-transform cursor-pointer"
+            >
+              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
+                <RotateCcw className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Flip</span>
+            </button>
+
+            {/* 2. Enhance */}
+            <button
+              type="button"
+              onClick={() => setMobileBeautyEnhance(!mobileBeautyEnhance)}
+              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+            >
+              <div
+                className={`w-11 h-11 rounded-full backdrop-blur-md border flex items-center justify-center shadow-md ${
+                  mobileBeautyEnhance
+                    ? 'bg-[#ff007a] border-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.5)]'
+                    : 'bg-black/45 border-white/15 text-white'
+                }`}
+              >
+                <Wand2 className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Enhance</span>
+            </button>
+
+            {/* 3. Effects */}
+            <button
+              type="button"
+              onClick={() => setMobileShowEffectsSheet(true)}
+              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+            >
+              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-pink-400 shadow-md">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Effects</span>
+            </button>
+
+            {/* 4. Settings */}
+            <button
+              type="button"
+              onClick={() => setMobileShowSettingsModal(true)}
+              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+            >
+              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
+                <SettingsIcon className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Settings</span>
+            </button>
+
+            {/* 5. Fan Club */}
+            <button
+              type="button"
+              onClick={() => setMobileShowRewardsModal(true)}
+              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+            >
+              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
+                <Heart className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Fan Club</span>
+            </button>
+
+            {/* 6. Service+ */}
+            <button
+              type="button"
+              onClick={() => alert('ViralHub Creator Service: 24/7 Live Streamer Support & Guidelines')}
+              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+            >
+              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
+                <Award className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Service+</span>
+            </button>
+
+            {/* 7. Interact */}
+            <button
+              type="button"
+              onClick={() => alert('Viewer Interaction: Live polls and Q&A will be enabled during your broadcast.')}
+              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+            >
+              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
+                <MessageSquare className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Interact</span>
+            </button>
+
+            {/* 8. Share */}
+            <button
+              type="button"
+              onClick={() => {
+                if (navigator.share) {
+                  navigator.share({ title: streamTitle, text: 'Join my live broadcast on ViralHub!' });
+                } else {
+                  alert('Stream link copied to clipboard!');
+                }
+              }}
+              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+            >
+              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
+                <Share2 className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Share</span>
+            </button>
+
+            {/* 9. Game center */}
+            <button
+              type="button"
+              onClick={() => alert('Live Game Center: Mini-games will appear for your chat viewers.')}
+              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+            >
+              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
+                <Gamepad2 className="w-5 h-5" />
+              </div>
+              <span className="text-[11px] font-medium text-white/90 drop-shadow">Game center</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Bottom Section: Stream Title Card + Big Red "Go LIVE" Button + Mode Pill */}
+        <div className="relative z-10 px-4 pb-4 pt-2 flex flex-col gap-3">
+          {/* Stream Title Card (Screenshot 1: Avatar + Title with edit pencil) */}
+          <div
+            onClick={() => setMobileShowTitleModal(true)}
+            className="flex items-center gap-2.5 p-2 bg-black/50 backdrop-blur-md rounded-2xl border border-white/15 cursor-pointer active:scale-98 transition-transform"
+          >
+            <Avatar src={currentUser?.avatar} alt={currentUser?.displayName} size="sm" />
+            <div className="flex-1 min-w-0 text-left">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs font-bold text-white truncate">
+                  {streamTitle || 'TikTok Live'}
+                </span>
+                <Edit3 className="w-3.5 h-3.5 text-[#ff007a]" />
+              </div>
+              <span className="text-[10px] text-neutral-300 font-medium">
+                {streamTopic} · Tap to edit title & topic
+              </span>
+            </div>
+          </div>
+
+          {/* Big Hot Pink / Red "Go LIVE" Button (Screenshot 1) */}
+          <button
+            type="button"
+            onClick={() => handleProceedToGoLive()}
+            className="w-full py-3.5 px-6 rounded-full bg-gradient-to-r from-[#ff007a] via-[#ff1493] to-[#e6006c] hover:opacity-95 text-white font-extrabold text-base shadow-[0_0_30px_rgba(255,0,122,0.6)] active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2"
+          >
+            <span>Go LIVE</span>
+          </button>
+
+          {/* Bottom Mode Switcher: Dedicated Mode 1 "Device camera" (as requested) */}
+          <div className="flex items-center justify-center pt-1 text-xs">
+            <span className="font-extrabold text-white flex items-center gap-1.5 bg-white/15 px-4 py-1 rounded-full border border-white/20">
+              <Camera className="w-3.5 h-3.5 text-[#ff007a]" />
+              <span>Device camera</span>
+            </span>
+          </div>
+        </div>
+
+        {/* Modal: Edit Stream Title on Mobile */}
+        {mobileShowTitleModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 animate-fadeIn">
+            <div className="bg-[#121218] border border-neutral-800 rounded-3xl p-5 w-full max-w-sm text-left space-y-4">
+              <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
+                <h3 className="text-sm font-bold text-white">Edit Live Stream Title</h3>
+                <button onClick={() => setMobileShowTitleModal(false)} className="text-neutral-400 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-neutral-300 block mb-1">Title:</label>
+                <input
+                  type="text"
+                  maxLength={60}
+                  value={streamTitle}
+                  onChange={e => setStreamTitle(e.target.value)}
+                  placeholder="e.g. Chatting with viewers & Q&A!"
+                  className="w-full bg-[#181824] text-xs text-white p-3 rounded-xl border border-neutral-700 outline-none focus:border-[#ff007a]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-neutral-300 block mb-1.5">Topic:</label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {['Just Chatting', 'Gaming', 'Music', 'Vlog', 'Beauty', 'Dance'].map(t => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setStreamTopic(t)}
+                      className={`py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                        streamTopic === t
+                          ? 'bg-[#ff007a]/20 border-[#ff007a] text-white'
+                          : 'bg-[#181824] border-neutral-800 text-neutral-400'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setMobileShowTitleModal(false)}
+                className="w-full py-2.5 rounded-xl bg-[#ff007a] text-white font-bold text-xs"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Visual Effects Sheet on Mobile */}
+        {mobileShowEffectsSheet && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end justify-center p-3 animate-fadeIn">
+            <div className="bg-[#121218] border border-neutral-800 rounded-3xl p-5 w-full max-w-sm text-left space-y-4">
+              <div className="flex justify-between items-center border-b border-neutral-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-[#ff007a]" />
+                  <h3 className="text-sm font-bold text-white">Visual Camera Effects</h3>
+                </div>
+                <button onClick={() => setMobileShowEffectsSheet(false)} className="text-neutral-400 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  { id: 'none', label: 'Natural' },
+                  { id: 'glow', label: 'Radiant Glow' },
+                  { id: 'warm', label: 'Golden Warm' },
+                  { id: 'cool', label: 'Cyber Cool' },
+                  { id: 'cyber', label: 'Vibrant' },
+                ].map(f => (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => {
+                      setMobileFilter(f.id as typeof mobileFilter);
+                      setMobileShowEffectsSheet(false);
+                    }}
+                    className={`p-3 rounded-2xl border text-xs font-bold transition-all ${
+                      mobileFilter === f.id
+                        ? 'bg-[#ff007a]/20 border-[#ff007a] text-white'
+                        : 'bg-[#181824] border-neutral-800 text-neutral-400'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal: Scaled LIVE Rewards on Mobile */}
+        {mobileShowRewardsModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 animate-fadeIn">
+            <div className="bg-[#121218] border border-neutral-800 rounded-3xl p-5 w-full max-w-sm text-left space-y-3">
+              <div className="flex justify-between items-center border-b border-neutral-800 pb-2">
+                <div className="flex items-center gap-2">
+                  <Coins className="w-4 h-4 text-emerald-400" />
+                  <h3 className="text-sm font-bold text-white">Scaled LIVE Rewards</h3>
+                </div>
+                <button onClick={() => setMobileShowRewardsModal(false)} className="text-neutral-400 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-xs text-neutral-300 leading-relaxed">
+                Earn diamond gifts and tips directly from your chat viewers while you broadcast live with device camera!
+              </p>
+              <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800 flex justify-between items-center">
+                <span className="text-xs text-neutral-400 font-semibold">Creator Level:</span>
+                <span className="text-xs font-bold text-emerald-400">Level 1 Streamer</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileShowRewardsModal(false)}
+                className="w-full py-2.5 rounded-xl bg-neutral-800 text-white font-bold text-xs"
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // 📱 MOBILE VIEW: MODE 1 DEVICE CAMERA ACTIVE BROADCAST (While Started Live)
+  // ==========================================================================
+  if (isMobileViewport && mode === 'active') {
+    return (
+      <div className="fixed inset-0 z-40 bg-black text-white flex flex-col justify-between overflow-hidden select-none">
+        {/* Fullscreen Live Camera Background */}
+        <div className="absolute inset-0 z-0 bg-neutral-950 overflow-hidden">
+          {cameraSource === 'webcam' && cameraRealStream ? (
+            <video
+              ref={mobileVideoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{ filter: getCameraFilterStyle() }}
+              className={`w-full h-full object-cover ${
+                mobileFacingMode === 'user' ? 'scale-x-[-1]' : ''
+              }`}
+            />
+          ) : (
+            <div
+              style={{ filter: getCameraFilterStyle() }}
+              className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-b from-[#1a1a26] via-[#101018] to-[#07070e]"
+            >
+              <div className="w-20 h-20 rounded-full bg-pink-500/20 border border-[#ff007a]/40 flex items-center justify-center mb-3">
+                <Camera className="w-8 h-8 text-[#ff007a]" />
+              </div>
+              <span className="text-sm font-bold text-white">Live Broadcast On Air</span>
+              <span className="text-xs text-neutral-400 mt-0.5">Device Camera Live Feed</span>
+            </div>
+          )}
+          {/* Subtle gradient vignette */}
+          <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-transparent to-black/80 pointer-events-none" />
+        </div>
+
+        {/* Top Header Overlay: Host avatar + Timer + Viewers + End Button */}
+        <div className="relative z-20 p-3 pt-4 flex items-center justify-between">
+          {/* Host info badge */}
+          <div className="flex items-center gap-2 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 shadow-md">
+            <Avatar src={currentUser?.avatar} alt={currentUser?.displayName} size="xs" />
+            <div className="text-left">
+              <div className="text-xs font-bold text-white truncate max-w-[110px]">
+                {currentUser?.displayName || 'Host'}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                <span className="text-[10px] text-red-300 font-mono font-bold">
+                  {formatTimer(elapsedSeconds)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Viewers & End button */}
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-white text-xs font-bold">
+              <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse" />
+              <span>{currentLiveStream.viewers.length}</span>
+            </div>
+
+            {/* End Button */}
+            <button
+              type="button"
+              onClick={() => setMobileEndConfirmOpen(true)}
+              className="py-1.5 px-3.5 rounded-full bg-red-600/90 hover:bg-red-600 text-white font-extrabold text-xs shadow-md active:scale-95 cursor-pointer"
+            >
+              End
+            </button>
+          </div>
+        </div>
+
+        {/* Floating Heart Animations */}
+        <div className="absolute right-4 bottom-20 z-30 pointer-events-none flex flex-col items-center">
+          {mobileFloatingHearts.map(timestamp => (
+            <div
+              key={timestamp}
+              className="animate-floatHeart text-2xl text-[#ff007a] mb-2 drop-shadow-lg"
+            >
+              ❤️
+            </div>
+          ))}
+        </div>
+
+        {/* Floating Semi-Transparent Live Comments Stream (Screenshot overlay style) */}
+        <div className="relative z-20 px-3 pb-2 flex flex-col justify-end min-h-0 flex-1">
+          <div className="max-h-56 overflow-y-auto space-y-1.5 pr-2 max-w-[85%] text-left pointer-events-auto scrollbar-none">
+            {currentLiveStream.messages.slice(-12).map(msg => {
+              if (msg.isSystemEvent) {
+                return (
+                  <div
+                    key={msg.id}
+                    className="bg-black/45 backdrop-blur-md text-[11px] text-amber-300 font-medium px-2.5 py-1 rounded-xl w-fit shadow-md flex items-center gap-1.5 border border-white/5"
+                  >
+                    <Sparkles className="w-3 h-3 text-[#ff007a] shrink-0" />
+                    <span>
+                      <span className="font-bold text-white">{msg.displayName} </span>
+                      {msg.text}
+                    </span>
+                  </div>
+                );
+              }
+
+              const isHostMsg =
+                msg.userId === currentUser?.id ||
+                msg.displayName === currentUser?.displayName;
+
+              return (
+                <div
+                  key={msg.id}
+                  className="bg-black/55 backdrop-blur-md text-white rounded-2xl px-3 py-1.5 border border-white/10 flex items-start gap-2 shadow-md"
+                >
+                  <Avatar src={msg.avatar} alt={msg.displayName} size="xs" className="mt-0.5 shrink-0" />
+                  <div className="min-w-0 text-left">
+                    <div className="flex items-center gap-1">
+                      <span className="text-[11px] font-bold text-[#ff007a] truncate">
+                        {msg.displayName}
+                      </span>
+                      {isHostMsg && (
+                        <span className="bg-[#ff007a] text-white text-[8px] font-black px-1 py-0.2 rounded-full uppercase">
+                          HOST
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-xs text-white/95 break-words leading-tight">
+                      {msg.text}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={commentsEndRef} />
+          </div>
+
+          {/* Floating Bottom Host Action Bar */}
+          <div className="pt-2 flex items-center gap-2 pointer-events-auto">
+            {/* Live Chat input */}
+            <form
+              onSubmit={handleHostSendChat}
+              className="flex-1 flex items-center gap-2 bg-black/60 backdrop-blur-md rounded-full px-3.5 py-2 border border-white/20 focus-within:border-[#ff007a] shadow-lg"
+            >
+              <input
+                type="text"
+                placeholder="Add a comment..."
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                className="flex-1 bg-transparent text-xs text-white placeholder-white/60 outline-none"
+              />
+              <button
+                type="submit"
+                disabled={!chatInput.trim()}
+                className="text-[#ff007a] hover:text-[#ff3399] disabled:opacity-30 p-1 cursor-pointer transition-colors"
+              >
+                <Send className="w-3.5 h-3.5" />
+              </button>
+            </form>
+
+            {/* Quick Action Icons: Flip, Mic, Heart */}
+            <button
+              type="button"
+              onClick={handleToggleMobileCameraFacing}
+              className="p-2.5 rounded-full bg-black/60 backdrop-blur-md text-white border border-white/15 active:scale-90 cursor-pointer shadow-md"
+              title="Flip Camera"
+            >
+              <RotateCcw className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setMicActive(!micActive)}
+              className={`p-2.5 rounded-full backdrop-blur-md border active:scale-90 cursor-pointer shadow-md ${
+                micActive
+                  ? 'bg-black/60 border-white/15 text-white'
+                  : 'bg-red-500/80 border-red-500 text-white'
+              }`}
+              title="Mute/Unmute Mic"
+            >
+              <Mic className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTriggerMobileHeart}
+              className="p-2.5 rounded-full bg-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.5)] active:scale-90 cursor-pointer"
+              title="Send Love"
+            >
+              <Heart className="w-4 h-4 fill-white" />
+            </button>
+          </div>
+        </div>
+
+        {/* End Live Confirmation Modal */}
+        {mobileEndConfirmOpen && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-[#121218] border border-neutral-800 rounded-3xl p-5 w-full max-w-xs text-center space-y-4">
+              <h3 className="text-base font-bold text-white">End live broadcast?</h3>
+              <p className="text-xs text-neutral-400">
+                Are you sure you want to end your live stream? Viewers will be notified that the stream has ended.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMobileEndConfirmOpen(false)}
+                  className="flex-1 py-2.5 rounded-xl bg-neutral-800 text-neutral-300 font-bold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleEndLive}
+                  className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-red-600 to-[#d00062] text-white font-bold text-xs"
+                >
+                  End Live
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ==========================================================================
+  // 💻 DESKTOP VIEW: MODE A - Setup Workstation (Screen width >= 768px)
   // ==========================================================================
   if (mode === 'setup') {
     return (
@@ -1132,6 +1720,17 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
 
           <div className="flex items-center gap-2 text-xs">
+            {/* Switch to Mobile View Preview button */}
+            <button
+              type="button"
+              onClick={() => setIsMobileViewport(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#181824] hover:bg-[#222234] border border-neutral-700 text-neutral-300 hover:text-white transition-colors cursor-pointer text-xs"
+              title="Preview TikTok Mobile Layout"
+            >
+              <Smartphone className="w-3.5 h-3.5 text-[#ff007a]" />
+              <span>Mobile View</span>
+            </button>
+
             {/* Aspect Ratio Switcher */}
             <div className="flex items-center bg-[#181824] p-1 rounded-xl border border-neutral-800">
               <button
@@ -1193,13 +1792,11 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
         {/* 3-COLUMN WORKSTATION */}
         <div className="w-full max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-4">
-          {/* COLUMN 1: SCENE SOURCES & TRANSFORM INSPECTOR (3 Cols) */}
           <div className="lg:col-span-3 flex flex-col gap-4 text-left">
             {renderSceneSourcesStack()}
             {renderSourceInspector()}
           </div>
 
-          {/* COLUMN 2: CENTRAL LIVE MONITOR / BROADCAST STAGE (6 Cols) */}
           <div className="lg:col-span-6 flex flex-col items-center">
             <div className="w-full flex flex-col items-center bg-[#0a0a0f] p-3 sm:p-4 rounded-[32px] border border-neutral-800/90 shadow-2xl relative">
               <div className="w-full flex items-center justify-between pb-2.5 px-2 text-[11px] text-neutral-400 font-mono">
@@ -1216,7 +1813,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 </div>
               </div>
 
-              {/* The Live Interactive Canvas Viewport */}
               <div
                 className={`w-full relative transition-all duration-300 ${
                   canvasAspectRatio === '16:9'
@@ -1254,7 +1850,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 />
               </div>
 
-              {/* Canvas Bottom Action Bar with 1-Click Studio Layout Presets */}
               <div className="w-full mt-3 pt-3 border-t border-neutral-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
                 <span className="text-neutral-400 font-medium">Layout Presets:</span>
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -1291,10 +1886,8 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             </div>
           </div>
 
-          {/* COLUMN 3: STREAM DETAILS & AUDIO MIXER (3 Cols) */}
           <div className="lg:col-span-3 flex flex-col gap-4 text-left">
             <div className="bg-[#121218] rounded-3xl border border-neutral-800 p-4 shadow-xl space-y-4">
-              {/* Studio Segmented Tabs */}
               <div className="grid grid-cols-3 gap-1 p-1 bg-[#181824] rounded-2xl border border-neutral-800">
                 <button
                   type="button"
@@ -1331,7 +1924,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 </button>
               </div>
 
-              {/* TAB 1: STREAM DETAILS */}
               {rightStudioTab === 'details' && (
                 <div className="space-y-3.5">
                   <div>
@@ -1397,10 +1989,8 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 </div>
               )}
 
-              {/* TAB 2: AUDIO MIXER DOCK */}
               {rightStudioTab === 'audio' && renderAudioMixer()}
 
-              {/* TAB 3: BROADCAST OVERLAYS */}
               {rightStudioTab === 'overlays' && (
                 <div className="space-y-3">
                   <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider block">
@@ -1429,7 +2019,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 </div>
               )}
 
-              {/* Hot Pink "Go LIVE" Button */}
               <div className="pt-3 border-t border-neutral-800/80">
                 <button
                   type="button"
@@ -1448,12 +2037,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   }
 
   // ==========================================================================
-  // MODE B: REDESIGNED ACTIVE BROADCAST WORKSTATION (When Host Started Live)
-  //
-  // - Host CAN still edit LIVE LAYOUT (camera, screen, presets, aspect ratio, audio)
-  // - Details like "Title", "Category", and "Stream Bio" are locked (read-only)
-  // - Host CAN see live comments and chat with viewers
-  // - Follower Goal Widget is fully adjustable (position, width, title, theme)
+  // 💻 DESKTOP VIEW: MODE B - Active Live Broadcast Workstation (Screen width >= 768px)
   // ==========================================================================
   return (
     <div className="flex-1 w-full bg-[#0c0c12] text-white p-3 sm:p-5 select-none animate-fadeIn flex flex-col">
@@ -1469,7 +2053,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             </span>
           </div>
 
-          {/* Locked Stream Title & Category Badge */}
           <div className="flex items-center gap-2 min-w-0">
             <span className="font-bold text-white text-xs sm:text-sm truncate max-w-[200px] sm:max-w-xs">
               {streamTitle || 'Live Broadcast'}
@@ -1489,7 +2072,18 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
         {/* Center/Right: Dropdown + Layout View Controls + Viewers + End Live */}
         <div className="flex items-center gap-2 text-xs">
-          {/* Studio Controls Dropdown Trigger (Sources, Audio Mixer, Stream Details) */}
+          {/* Switch to Mobile View Preview button */}
+          <button
+            type="button"
+            onClick={() => setIsMobileViewport(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#181824] hover:bg-[#222234] border border-neutral-700 text-neutral-300 hover:text-white transition-colors cursor-pointer text-xs"
+            title="Preview TikTok Mobile Layout"
+          >
+            <Smartphone className="w-3.5 h-3.5 text-[#ff007a]" />
+            <span>Mobile View</span>
+          </button>
+
+          {/* Studio Controls Dropdown Trigger */}
           <div className="relative" ref={studioDropdownRef}>
             <button
               type="button"
@@ -1512,7 +2106,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             {/* Dropdown Menu Overlay */}
             {studioDropdownOpen && (
               <div className="absolute right-0 sm:left-0 top-full mt-2 w-[340px] sm:w-[380px] max-h-[80vh] overflow-y-auto bg-[#101018]/98 backdrop-blur-xl border border-neutral-700/90 rounded-3xl p-4 shadow-2xl z-50 animate-fadeIn space-y-4 text-left">
-                {/* Dropdown Header */}
                 <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
                   <div className="flex items-center gap-2">
                     <Sliders className="w-4 h-4 text-[#ff007a]" />
@@ -1529,7 +2122,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   </button>
                 </div>
 
-                {/* Tabs: Sources | Audio Mixer | Stream Details */}
                 <div className="grid grid-cols-3 gap-1 p-1 bg-[#181824] rounded-2xl border border-neutral-800">
                   <button
                     type="button"
@@ -1566,7 +2158,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   </button>
                 </div>
 
-                {/* Dropdown Content */}
                 {liveActiveLeftTab === 'layout' && (
                   <div className="space-y-4">
                     {renderSceneSourcesStack()}
@@ -1655,9 +2246,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
       {/* Main Live Workstation: Wide Broadcast Monitor Stage (8 cols) + Compact Comments Dock (4 cols) */}
       <div className="w-full max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1 items-stretch min-h-0">
-        {/* =========================================================================
-            BROADCAST STAGE (8 Cols on desktop): Immersive Live Monitor Canvas
-            ========================================================================= */}
+        {/* Broadcast Stage (8 Cols) */}
         <div className="lg:col-span-8 flex flex-col min-h-0">
           <div className="w-full h-full flex flex-col justify-between bg-[#0a0a0f] p-3 sm:p-4 rounded-[32px] border border-neutral-800/90 shadow-2xl relative min-h-0">
             <div className="w-full flex items-center justify-between pb-2 px-2 text-[11px] text-neutral-400 font-mono shrink-0">
@@ -1676,7 +2265,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               </div>
             </div>
 
-            {/* The Live Interactive Canvas Viewport */}
             <div
               className={`w-full relative transition-all duration-300 my-auto ${
                 canvasAspectRatio === '16:9'
@@ -1714,7 +2302,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               />
             </div>
 
-            {/* Canvas Bottom Action Bar with 1-Click Studio Layout Presets */}
             <div className="w-full mt-2 pt-2.5 border-t border-neutral-800/80 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
               <span className="text-neutral-400 font-medium">Layout Presets:</span>
               <div className="flex flex-wrap items-center gap-1.5">
@@ -1751,9 +2338,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
         </div>
 
-        {/* =========================================================================
-            LIVE COMMENTS & VIEWERS (4 Cols on desktop): Pinned cleanly, NO excess below
-            ========================================================================= */}
+        {/* Live Comments & Viewers (4 Cols) */}
         <div className="lg:col-span-4 flex flex-col text-left min-h-0">
           <div className="bg-[#121218] rounded-3xl border border-neutral-800 p-4 w-full h-full flex flex-col justify-between shadow-xl min-h-0">
             {/* Header Tabs: Live Comments vs Viewers */}
@@ -1788,7 +2373,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             {/* TAB 1: LIVE COMMENTS STREAM */}
             {liveActiveRightTab === 'chat' && (
               <div className="flex-1 min-h-0 flex flex-col justify-between">
-                {/* Real-time Comments List - flex-1 min-h-0 overflow-y-auto occupies available height */}
                 <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-2">
                   {currentLiveStream.messages.length === 0 ? (
                     <div className="text-center py-12 text-neutral-500 text-xs flex flex-col items-center gap-2">
@@ -1853,9 +2437,8 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   <div ref={commentsEndRef} />
                 </div>
 
-                {/* Bottom Section: Quick Reaction Emojis & Host Chat Input - NO excess below */}
+                {/* Bottom Section: Quick Reaction Emojis & Host Chat Input */}
                 <div className="shrink-0 pt-2.5 border-t border-neutral-800 mt-2">
-                  {/* Quick Reaction Emojis for Host */}
                   <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 mb-1.5 scrollbar-none">
                     <span className="text-[10px] text-neutral-500 font-semibold shrink-0">React:</span>
                     {QUICK_REACTION_EMOJIS.map(emoji => (
@@ -1871,7 +2454,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                     ))}
                   </div>
 
-                  {/* Host Live Chat input */}
                   <form onSubmit={handleHostSendChat} className="flex items-center gap-2">
                     <div className="flex-1 flex items-center gap-2 bg-[#181824] rounded-2xl px-3 py-2 border border-neutral-700 focus-within:border-[#ff007a]">
                       <input
