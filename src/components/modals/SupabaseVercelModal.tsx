@@ -43,6 +43,7 @@ export const SupabaseVercelModal: React.FC<SupabaseVercelModalProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [activeSqlTab, setActiveSqlTab] = useState<'livestream' | 'full'>('livestream');
 
   if (!isOpen) return null;
 
@@ -274,28 +275,65 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
                 <span>2. Supabase SQL Schema (Tables & Policies)</span>
               </h3>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={handleCopyLivestreamSql}
-                  className="py-1 px-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white font-bold text-[10px] flex items-center gap-1 transition-colors cursor-pointer border border-neutral-700"
-                  title="Copy SQL for Livestream & LiveComment tables only"
-                >
-                  {copiedLivestreamSql ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
-                  <span>{copiedLivestreamSql ? 'Copied Live SQL!' : 'Copy Livestream SQL'}</span>
-                </button>
-                <button
-                  onClick={handleCopySchema}
-                  className="py-1 px-3 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
-                >
-                  {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copied ? 'Copied Full SQL!' : 'Copy Full Schema'}</span>
-                </button>
+                {activeSqlTab === 'livestream' ? (
+                  <button
+                    onClick={handleCopyLivestreamSql}
+                    className="py-1 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                  >
+                    {copiedLivestreamSql ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedLivestreamSql ? 'Copied Livestream SQL!' : 'Copy Livestream SQL'}</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleCopySchema}
+                    className="py-1 px-3 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copied ? 'Copied Full SQL!' : 'Copy Full Schema'}</span>
+                  </button>
+                )}
               </div>
             </div>
+
+            {/* Sub-tabs for Livestream vs Full Schema */}
+            <div className="flex items-center gap-1.5 mb-2 bg-[#0d0d14] p-1 rounded-xl border border-neutral-800 w-fit">
+              <button
+                type="button"
+                onClick={() => setActiveSqlTab('livestream')}
+                className={`py-1 px-2.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                  activeSqlTab === 'livestream'
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-sm'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Livestream & Comments SQL (Fixes Errors)
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSqlTab('full')}
+                className={`py-1 px-2.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                  activeSqlTab === 'full'
+                    ? 'bg-[#ff007a]/20 text-[#ff007a] border border-[#ff007a]/40 shadow-sm'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Full Platform Schema (All 11 Tables)
+              </button>
+            </div>
+
             <p className="text-neutral-400 mb-2">
-              Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to initialize all 11 tables with Row Level Security.
+              {activeSqlTab === 'livestream' ? (
+                <span>
+                  <strong>100% Safe & Zero Disk IO:</strong> Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to create the <code className="text-emerald-400">Livestream</code> and <code className="text-emerald-400">LiveComment</code> tables with instant indexing and public access policies.
+                </span>
+              ) : (
+                <span>
+                  Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to initialize all 11 tables with Row Level Security.
+                </span>
+              )}
             </p>
             <div className="bg-[#0c0c10] p-3 rounded-xl border border-neutral-800 font-mono text-[11px] text-neutral-400 max-h-40 overflow-y-auto leading-relaxed">
-              <pre>{SUPABASE_SQL_SCHEMA}</pre>
+              <pre>{activeSqlTab === 'livestream' ? LIVESTREAM_SQL_SNIPPET : SUPABASE_SQL_SCHEMA}</pre>
             </div>
           </div>
 

@@ -4477,9 +4477,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
             } catch {}
           })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'Livestream' }, () => {
-            refreshActiveLiveStreams();
-          })
           .subscribe();
 
         globalLiveStreamsChannelRef.current = chan;
