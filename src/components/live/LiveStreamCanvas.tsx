@@ -36,6 +36,8 @@ export interface LiveStreamCanvasProps {
   gameSource?: GamePreset;
   gameCustomStream?: MediaStream | null;
   cameraRealStream?: MediaStream | null;
+  compositeStream?: MediaStream | null;
+  snapshotUrl?: string | null;
   showOverlays?: boolean;
   showMusicBanner?: boolean;
   showChatOverlay?: boolean;
@@ -71,6 +73,8 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
   gameSource = 'genshin',
   gameCustomStream = null,
   cameraRealStream = null,
+  compositeStream = null,
+  snapshotUrl = null,
   showOverlays = true,
   showMusicBanner = false,
   showChatOverlay = false,
@@ -288,10 +292,18 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
       );
     }
 
-    if (cameraSource === 'webcam' && cameraRealStream) {
+    if ((cameraSource === 'webcam' || cameraRealStream) && cameraRealStream) {
       return (
         <video
-          ref={cameraVideoRef}
+          ref={el => {
+            if (el) {
+              cameraVideoRef.current = el;
+              if (cameraRealStream && el.srcObject !== cameraRealStream) {
+                el.srcObject = cameraRealStream;
+                el.play().catch(() => {});
+              }
+            }
+          }}
           autoPlay
           playsInline
           muted
@@ -323,7 +335,15 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
     if (gameCustomStream) {
       return (
         <video
-          ref={gameVideoRef}
+          ref={el => {
+            if (el) {
+              gameVideoRef.current = el;
+              if (gameCustomStream && el.srcObject !== gameCustomStream) {
+                el.srcObject = gameCustomStream;
+                el.play().catch(() => {});
+              }
+            }
+          }}
           autoPlay
           playsInline
           muted
@@ -671,7 +691,34 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
       }`}
     >
       {/* Viewport Content */}
-      {isCustomMode ? renderCustomStudioLayout() : renderLegacyPresets()}
+      {compositeStream ? (
+        <div className="w-full h-full relative overflow-hidden bg-black flex items-center justify-center">
+          <video
+            ref={el => {
+              if (el && el.srcObject !== compositeStream) {
+                el.srcObject = compositeStream;
+                el.play().catch(() => {});
+              }
+            }}
+            autoPlay
+            playsInline
+            muted={false}
+            className="w-full h-full object-cover select-none"
+          />
+        </div>
+      ) : snapshotUrl ? (
+        <div className="w-full h-full relative overflow-hidden bg-black flex items-center justify-center">
+          <img
+            src={snapshotUrl}
+            alt="Live Stream Broadcast"
+            className="w-full h-full object-cover select-none"
+          />
+        </div>
+      ) : isCustomMode ? (
+        renderCustomStudioLayout()
+      ) : (
+        renderLegacyPresets()
+      )}
 
       {/* Global Stream Header Overlay (Host info + Live timer) */}
       {showOverlays && (

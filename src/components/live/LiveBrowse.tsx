@@ -4,9 +4,21 @@ import { Avatar } from '../common/Avatar';
 import { Radio, Users, Sparkles, Video as VideoIcon, Plus } from 'lucide-react';
 
 export const LiveBrowse: React.FC = () => {
-  const { setActiveTab, openLiveStreamAsViewer, currentLiveStream } = useApp();
+  const { setActiveTab, openLiveStreamAsViewer, currentLiveStream, activeLiveStreams, refreshActiveLiveStreams } = useApp();
 
-  const streams = currentLiveStream && currentLiveStream.isLive && currentLiveStream.id ? [currentLiveStream] : [];
+  React.useEffect(() => {
+    refreshActiveLiveStreams();
+  }, []);
+
+  const streams = (() => {
+    const list = [...activeLiveStreams];
+    if (currentLiveStream && currentLiveStream.isLive && currentLiveStream.id) {
+      if (!list.some(s => s.id === currentLiveStream.id)) {
+        list.unshift(currentLiveStream);
+      }
+    }
+    return list;
+  })();
 
   return (
     <div className="flex-1 p-4 sm:p-8 max-w-6xl mx-auto w-full text-left">

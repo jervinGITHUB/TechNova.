@@ -3501,6 +3501,109 @@ export const supabaseDb = {
     }
   },
 
+  async fetchActiveLiveStreams(): Promise<LiveStream[]> {
+    const client = getSupabaseClient();
+    if (!client) return [];
+
+    try {
+      const { data, error } = await client
+        .from('Livestream')
+        .select(`
+          LivestreamID,
+          HostUserID,
+          Title,
+          StartedAt,
+          EndedAt,
+          User:HostUserID (
+            UserID,
+            Username,
+            DisplayName,
+            ProfilePictureURL
+          )
+        `)
+        .is('EndedAt', null)
+        .order('StartedAt', { ascending: false })
+        .limit(20);
+
+      if (error || !data) {
+        // Fallback: if foreign key join syntax failed or PascalCase differences
+        const simpleRes = await client
+          .from('Livestream')
+          .select('*')
+          .is('EndedAt', null)
+          .order('StartedAt', { ascending: false })
+          .limit(20);
+
+        if (simpleRes.data) {
+          return simpleRes.data.map((row: any) => ({
+            id: row.LivestreamID,
+            host: {
+              id: row.HostUserID,
+              username: 'creator',
+              displayName: 'Live Creator',
+              email: '',
+              avatar: '',
+              bio: '',
+              followingCount: 0,
+              followersCount: 0,
+              likesCount: '0',
+              isPrivate: false,
+              role: 'creator',
+            },
+            title: row.Title || 'Live Stream',
+            topic: 'Gaming & Chat',
+            aboutMe: '',
+            viewersCount: 1,
+            viewers: [],
+            isLive: true,
+            timerSeconds: 0,
+            followerGoal: { current: 4083, target: 4100 },
+            messages: [],
+            cameraEnabled: true,
+            micEnabled: true,
+            screenShareEnabled: true,
+          }));
+        }
+        return [];
+      }
+
+      return data.map((row: any) => {
+        const u = Array.isArray(row.User) ? row.User[0] : (row.User || {});
+        return {
+          id: row.LivestreamID,
+          host: {
+            id: row.HostUserID || u.UserID,
+            username: u.Username || 'creator',
+            displayName: u.DisplayName || u.Username || 'Live Creator',
+            email: '',
+            avatar: u.ProfilePictureURL || '',
+            bio: '',
+            followingCount: 0,
+            followersCount: 0,
+            likesCount: '0',
+            isPrivate: false,
+            role: 'creator',
+          },
+          title: row.Title || 'Live Stream',
+          topic: 'Gaming & Chat',
+          aboutMe: '',
+          viewersCount: 1,
+          viewers: [],
+          isLive: true,
+          timerSeconds: 0,
+          followerGoal: { current: 4083, target: 4100 },
+          messages: [],
+          cameraEnabled: true,
+          micEnabled: true,
+          screenShareEnabled: true,
+        };
+      });
+    } catch (e) {
+      console.warn('Supabase fetchActiveLiveStreams fallback:', e);
+      return [];
+    }
+  },
+
   async insertLiveComment(streamId: string, user: User, text: string): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;

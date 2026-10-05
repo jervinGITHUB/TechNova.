@@ -385,6 +385,8 @@ interface AppContextType {
   markNotificationAsRead: (id: string) => void;
 
   // Live Stream
+  activeLiveStreams: LiveStream[];
+  refreshActiveLiveStreams: () => Promise<void>;
   openLiveStreamAsViewer: (streamId: string) => void;
   sendLiveComment: (text: string) => void;
   startHostLiveStream: (title: string, topic: string, aboutMe: string) => void;
@@ -633,6 +635,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [reports, setReports] = useState<ReportItem[]>(() => storage.get('reports', INITIAL_REPORTS));
   const [admins, setAdmins] = useState<AdminRecord[]>(() => storage.get('admins', []));
   const [currentLiveStream, setCurrentLiveStream] = useState<LiveStream>(() => storage.get('livestream', INITIAL_LIVESTREAM));
+  const [activeLiveStreams, setActiveLiveStreams] = useState<LiveStream[]>([]);
 
   // Per-User Likes storage map: { [userId: string]: string[] (videoIds) }
   const [userLikes, setUserLikes] = useState<Record<string, string[]>>(() =>
@@ -4361,7 +4364,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Live Stream handling (BR-003, BR-004, BR-010, BR-026, BR-027)
-  const openLiveStreamAsViewer = (_streamId: string) => {
+  const refreshActiveLiveStreams = async () => {
+    try {
+      const streams = await supabaseDb.fetchActiveLiveStreams();
+      setActiveLiveStreams(prev => {
+        const streamMap = new Map<string, LiveStream>();
+        if (currentLiveStream.isLive && currentLiveStream.id) {
+          streamMap.set(currentLiveStream.id, currentLiveStream);
+        }
+        streams.forEach(s => {
+          streamMap.set(s.id, s);
+        });
+        return Array.from(streamMap.values());
+      });
+    } catch (err) {
+      console.warn('refreshActiveLiveStreams error', err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'live' || activeTab === 'live_viewer') {
+      refreshActiveLiveStreams();
+    }
+  }, [activeTab]);
+
+  const openLiveStreamAsViewer = (streamId: string) => {
+    const target = activeLiveStreams.find(s => s.id === streamId || toUuid(s.id) === toUuid(streamId));
+    if (target) {
+      setCurrentLiveStream(target);
+    }
     setActiveTab('live_viewer');
   };
 
@@ -4400,6 +4431,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       viewersCount: 1,
     };
     setCurrentLiveStream(newStream);
+    setActiveLiveStreams(prev => {
+      const filtered = prev.filter(s => s.id !== streamId);
+      return [newStream, ...filtered];
+    });
     supabaseDb.upsertLiveStream(newStream);
     setActiveTab('live_host_active');
   };
@@ -4412,6 +4447,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev,
       isLive: false,
     }));
+    setActiveLiveStreams(prev => prev.filter(s => s.id !== currentLiveStream.id));
     setActiveTab('live');
   };
 
@@ -5559,6 +5595,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         deleteMessage,
         markAllNotificationsAsRead,
         markNotificationAsRead,
+        activeLiveStreams,
+        refreshActiveLiveStreams,
         openLiveStreamAsViewer,
         sendLiveComment,
         startHostLiveStream,

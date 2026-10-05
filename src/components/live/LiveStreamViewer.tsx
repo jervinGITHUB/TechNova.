@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { LiveStreamCanvas } from './LiveStreamCanvas';
 import { Avatar } from '../common/Avatar';
+import { createLiveViewerSession } from '../../services/liveBroadcastService';
 import {
   Send,
   X,
@@ -26,9 +27,32 @@ export const LiveStreamViewer: React.FC = () => {
   const [chatInput, setChatInput] = useState('');
   const [isLiveEnded, setIsLiveEnded] = useState(false);
   const [likeFloatingHearts, setLikeFloatingHearts] = useState<number[]>([]);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<string>('connecting');
 
   const hostUser = users.find(u => u.id === currentLiveStream.host.id) || currentLiveStream.host;
   const isFollowingHost = !!hostUser.isFollowing;
+
+  useEffect(() => {
+    if (!currentLiveStream.id) return;
+    const cleanup = createLiveViewerSession(currentLiveStream.id, {
+      onRemoteStream: stream => {
+        setRemoteStream(stream);
+        setConnectionStatus('connected');
+      },
+      onSnapshot: url => {
+        setSnapshotUrl(url);
+      },
+      onStreamEnded: () => {
+        setIsLiveEnded(true);
+      },
+      onConnectionStateChange: state => {
+        setConnectionStatus(state);
+      },
+    });
+    return cleanup;
+  }, [currentLiveStream.id]);
 
   const handleSendChat = (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,18 +134,17 @@ export const LiveStreamViewer: React.FC = () => {
             /* Active Live Stream Video Display: Split Camera & Game Canvas */
             <div className="relative w-full h-full flex flex-col justify-between overflow-hidden">
               <LiveStreamCanvas
-                layoutMode="split"
-                splitRatio={50}
+                compositeStream={remoteStream}
+                snapshotUrl={snapshotUrl}
+                layoutMode="custom"
                 cameraEnabled={true}
-                cameraSource="preset"
-                pipPosition="top-right"
-                gameSource="genshin"
+                cameraSource="webcam"
                 showOverlays={true}
                 showMusicBanner={false}
                 showGoalBar={false}
                 hostName={hostUser.displayName || 'Host'}
-                timerText="00:00"
-                isLive={true}
+                timerText={connectionStatus === 'connected' ? 'LIVE' : connectionStatus === 'connecting' ? 'CONNECTING...' : 'LIVE'}
+                isLive={!isLiveEnded}
               />
 
               {/* Host Follow & Report Overlay Bar */}

@@ -7,6 +7,7 @@ import {
 } from './LiveStreamCanvas';
 import { Avatar } from '../common/Avatar';
 import { CanvasSourceTransform } from '../../types';
+import { liveBroadcastService } from '../../services/liveBroadcastService';
 import {
   Camera,
   Mic,
@@ -67,7 +68,32 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     setActiveTab,
   } = useApp();
 
+  const initialBroadcast = liveBroadcastService.getState();
   const [mode, setMode] = useState<'setup' | 'active'>(initialMode);
+
+  useEffect(() => {
+    if (initialMode) {
+      setMode(initialMode);
+    }
+  }, [initialMode]);
+
+  useEffect(() => {
+    const unsub = liveBroadcastService.subscribe(bState => {
+      if (bState.cameraStream !== cameraRealStream) {
+        setCameraRealStream(bState.cameraStream);
+      }
+      if (bState.screenStream !== gameCustomStream) {
+        setGameCustomStream(bState.screenStream);
+      }
+      if (bState.cameraSource !== cameraSource) {
+        setCameraSource(bState.cameraSource);
+      }
+      if (bState.gameSource !== gameSource) {
+        setGameSource(bState.gameSource);
+      }
+    });
+    return unsub;
+  }, []);
 
   // Automatic Mobile Viewport Detection (< 768px)
   const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
@@ -86,69 +112,31 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   }, []);
 
   // Stream Info Fields (Editable before live; Locked read-only while live)
-  const [streamTitle, setStreamTitle] = useState(currentLiveStream.title || 'TikTok Live');
-  const [streamTopic, setStreamTopic] = useState(currentLiveStream.topic || 'Just Chatting');
-  const [streamAbout, setStreamAbout] = useState(currentLiveStream.aboutMe || '');
+  const [streamTitle, setStreamTitle] = useState(initialBroadcast.streamTitle || currentLiveStream.title || 'TikTok Live');
+  const [streamTopic, setStreamTopic] = useState(initialBroadcast.streamTopic || currentLiveStream.topic || 'Just Chatting');
+  const [streamAbout, setStreamAbout] = useState(initialBroadcast.streamAbout || currentLiveStream.aboutMe || '');
 
   // Studio Display Mode: Portrait 9:16 (TikTok Mobile standard) vs Landscape 16:9 (Gaming/Desktop)
-  const [canvasAspectRatio, setCanvasAspectRatio] = useState<'9:16' | '16:9'>('9:16');
+  const [canvasAspectRatio, setCanvasAspectRatio] = useState<'9:16' | '16:9'>(initialBroadcast.canvasAspectRatio);
   const [showGrid, setShowGrid] = useState(false);
   const [showSafeArea, setShowSafeArea] = useState(false);
 
   // Freeform Transform States for Canvas Sources
-  const [cameraTransform, setCameraTransform] = useState<CanvasSourceTransform>({
-    id: 'camera',
-    name: 'Camera (Facecam)',
-    type: 'camera',
-    x: 56,
-    y: 68,
-    width: 38,
-    height: 26,
-    zIndex: 20,
-    visible: true,
-    locked: false,
-    mirrored: false,
-    borderRadius: 16,
-    borderStyle: 'pink',
-    opacity: 1,
-  });
-
-  const [screenTransform, setScreenTransform] = useState<CanvasSourceTransform>({
-    id: 'screen',
-    name: 'Screen & Game Display',
-    type: 'screen',
-    x: 0,
-    y: 0,
-    width: 100,
-    height: 68,
-    zIndex: 10,
-    visible: true,
-    locked: false,
-    borderRadius: 0,
-    borderStyle: 'none',
-    opacity: 1,
-  });
+  const [cameraTransform, setCameraTransform] = useState<CanvasSourceTransform>(initialBroadcast.cameraTransform);
+  const [screenTransform, setScreenTransform] = useState<CanvasSourceTransform>(initialBroadcast.screenTransform);
 
   // Adjustable Goal Bar Widget State
-  const [goalWidgetConfig, setGoalWidgetConfig] = useState<GoalWidgetConfig>({
-    enabled: true,
-    title: 'Follower Goal',
-    current: 4083,
-    target: 4100,
-    posY: 13,
-    widthPercent: 92,
-    theme: 'pink',
-  });
+  const [goalWidgetConfig, setGoalWidgetConfig] = useState<GoalWidgetConfig>(initialBroadcast.goalWidgetConfig);
 
   const [selectedSourceId, setSelectedSourceId] = useState<'camera' | 'screen' | 'goal_bar' | null>('camera');
 
   // Hardware Devices
-  const [cameraEnabled, setCameraEnabled] = useState<boolean>(true);
-  const [cameraSource, setCameraSource] = useState<'webcam' | 'preset'>('preset');
-  const [cameraRealStream, setCameraRealStream] = useState<MediaStream | null>(null);
+  const [cameraEnabled, setCameraEnabled] = useState<boolean>(initialBroadcast.cameraEnabled);
+  const [cameraSource, setCameraSource] = useState<'webcam' | 'preset'>(initialBroadcast.cameraSource);
+  const [cameraRealStream, setCameraRealStream] = useState<MediaStream | null>(initialBroadcast.cameraStream);
 
-  const [gameSource, setGameSource] = useState<GamePreset>('genshin');
-  const [gameCustomStream, setGameCustomStream] = useState<MediaStream | null>(null);
+  const [gameSource, setGameSource] = useState<GamePreset>(initialBroadcast.gameSource);
+  const [gameCustomStream, setGameCustomStream] = useState<MediaStream | null>(initialBroadcast.screenStream);
 
   // Audio Mixer State
   const [micActive, setMicActive] = useState(true);
@@ -376,10 +364,12 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         setCameraSource('webcam');
         setCameraEnabled(true);
         setCameraTransform(prev => ({ ...prev, visible: true }));
+        liveBroadcastService.setCameraStream(stream, 'webcam');
       }
     } catch {
       setCameraSource('preset');
       setCameraEnabled(true);
+      liveBroadcastService.setCameraStream(null, 'preset');
     }
   };
 
@@ -391,9 +381,18 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           video: true,
           audio: true,
         });
+        const vTrack = stream.getVideoTracks()[0];
+        if (vTrack) {
+          vTrack.onended = () => {
+            setGameCustomStream(null);
+            setGameSource('genshin');
+            liveBroadcastService.setScreenStream(null, 'genshin');
+          };
+        }
         setGameCustomStream(stream);
         setGameSource('custom_screen');
         setScreenTransform(prev => ({ ...prev, visible: true }));
+        liveBroadcastService.setScreenStream(stream, 'custom_screen');
       }
     } catch (err) {
       console.warn('Screen share cancelled or unavailable', err);
@@ -528,17 +527,44 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
   const handleProceedToGoLive = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    liveBroadcastService.updateStudioConfig({
+      title: streamTitle,
+      topic: streamTopic,
+      aboutMe: streamAbout,
+      aspectRatio: canvasAspectRatio,
+      cameraTransform,
+      screenTransform,
+      goalConfig: goalWidgetConfig,
+      cameraEnabled,
+      micEnabled: micActive,
+      screenShareEnabled: true,
+    });
+    if (cameraRealStream) {
+      liveBroadcastService.setCameraStream(cameraRealStream, cameraSource);
+    }
+    if (gameCustomStream) {
+      liveBroadcastService.setScreenStream(gameCustomStream, gameSource);
+    }
+    const streamId = currentLiveStream.id || `stream_${currentUser?.id || 'host'}_${Date.now()}`;
+    if (currentUser) {
+      liveBroadcastService.startBroadcasting(streamId, currentUser);
+    }
     startHostLiveStream(streamTitle, streamTopic, streamAbout);
     setMode('active');
   };
 
   const handleEndLive = () => {
+    liveBroadcastService.endBroadcasting();
     if (cameraRealStream) {
       cameraRealStream.getTracks().forEach(t => t.stop());
     }
     if (gameCustomStream) {
       gameCustomStream.getTracks().forEach(t => t.stop());
     }
+    setCameraRealStream(null);
+    setGameCustomStream(null);
+    liveBroadcastService.setCameraStream(null, 'preset');
+    liveBroadcastService.setScreenStream(null, 'genshin');
     setMobileEndConfirmOpen(false);
     endHostLiveStream();
   };

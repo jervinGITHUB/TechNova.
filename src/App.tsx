@@ -101,13 +101,12 @@ const AppContent: React.FC = () => {
       case 'live_viewer':
         return <LiveStreamViewer />;
       case 'live_host_setup':
+      case 'live_host_active':
         return (
           <div className="flex-1 h-full overflow-y-auto">
-            <LiveStreamHostStudio initialMode="setup" />
+            <LiveStreamHostStudio initialMode={activeTab === 'live_host_active' ? 'active' : 'setup'} />
           </div>
         );
-      case 'live_host_active':
-        return <LiveStreamHostStudio initialMode="active" />;
       case 'messages':
         return <MessagesView />;
       case 'notifications':
