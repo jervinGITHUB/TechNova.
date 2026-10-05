@@ -35,6 +35,7 @@ import {
   LogOut,
   ChevronDown,
   X,
+  Type,
   RotateCcw,
   Wand2,
   Settings as SettingsIcon,
@@ -47,6 +48,7 @@ import {
   Award,
   Gamepad2,
   Check,
+  Move,
 } from 'lucide-react';
 
 interface LiveStreamHostStudioProps {
@@ -193,6 +195,84 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   const [mobileShowEffectsSheet, setMobileShowEffectsSheet] = useState(false);
   const [mobileFloatingHearts, setMobileFloatingHearts] = useState<number[]>([]);
   const [mobileEndConfirmOpen, setMobileEndConfirmOpen] = useState(false);
+
+  // Mobile Stream Overlay Text State (Freely Adjustable & Moveable)
+  const [mobileOverlayText, setMobileOverlayText] = useState<string>('');
+  const [mobileOverlayStyle, setMobileOverlayStyle] = useState<'pink' | 'black' | 'cyan' | 'white' | 'gold'>('pink');
+  const [mobileOverlayCoords, setMobileOverlayCoords] = useState<{ x: number; y: number }>({ x: 12, y: 16 });
+  const [mobileOverlayScale, setMobileOverlayScale] = useState<number>(1); // 0.8 (S), 1.0 (M), 1.25 (L), 1.5 (XL)
+  const [mobileShowTextModal, setMobileShowTextModal] = useState<boolean>(false);
+  const [tempOverlayInput, setTempOverlayInput] = useState<string>('');
+  const [isDraggingOverlay, setIsDraggingOverlay] = useState<boolean>(false);
+
+  const overlayDragRef = useRef<{
+    startX: number;
+    startY: number;
+    initX: number;
+    initY: number;
+    hasMoved: boolean;
+  }>({ startX: 0, startY: 0, initX: 12, initY: 16, hasMoved: false });
+
+  const handleOverlayPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {}
+    overlayDragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      initX: mobileOverlayCoords.x,
+      initY: mobileOverlayCoords.y,
+      hasMoved: false,
+    };
+    setIsDraggingOverlay(true);
+  };
+
+  const handleOverlayPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!isDraggingOverlay) return;
+    const deltaX = e.clientX - overlayDragRef.current.startX;
+    const deltaY = e.clientY - overlayDragRef.current.startY;
+
+    if (Math.hypot(deltaX, deltaY) > 3) {
+      overlayDragRef.current.hasMoved = true;
+    }
+
+    const deltaXPercent = (deltaX / window.innerWidth) * 100;
+    const deltaYPercent = (deltaY / window.innerHeight) * 100;
+
+    const newX = Math.max(2, Math.min(78, overlayDragRef.current.initX + deltaXPercent));
+    const newY = Math.max(5, Math.min(85, overlayDragRef.current.initY + deltaYPercent));
+
+    setMobileOverlayCoords({ x: newX, y: newY });
+  };
+
+  const handleOverlayPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {}
+    setIsDraggingOverlay(false);
+    if (!overlayDragRef.current.hasMoved) {
+      setTempOverlayInput(mobileOverlayText);
+      setMobileShowTextModal(true);
+    }
+  };
+
+  const getOverlayStyleClass = () => {
+    switch (mobileOverlayStyle) {
+      case 'pink':
+        return 'bg-[#ff007a] text-white shadow-[0_0_20px_rgba(255,0,122,0.6)] border border-pink-300/40';
+      case 'black':
+        return 'bg-black/80 backdrop-blur-md text-white border border-white/25 shadow-2xl';
+      case 'cyan':
+        return 'bg-black/85 backdrop-blur-md text-cyan-400 border border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.5)]';
+      case 'white':
+        return 'bg-white text-black font-extrabold shadow-2xl border border-neutral-200';
+      case 'gold':
+        return 'bg-gradient-to-r from-amber-500 to-yellow-400 text-black font-extrabold shadow-[0_0_20px_rgba(245,158,11,0.6)] border border-yellow-200';
+      default:
+        return 'bg-[#ff007a] text-white';
+    }
+  };
 
   // Hook real camera to mobile video preview
   useEffect(() => {
@@ -1122,198 +1202,102 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/85 pointer-events-none" />
         </div>
 
-        {/* Top Floating Action Row (Screenshot 1 top) */}
-        <div className="relative z-10 p-3 pt-4 flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            {/* Close Button */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('live')}
-              className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 active:scale-90 transition-transform cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            {/* Scaled LIVE Rewards Badge */}
-            <button
-              type="button"
-              onClick={() => setMobileShowRewardsModal(true)}
-              className="flex items-center gap-1.5 py-1 px-3 rounded-full bg-black/45 backdrop-blur-md border border-white/15 text-xs font-bold text-white shadow-md active:scale-95 cursor-pointer"
-            >
-              <Coins className="w-4 h-4 text-emerald-400" />
-              <span>Scaled LIVE Rewards</span>
-            </button>
-
-            {/* Top Right Utilities */}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setMobileShowSettingsModal(true)}
-                className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 active:scale-90 cursor-pointer"
-              >
-                <Shield className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('home')}
-                className="p-2 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 active:scale-90 cursor-pointer"
-              >
-                <Home className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Dismissible TikTok Banner (Screenshot 1) */}
-          {!mobileBannerDismissed && (
-            <div className="relative mx-1 p-2.5 bg-black/55 backdrop-blur-md rounded-2xl border border-white/10 text-white flex items-center justify-between shadow-lg">
-              <div className="flex items-center gap-2.5 min-w-0 pr-6">
-                <span className="text-xl">✈️</span>
-                <span className="text-[11px] font-medium leading-snug">
-                  Continue your progress and get the full LIVE experience
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMobileBannerDismissed(true)}
-                className="absolute top-2 right-2 text-neutral-400 hover:text-white p-1 cursor-pointer"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
+        {/* Top-Left: Clean Close [X] Button (No shield, No home, No rewards banner) */}
+        <div className="relative z-20 p-4 flex items-center justify-between pointer-events-none">
+          <button
+            type="button"
+            onClick={() => setActiveTab('live')}
+            className="p-2.5 rounded-full bg-black/40 backdrop-blur-md text-white hover:bg-black/60 active:scale-90 transition-transform cursor-pointer pointer-events-auto border border-white/10 shadow-lg"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Middle-Right TikTok Quick Tool Icons Grid (Screenshot 1) */}
-        <div className="relative z-10 px-4 flex flex-col items-center">
-          <div className="w-full max-w-sm grid grid-cols-5 gap-y-3 gap-x-2 text-center my-auto pb-3">
-            {/* 1. Flip Camera */}
-            <button
-              type="button"
-              onClick={handleToggleMobileCameraFacing}
-              className="flex flex-col items-center gap-1 group active:scale-90 transition-transform cursor-pointer"
-            >
-              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
-                <RotateCcw className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Flip</span>
-            </button>
+        {/* Center-Right Vertical Controls Toolbar: Only Flip & Text (All others removed) */}
+        <div className="absolute top-1/3 right-3.5 z-20 flex flex-col items-center gap-4 pointer-events-auto">
+          {/* Flip Camera */}
+          <button
+            type="button"
+            onClick={handleToggleMobileCameraFacing}
+            className="flex flex-col items-center gap-1 group active:scale-90 transition-transform cursor-pointer"
+          >
+            <div className="w-11 h-11 rounded-full bg-black/50 backdrop-blur-md border border-white/20 flex items-center justify-center text-white shadow-lg group-hover:bg-black/70">
+              <RotateCcw className="w-5 h-5" />
+            </div>
+            <span className="text-[11px] font-bold text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)]">
+              Flip
+            </span>
+          </button>
 
-            {/* 2. Enhance */}
-            <button
-              type="button"
-              onClick={() => setMobileBeautyEnhance(!mobileBeautyEnhance)}
-              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+          {/* Text Overlay Tool */}
+          <button
+            type="button"
+            onClick={() => {
+              setTempOverlayInput(mobileOverlayText);
+              setMobileShowTextModal(true);
+            }}
+            className="flex flex-col items-center gap-1 group active:scale-90 transition-transform cursor-pointer"
+          >
+            <div
+              className={`w-11 h-11 rounded-full backdrop-blur-md border flex items-center justify-center shadow-lg transition-colors ${
+                mobileOverlayText
+                  ? 'bg-[#ff007a] border-[#ff007a] text-white shadow-[0_0_20px_rgba(255,0,122,0.6)]'
+                  : 'bg-black/50 border-white/20 text-white group-hover:bg-black/70'
+              }`}
             >
-              <div
-                className={`w-11 h-11 rounded-full backdrop-blur-md border flex items-center justify-center shadow-md ${
-                  mobileBeautyEnhance
-                    ? 'bg-[#ff007a] border-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.5)]'
-                    : 'bg-black/45 border-white/15 text-white'
-                }`}
-              >
-                <Wand2 className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Enhance</span>
-            </button>
-
-            {/* 3. Effects */}
-            <button
-              type="button"
-              onClick={() => setMobileShowEffectsSheet(true)}
-              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
+              <Type className="w-5 h-5" />
+            </div>
+            <span
+              className={`text-[11px] font-bold drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)] ${
+                mobileOverlayText ? 'text-[#ff007a]' : 'text-white'
+              }`}
             >
-              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-pink-400 shadow-md">
-                <Sparkles className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Effects</span>
-            </button>
-
-            {/* 4. Settings */}
-            <button
-              type="button"
-              onClick={() => setMobileShowSettingsModal(true)}
-              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
-            >
-              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
-                <SettingsIcon className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Settings</span>
-            </button>
-
-            {/* 5. Fan Club */}
-            <button
-              type="button"
-              onClick={() => setMobileShowRewardsModal(true)}
-              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
-            >
-              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
-                <Heart className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Fan Club</span>
-            </button>
-
-            {/* 6. Service+ */}
-            <button
-              type="button"
-              onClick={() => alert('ViralHub Creator Service: 24/7 Live Streamer Support & Guidelines')}
-              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
-            >
-              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
-                <Award className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Service+</span>
-            </button>
-
-            {/* 7. Interact */}
-            <button
-              type="button"
-              onClick={() => alert('Viewer Interaction: Live polls and Q&A will be enabled during your broadcast.')}
-              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
-            >
-              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
-                <MessageSquare className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Interact</span>
-            </button>
-
-            {/* 8. Share */}
-            <button
-              type="button"
-              onClick={() => {
-                if (navigator.share) {
-                  navigator.share({ title: streamTitle, text: 'Join my live broadcast on ViralHub!' });
-                } else {
-                  alert('Stream link copied to clipboard!');
-                }
-              }}
-              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
-            >
-              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
-                <Share2 className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Share</span>
-            </button>
-
-            {/* 9. Game center */}
-            <button
-              type="button"
-              onClick={() => alert('Live Game Center: Mini-games will appear for your chat viewers.')}
-              className="flex flex-col items-center gap-1 active:scale-90 transition-transform cursor-pointer"
-            >
-              <div className="w-11 h-11 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center justify-center text-white shadow-md">
-                <Gamepad2 className="w-5 h-5" />
-              </div>
-              <span className="text-[11px] font-medium text-white/90 drop-shadow">Game center</span>
-            </button>
-          </div>
+              Text
+            </span>
+          </button>
         </div>
 
-        {/* Bottom Section: Stream Title Card + Big Red "Go LIVE" Button + Mode Pill */}
-        <div className="relative z-10 px-4 pb-4 pt-2 flex flex-col gap-3">
-          {/* Stream Title Card (Screenshot 1: Avatar + Title with edit pencil) */}
+        {/* Freely Movable & Adjustable Custom Text Overlay on Screen (if set) */}
+        {mobileOverlayText && (
+          <div
+            style={{
+              left: `${mobileOverlayCoords.x}%`,
+              top: `${mobileOverlayCoords.y}%`,
+              transform: `scale(${mobileOverlayScale})`,
+              transformOrigin: 'top left',
+              touchAction: 'none',
+            }}
+            onPointerDown={handleOverlayPointerDown}
+            onPointerMove={handleOverlayPointerMove}
+            onPointerUp={handleOverlayPointerUp}
+            onPointerCancel={handleOverlayPointerUp}
+            className={`absolute z-30 select-none cursor-grab active:cursor-grabbing transition-shadow ${
+              isDraggingOverlay ? 'ring-2 ring-white/80 shadow-2xl scale-[1.04]' : ''
+            }`}
+          >
+            <div
+              className={`px-3.5 py-1.5 rounded-2xl text-xs font-bold shadow-xl flex items-center gap-1.5 ${getOverlayStyleClass()}`}
+            >
+              <Move className="w-3.5 h-3.5 opacity-70 shrink-0" />
+              <span className="whitespace-nowrap">{mobileOverlayText}</span>
+              <Edit3 className="w-3.5 h-3.5 opacity-75 shrink-0" />
+            </div>
+            {/* Subtle drag hint indicator */}
+            <div className="text-[9px] text-white/75 bg-black/60 backdrop-blur-xs px-2 py-0.5 rounded-full mt-1 w-fit mx-auto border border-white/10 pointer-events-none">
+              Hold & drag anywhere · Tap to edit
+            </div>
+          </div>
+        )}
+
+        {/* Center Space: Empty & Clean to showcase camera feed */}
+        <div className="flex-1" />
+
+        {/* Bottom Section: Stream Title Card + Big Red "Go LIVE" Button */}
+        <div className="relative z-10 px-4 pb-6 pt-2 flex flex-col gap-3">
+          {/* Stream Title Card (Avatar + Title with edit pencil) */}
           <div
             onClick={() => setMobileShowTitleModal(true)}
-            className="flex items-center gap-2.5 p-2 bg-black/50 backdrop-blur-md rounded-2xl border border-white/15 cursor-pointer active:scale-98 transition-transform"
+            className="flex items-center gap-2.5 p-2.5 bg-black/50 backdrop-blur-md rounded-2xl border border-white/15 cursor-pointer active:scale-98 transition-transform"
           >
             <Avatar src={currentUser?.avatar} alt={currentUser?.displayName} size="sm" />
             <div className="flex-1 min-w-0 text-left">
@@ -1329,7 +1313,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             </div>
           </div>
 
-          {/* Big Hot Pink / Red "Go LIVE" Button (Screenshot 1) */}
+          {/* Big Hot Pink / Red "Go LIVE" Button */}
           <button
             type="button"
             onClick={() => handleProceedToGoLive()}
@@ -1337,14 +1321,6 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           >
             <span>Go LIVE</span>
           </button>
-
-          {/* Bottom Mode Switcher: Dedicated Mode 1 "Device camera" (as requested) */}
-          <div className="flex items-center justify-center pt-1 text-xs">
-            <span className="font-extrabold text-white flex items-center gap-1.5 bg-white/15 px-4 py-1 rounded-full border border-white/20">
-              <Camera className="w-3.5 h-3.5 text-[#ff007a]" />
-              <span>Device camera</span>
-            </span>
-          </div>
         </div>
 
         {/* Modal: Edit Stream Title on Mobile */}
@@ -1401,76 +1377,160 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           </div>
         )}
 
-        {/* Modal: Visual Effects Sheet on Mobile */}
-        {mobileShowEffectsSheet && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end justify-center p-3 animate-fadeIn">
+        {/* Modal: Text Overlay Editor on Mobile */}
+        {mobileShowTextModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 animate-fadeIn">
             <div className="bg-[#121218] border border-neutral-800 rounded-3xl p-5 w-full max-w-sm text-left space-y-4">
-              <div className="flex justify-between items-center border-b border-neutral-800 pb-2">
+              <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
                 <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-[#ff007a]" />
-                  <h3 className="text-sm font-bold text-white">Visual Camera Effects</h3>
+                  <Type className="w-4 h-4 text-[#ff007a]" />
+                  <h3 className="text-sm font-bold text-white">Stream Overlay Text</h3>
                 </div>
-                <button onClick={() => setMobileShowEffectsSheet(false)} className="text-neutral-400 p-1">
+                <button onClick={() => setMobileShowTextModal(false)} className="text-neutral-400 p-1">
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { id: 'none', label: 'Natural' },
-                  { id: 'glow', label: 'Radiant Glow' },
-                  { id: 'warm', label: 'Golden Warm' },
-                  { id: 'cool', label: 'Cyber Cool' },
-                  { id: 'cyber', label: 'Vibrant' },
-                ].map(f => (
+              <div>
+                <label className="text-xs font-semibold text-neutral-300 block mb-1">
+                  Overlay Message:
+                </label>
+                <input
+                  type="text"
+                  maxLength={40}
+                  value={tempOverlayInput}
+                  onChange={e => setTempOverlayInput(e.target.value)}
+                  placeholder="e.g. Welcome to my LIVE! 💖"
+                  className="w-full bg-[#181824] text-xs text-white p-3 rounded-xl border border-neutral-700 outline-none focus:border-[#ff007a]"
+                />
+                <span className="text-[10px] text-neutral-500 mt-1 block">
+                  This text floats directly over your camera video during your broadcast.
+                </span>
+              </div>
+
+              {/* Text Size / Scale Adjuster */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-neutral-300">
+                    Text Size & Scale:
+                  </label>
+                  <span className="text-[11px] font-mono font-bold text-[#ff007a]">
+                    {mobileOverlayScale === 0.85
+                      ? 'Small (85%)'
+                      : mobileOverlayScale === 1.0
+                      ? 'Normal (100%)'
+                      : mobileOverlayScale === 1.25
+                      ? 'Large (125%)'
+                      : 'X-Large (150%)'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[
+                    { scale: 0.85, label: 'S (85%)' },
+                    { scale: 1.0, label: 'M (100%)' },
+                    { scale: 1.25, label: 'L (125%)' },
+                    { scale: 1.5, label: 'XL (150%)' },
+                  ].map(item => (
+                    <button
+                      key={item.scale}
+                      type="button"
+                      onClick={() => setMobileOverlayScale(item.scale)}
+                      className={`py-1.5 rounded-xl text-[11px] font-bold text-center border transition-all ${
+                        mobileOverlayScale === item.scale
+                          ? 'bg-[#ff007a]/20 border-[#ff007a] text-white shadow-sm'
+                          : 'bg-[#181824] border-neutral-800 text-neutral-400 hover:text-white'
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Style & Color Theme */}
+              <div>
+                <label className="text-xs font-semibold text-neutral-300 block mb-1.5">
+                  Style & Color:
+                </label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {[
+                    { id: 'pink', name: 'Pink', bg: 'bg-[#ff007a] text-white' },
+                    { id: 'black', name: 'Dark Glass', bg: 'bg-black/75 text-white border border-white/20' },
+                    { id: 'cyan', name: 'Neon', bg: 'bg-black/85 text-cyan-400 border border-cyan-400' },
+                    { id: 'white', name: 'White', bg: 'bg-white text-black font-extrabold' },
+                    { id: 'gold', name: 'Gold', bg: 'bg-gradient-to-r from-amber-500 to-yellow-400 text-black font-extrabold' },
+                  ].map(s => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setMobileOverlayStyle(s.id as typeof mobileOverlayStyle)}
+                      className={`p-2 rounded-xl text-[10px] font-bold text-center border transition-all ${
+                        mobileOverlayStyle === s.id
+                          ? 'border-white ring-2 ring-white/30 scale-105'
+                          : 'border-transparent opacity-80 hover:opacity-100'
+                      } ${s.bg}`}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 1-Tap Quick Position Presets */}
+              <div>
+                <label className="text-xs font-semibold text-neutral-300 block mb-1.5">
+                  Quick Position Snap:
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[
+                    { label: 'Top Left', x: 8, y: 14 },
+                    { label: 'Top Center', x: 28, y: 14 },
+                    { label: 'Center', x: 25, y: 45 },
+                    { label: 'Lower Left', x: 8, y: 72 },
+                  ].map(preset => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => setMobileOverlayCoords({ x: preset.x, y: preset.y })}
+                      className="py-1.5 px-1 rounded-xl text-[10px] font-bold text-center bg-[#181824] border border-neutral-800 text-neutral-300 hover:border-[#ff007a] hover:text-white transition-colors"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1.5 mt-2 p-2 rounded-xl bg-neutral-900/80 border border-neutral-800 text-[11px] text-neutral-400">
+                  <Move className="w-3.5 h-3.5 text-[#ff007a] shrink-0" />
+                  <span>
+                    Touch, hold & <strong>freely drag</strong> this text anywhere across your screen at any time!
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                {mobileOverlayText && (
                   <button
-                    key={f.id}
                     type="button"
                     onClick={() => {
-                      setMobileFilter(f.id as typeof mobileFilter);
-                      setMobileShowEffectsSheet(false);
+                      setMobileOverlayText('');
+                      setTempOverlayInput('');
+                      setMobileShowTextModal(false);
                     }}
-                    className={`p-3 rounded-2xl border text-xs font-bold transition-all ${
-                      mobileFilter === f.id
-                        ? 'bg-[#ff007a]/20 border-[#ff007a] text-white'
-                        : 'bg-[#181824] border-neutral-800 text-neutral-400'
-                    }`}
+                    className="flex-1 py-2.5 rounded-xl bg-neutral-800 text-neutral-400 hover:text-white font-bold text-xs"
                   >
-                    {f.label}
+                    Clear Text
                   </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Modal: Scaled LIVE Rewards on Mobile */}
-        {mobileShowRewardsModal && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 animate-fadeIn">
-            <div className="bg-[#121218] border border-neutral-800 rounded-3xl p-5 w-full max-w-sm text-left space-y-3">
-              <div className="flex justify-between items-center border-b border-neutral-800 pb-2">
-                <div className="flex items-center gap-2">
-                  <Coins className="w-4 h-4 text-emerald-400" />
-                  <h3 className="text-sm font-bold text-white">Scaled LIVE Rewards</h3>
-                </div>
-                <button onClick={() => setMobileShowRewardsModal(false)} className="text-neutral-400 p-1">
-                  <X className="w-4 h-4" />
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileOverlayText(tempOverlayInput.trim());
+                    setMobileShowTextModal(false);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-[#ff007a] text-white font-bold text-xs shadow-md"
+                >
+                  Save Text
                 </button>
               </div>
-              <p className="text-xs text-neutral-300 leading-relaxed">
-                Earn diamond gifts and tips directly from your chat viewers while you broadcast live with device camera!
-              </p>
-              <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800 flex justify-between items-center">
-                <span className="text-xs text-neutral-400 font-semibold">Creator Level:</span>
-                <span className="text-xs font-bold text-emerald-400">Level 1 Streamer</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMobileShowRewardsModal(false)}
-                className="w-full py-2.5 rounded-xl bg-neutral-800 text-white font-bold text-xs"
-              >
-                Got it
-              </button>
             </div>
           </div>
         )}
@@ -1512,6 +1572,38 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           {/* Subtle gradient vignette */}
           <div className="absolute inset-0 bg-gradient-to-b from-black/55 via-transparent to-black/80 pointer-events-none" />
         </div>
+
+        {/* Freely Movable & Adjustable Custom Text Overlay on Screen while Live */}
+        {mobileOverlayText && (
+          <div
+            style={{
+              left: `${mobileOverlayCoords.x}%`,
+              top: `${mobileOverlayCoords.y}%`,
+              transform: `scale(${mobileOverlayScale})`,
+              transformOrigin: 'top left',
+              touchAction: 'none',
+            }}
+            onPointerDown={handleOverlayPointerDown}
+            onPointerMove={handleOverlayPointerMove}
+            onPointerUp={handleOverlayPointerUp}
+            onPointerCancel={handleOverlayPointerUp}
+            className={`absolute z-30 select-none cursor-grab active:cursor-grabbing transition-shadow ${
+              isDraggingOverlay ? 'ring-2 ring-white/80 shadow-2xl scale-[1.04]' : ''
+            }`}
+          >
+            <div
+              className={`px-3.5 py-1.5 rounded-2xl text-xs font-bold shadow-xl flex items-center gap-1.5 ${getOverlayStyleClass()}`}
+            >
+              <Move className="w-3.5 h-3.5 opacity-70 shrink-0" />
+              <span className="whitespace-nowrap">{mobileOverlayText}</span>
+              <Edit3 className="w-3.5 h-3.5 opacity-75 shrink-0" />
+            </div>
+            {/* Subtle drag hint indicator */}
+            <div className="text-[9px] text-white/75 bg-black/60 backdrop-blur-xs px-2 py-0.5 rounded-full mt-1 w-fit mx-auto border border-white/10 pointer-events-none">
+              Hold & drag anywhere · Tap to edit
+            </div>
+          </div>
+        )}
 
         {/* Top Header Overlay: Host avatar + Timer + Viewers + End Button */}
         <div className="relative z-20 p-3 pt-4 flex items-center justify-between">
@@ -1561,7 +1653,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           ))}
         </div>
 
-        {/* Floating Semi-Transparent Live Comments Stream (Screenshot overlay style) */}
+        {/* Floating Semi-Transparent Live Comments Stream */}
         <div className="relative z-20 px-3 pb-2 flex flex-col justify-end min-h-0 flex-1">
           <div className="max-h-56 overflow-y-auto space-y-1.5 pr-2 max-w-[85%] text-left pointer-events-auto scrollbar-none">
             {currentLiveStream.messages.slice(-12).map(msg => {
@@ -1634,7 +1726,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               </button>
             </form>
 
-            {/* Quick Action Icons: Flip, Mic, Heart */}
+            {/* Quick Action Icons: Flip, Mic, Text, Heart */}
             <button
               type="button"
               onClick={handleToggleMobileCameraFacing}
@@ -1642,6 +1734,22 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               title="Flip Camera"
             >
               <RotateCcw className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setTempOverlayInput(mobileOverlayText);
+                setMobileShowTextModal(true);
+              }}
+              className={`p-2.5 rounded-full backdrop-blur-md border active:scale-90 cursor-pointer shadow-md ${
+                mobileOverlayText
+                  ? 'bg-[#ff007a] border-[#ff007a] text-white'
+                  : 'bg-black/60 border-white/15 text-white'
+              }`}
+              title="Overlay Text"
+            >
+              <Type className="w-4 h-4" />
             </button>
 
             <button
@@ -1667,6 +1775,90 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Modal: Text Overlay Editor on Mobile during Live */}
+        {mobileShowTextModal && (
+          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-3 animate-fadeIn">
+            <div className="bg-[#121218] border border-neutral-800 rounded-3xl p-5 w-full max-w-sm text-left space-y-4">
+              <div className="flex justify-between items-center border-b border-neutral-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Type className="w-4 h-4 text-[#ff007a]" />
+                  <h3 className="text-sm font-bold text-white">Stream Overlay Text</h3>
+                </div>
+                <button onClick={() => setMobileShowTextModal(false)} className="text-neutral-400 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-neutral-300 block mb-1">
+                  Overlay Message:
+                </label>
+                <input
+                  type="text"
+                  maxLength={40}
+                  value={tempOverlayInput}
+                  onChange={e => setTempOverlayInput(e.target.value)}
+                  placeholder="e.g. Welcome to my LIVE! 💖"
+                  className="w-full bg-[#181824] text-xs text-white p-3 rounded-xl border border-neutral-700 outline-none focus:border-[#ff007a]"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-neutral-300 block mb-1.5">
+                  Style & Color:
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[
+                    { id: 'pink', name: 'Pink', bg: 'bg-[#ff007a] text-white' },
+                    { id: 'black', name: 'Dark Glass', bg: 'bg-black/75 text-white border border-white/20' },
+                    { id: 'cyan', name: 'Neon Cyan', bg: 'bg-black/85 text-cyan-400 border border-cyan-400' },
+                    { id: 'white', name: 'Pure White', bg: 'bg-white text-black font-extrabold' },
+                  ].map(s => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => setMobileOverlayStyle(s.id as typeof mobileOverlayStyle)}
+                      className={`p-2 rounded-xl text-[10px] font-bold text-center border transition-all ${
+                        mobileOverlayStyle === s.id
+                          ? 'border-white ring-2 ring-white/30'
+                          : 'border-transparent'
+                      } ${s.bg}`}
+                    >
+                      {s.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-1">
+                {mobileOverlayText && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileOverlayText('');
+                      setTempOverlayInput('');
+                      setMobileShowTextModal(false);
+                    }}
+                    className="flex-1 py-2.5 rounded-xl bg-neutral-800 text-neutral-400 hover:text-white font-bold text-xs"
+                  >
+                    Clear Text
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileOverlayText(tempOverlayInput.trim());
+                    setMobileShowTextModal(false);
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-[#ff007a] text-white font-bold text-xs shadow-md"
+                >
+                  Save Text
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* End Live Confirmation Modal */}
         {mobileEndConfirmOpen && (
