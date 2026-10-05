@@ -740,11 +740,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return commentsMap[videoId];
     }
     try {
-      const remote = await supabaseDb.fetchComments(videoId);
+      const remote = await supabaseDb.fetchComments(videoId, currentUser?.id);
       if (remote !== null) {
         setCommentsMap(prev => {
           const existing = prev[videoId] || [];
-          const likedIds = new Set(existing.filter(c => c.isLiked).map(c => c.id));
+          const existingMap = new Map<string, { isLiked?: boolean; likesCount?: number }>();
+          existing.forEach(c => {
+            existingMap.set(c.id, { isLiked: c.isLiked, likesCount: c.likesCount });
+            (c.replies || []).forEach(r => existingMap.set(r.id, { isLiked: r.isLiked, likesCount: r.likesCount }));
+          });
+
           const merged = remote.map(c => {
             const seenReplyIds = new Set<string>();
             const cleanReplies = (c.replies || []).filter(r => {
@@ -752,13 +757,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (k && seenReplyIds.has(k)) return false;
               if (k) seenReplyIds.add(k);
               return true;
+            }).map(r => {
+              const exR = existingMap.get(r.id);
+              return {
+                ...r,
+                isLiked: r.isLiked ?? exR?.isLiked ?? false,
+                likesCount: r.likesCount ?? exR?.likesCount ?? 0,
+              };
             });
+
+            const exC = existingMap.get(c.id);
             return {
               ...c,
               replies: cleanReplies,
-              isLiked: likedIds.has(c.id),
+              isLiked: c.isLiked ?? exC?.isLiked ?? false,
+              likesCount: c.likesCount ?? exC?.likesCount ?? 0,
             };
           });
+
           const next = { ...prev, [videoId]: merged };
           storage.set('video_comments_v2', next);
           return next;
@@ -2134,6 +2150,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 return next;
               });
             })
+            .on('broadcast', { event: 'comment_liked' }, ({ payload }: any) => {
+              if (!payload) return;
+              const { videoId, commentId, isLiked, likesCount, userId } = payload;
+              setCommentsMap(prev => {
+                const list = prev[videoId] || [];
+                const isMe = currentUser && isSameUser(userId, currentUser.id);
+                const updated = list.map(c => {
+                  if (c.id === commentId || toUuid(c.id) === toUuid(commentId)) {
+                    return {
+                      ...c,
+                      likesCount: typeof likesCount === 'number' ? likesCount : (c.likesCount || 0),
+                      isLiked: isMe ? isLiked : c.isLiked,
+                    };
+                  }
+                  if (c.replies && c.replies.length > 0) {
+                    return {
+                      ...c,
+                      replies: c.replies.map(r => {
+                        if (r.id === commentId || toUuid(r.id) === toUuid(commentId)) {
+                          return {
+                            ...r,
+                            likesCount: typeof likesCount === 'number' ? likesCount : (r.likesCount || 0),
+                            isLiked: isMe ? isLiked : r.isLiked,
+                          };
+                        }
+                        return r;
+                      }),
+                    };
+                  }
+                  return c;
+                });
+                const next = { ...prev, [videoId]: updated };
+                storage.set('video_comments_v2', next);
+                return next;
+              });
+            })
             .subscribe();
 
           chatBroadcastChannelRef.current = chatBroadcastChannel;
@@ -3316,21 +3368,70 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return supabaseDb.deleteComment(commentId, videoId);
   };
 
-  const toggleLikeComment = (videoId: string, commentId: string) => {
+  const toggleLikeComment = async (videoId: string, commentId: string) => {
+    if (!currentUser) return;
+
+    let targetIsLiked = false;
+    let targetLikesCount = 0;
+
     setCommentsMap(prev => {
       const list = prev[videoId] || [];
       const updated = list.map(c => {
-        if (c.id === commentId || toUuid(c.id) === toUuid(commentId)) {
+        const isTargetComment = c.id === commentId || toUuid(c.id) === toUuid(commentId);
+        if (isTargetComment) {
           const liked = !c.isLiked;
           const count = Math.max(0, (c.likesCount || 0) + (liked ? 1 : -1));
+          targetIsLiked = liked;
+          targetLikesCount = count;
           return { ...c, isLiked: liked, likesCount: count };
         }
+
+        if (c.replies && c.replies.length > 0) {
+          let replyChanged = false;
+          const updatedReplies = c.replies.map(r => {
+            if (r.id === commentId || toUuid(r.id) === toUuid(commentId)) {
+              replyChanged = true;
+              const liked = !r.isLiked;
+              const count = Math.max(0, (r.likesCount || 0) + (liked ? 1 : -1));
+              targetIsLiked = liked;
+              targetLikesCount = count;
+              return { ...r, isLiked: liked, likesCount: count };
+            }
+            return r;
+          });
+          if (replyChanged) {
+            return { ...c, replies: updatedReplies };
+          }
+        }
+
         return c;
       });
       const next = { ...prev, [videoId]: updated };
       storage.set('video_comments_v2', next);
       return next;
     });
+
+    // 1. Instant WebSocket broadcast (<50ms, 0 disk IO)
+    try {
+      const client = getSupabaseClient();
+      const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+      if (broadcastCh) {
+        broadcastCh.send({
+          type: 'broadcast',
+          event: 'comment_liked',
+          payload: {
+            videoId,
+            commentId,
+            userId: currentUser.id,
+            isLiked: targetIsLiked,
+            likesCount: targetLikesCount,
+          },
+        });
+      }
+    } catch {}
+
+    // 2. Persist to Supabase Comment table
+    await supabaseDb.toggleCommentLike(commentId, videoId, currentUser.id, targetIsLiked);
   };
 
   // Share Video (BR-019, BR-020, BR-023)

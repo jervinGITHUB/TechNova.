@@ -39,6 +39,8 @@ export interface CommentReplyEntry {
   text: string;
   timestamp?: string;
   userId?: string;
+  likesCount?: number;
+  isLiked?: boolean;
 }
 
 export interface CommentEntry {

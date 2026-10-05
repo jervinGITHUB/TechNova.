@@ -2174,7 +2174,7 @@ export const supabaseDb = {
   // -----------------------------------------------------------------------
   // 4. Comment Table (CommentID, UserID, VideoID, ParentCommentID, CommentText)
   // -----------------------------------------------------------------------
-  async fetchComments(videoId: string): Promise<CommentEntry[] | null> {
+  async fetchComments(videoId: string, currentUserId?: string): Promise<CommentEntry[] | null> {
     const client = getSupabaseClient();
     if (!client) return null;
 
@@ -2217,6 +2217,8 @@ export const supabaseDb = {
               ParentCommentID: r.parent_comment_id || r.parentCommentId || r.reply_to_id,
               CommentText: r.comment_text || r.text || r.content || '',
               CreatedAt: r.created_at || r.published_at || r.createdAt,
+              LikedBy: r.liked_by || r.LikedBy,
+              LikesCount: r.likes_count || r.LikesCount,
             }));
             error = null;
           }
@@ -2301,6 +2303,12 @@ export const supabaseDb = {
             username: `user_${uId.slice(0, 5)}`,
           };
 
+        const rawLikedBy: string[] = Array.isArray(row.LikedBy)
+          ? row.LikedBy
+          : (Array.isArray(row.liked_by) ? row.liked_by : []);
+        const likesCount = rawLikedBy.length > 0 ? rawLikedBy.length : Number(row.LikesCount || row.likes_count || 0);
+        const isLiked = Boolean(currentUserId && rawLikedBy.some(id => isSameUser(id, currentUserId)));
+
         if (parentId) {
           const pId = String(parentId).toLowerCase();
           const list = repliesMap.get(pId) || [];
@@ -2311,6 +2319,8 @@ export const supabaseDb = {
             text,
             timestamp,
             userId: uId,
+            likesCount,
+            isLiked,
           });
           repliesMap.set(pId, list);
         } else {
@@ -2320,8 +2330,8 @@ export const supabaseDb = {
             avatar: userMeta.avatar,
             text,
             timestamp,
-            likesCount: 0,
-            isLiked: false,
+            likesCount,
+            isLiked,
             userId: uId,
             replies: [],
           });
@@ -2366,8 +2376,8 @@ export const supabaseDb = {
               avatar: orphan.avatar,
               text: orphan.text,
               timestamp: orphan.timestamp,
-              likesCount: 0,
-              isLiked: false,
+              likesCount: orphan.likesCount || 0,
+              isLiked: orphan.isLiked || false,
               userId: orphan.userId,
               replies: [],
             });
@@ -2431,6 +2441,61 @@ export const supabaseDb = {
       return !error;
     } catch (e) {
       console.warn('Supabase deleteComment error:', e);
+      return false;
+    }
+  },
+
+  async toggleCommentLike(
+    commentId: string,
+    videoId: string,
+    userId: string,
+    isLiked: boolean
+  ): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !commentId || !userId) return false;
+
+    try {
+      const cUuid = toUuid(commentId);
+      const uUuid = toUuid(userId);
+
+      // 1. Fetch current comment row to get existing LikedBy array
+      const { data: row } = await client
+        .from('Comment')
+        .select('CommentID, LikedBy, LikesCount')
+        .or(`CommentID.eq.${cUuid},CommentID.eq.${commentId}`)
+        .maybeSingle();
+
+      const existingLikedBy: string[] = Array.isArray(row?.LikedBy) ? row.LikedBy : [];
+      let updatedLikedBy: string[];
+
+      if (isLiked) {
+        if (!existingLikedBy.some(id => isSameUser(id, userId))) {
+          updatedLikedBy = [...existingLikedBy, uUuid];
+        } else {
+          updatedLikedBy = existingLikedBy;
+        }
+      } else {
+        updatedLikedBy = existingLikedBy.filter(id => !isSameUser(id, userId));
+      }
+
+      const updatedCount = updatedLikedBy.length;
+
+      // 2. Persist updated LikedBy & LikesCount to Comment table
+      const { error } = await client
+        .from('Comment')
+        .update({
+          LikedBy: updatedLikedBy,
+          LikesCount: updatedCount,
+        })
+        .or(`CommentID.eq.${cUuid},CommentID.eq.${commentId}`);
+
+      if (error) {
+        console.warn('Supabase toggleCommentLike update warning:', error.message);
+      }
+
+      return !error;
+    } catch (e) {
+      console.warn('Supabase toggleCommentLike exception:', e);
       return false;
     }
   },
@@ -3761,6 +3826,8 @@ ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "RejectionReason" 
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealStatus" TEXT DEFAULT 'none';
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "AppealReason" TEXT;
 ALTER TABLE IF EXISTS public."Conversation" ADD COLUMN IF NOT EXISTS "ClearedHistory" JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "LikedBy" TEXT[] DEFAULT ARRAY[]::text[];
+ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "LikesCount" INTEGER DEFAULT 0;
 
 -- 5. INDEXES (Guarantees sub-millisecond lookups & protects Supabase Disk IO!)
 CREATE INDEX IF NOT EXISTS "idx_user_isbanned" ON public."User"("IsBanned");

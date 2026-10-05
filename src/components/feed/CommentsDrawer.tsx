@@ -363,16 +363,36 @@ export const CommentsDrawer: React.FC = () => {
                                     )}
                                   </div>
 
-                                  {isOwnReply && (
+                                  <div className="flex items-center gap-1.5">
+                                    {isOwnReply && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDelete(reply.id)}
+                                        className="text-neutral-500 hover:text-red-400 p-1 transition-colors cursor-pointer"
+                                        title="Delete reply"
+                                      >
+                                        <Trash2 className="w-2.5 h-2.5" />
+                                      </button>
+                                    )}
+
                                     <button
                                       type="button"
-                                      onClick={() => handleDelete(reply.id)}
-                                      className="text-neutral-500 hover:text-red-400 p-1 transition-colors cursor-pointer"
-                                      title="Delete reply"
+                                      onClick={() => toggleLikeComment(commentsVideoId, reply.id)}
+                                      className={`flex items-center gap-1 text-[10px] p-1 transition-colors cursor-pointer ${
+                                        reply.isLiked
+                                          ? 'text-[#ff007a]'
+                                          : 'text-neutral-500 hover:text-[#ff007a]'
+                                      }`}
+                                      title={reply.isLiked ? 'Unlike reply' : 'Like reply'}
                                     >
-                                      <Trash2 className="w-2.5 h-2.5" />
+                                      <Heart
+                                        className={`w-3 h-3 ${reply.isLiked ? 'fill-[#ff007a]' : ''}`}
+                                      />
+                                      {(reply.likesCount || 0) > 0 && (
+                                        <span>{reply.likesCount}</span>
+                                      )}
                                     </button>
-                                  )}
+                                  </div>
                                 </div>
                                 <p className="text-xs text-neutral-300 mt-0.5 break-words">
                                   {reply.text}
