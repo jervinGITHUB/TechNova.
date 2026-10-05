@@ -3689,50 +3689,34 @@ export const supabaseDb = {
 
       let rows: any[] = [];
 
-      // 1. Attempt relational query with User relation
-      const { data, error } = await client
+      // Query LiveComment table using select('*') so it succeeds whether the PK is 'id' or 'LiveCommentID'
+      let res = await client
         .from('LiveComment')
-        .select(`
-          LiveCommentID,
-          LiveStreamID,
-          UserID,
-          LiveText,
-          LiveCommentAt,
-          User:UserID (
-            UserID,
-            Username,
-            DisplayName,
-            ProfilePictureURL
-          )
-        `)
+        .select('*')
         .eq('LiveStreamID', streamUuid)
         .order('LiveCommentAt', { ascending: true })
         .limit(60);
 
-      if (!error && data && data.length > 0) {
-        rows = data;
-      } else {
-        // Fallback: simple query on LiveComment
-        const simple = await client
+      // If 'LiveCommentAt' column does not exist (code 42703), retry without ordering
+      if (res.error && (res.error.code === '42703' || res.error.message?.includes('column'))) {
+        res = await client
           .from('LiveComment')
           .select('*')
           .eq('LiveStreamID', streamUuid)
-          .order('LiveCommentAt', { ascending: true })
           .limit(60);
+      }
 
-        if (simple.data && simple.data.length > 0) {
-          rows = simple.data;
-        } else {
-          // Also try snake_case live_comments
-          const snake = await client
-            .from('live_comments')
-            .select('*')
-            .eq('live_stream_id', streamUuid)
-            .order('created_at', { ascending: true })
-            .limit(60);
-          if (snake.data && snake.data.length > 0) {
-            rows = snake.data;
-          }
+      if (res.data && res.data.length > 0) {
+        rows = res.data;
+      } else if (res.error && (res.error.code === '42P01' || res.error.message?.includes('does not exist'))) {
+        // Table not found or snake_case fallback
+        const snake = await client
+          .from('live_comments')
+          .select('*')
+          .eq('live_stream_id', streamUuid)
+          .limit(60);
+        if (snake.data && snake.data.length > 0) {
+          rows = snake.data;
         }
       }
 
