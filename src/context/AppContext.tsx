@@ -4529,7 +4529,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentLiveStream(prev => {
           if (prev.id !== streamId) return prev;
           const existingIds = new Set(prev.messages.map(m => m.id));
-          const toAdd = pastComments.filter(c => !existingIds.has(c.id));
+          const enriched = pastComments.map(c => {
+            const author = users.find(u => isSameUser(u.id, c.userId));
+            if (author) {
+              return {
+                ...c,
+                displayName: (c.displayName && c.displayName !== 'Viewer') ? c.displayName : (author.displayName || author.username || 'User'),
+                username: (c.username && c.username !== 'viewer') ? c.username : author.username,
+                avatar: c.avatar || author.avatar || '',
+              };
+            }
+            return c;
+          });
+          const toAdd = enriched.filter(c => !existingIds.has(c.id));
           if (toAdd.length === 0) return prev;
           return {
             ...prev,
@@ -4541,11 +4553,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const handleIncomingComment = (msg: LiveStreamMessage) => {
       if (!msg || !msg.text) return;
+      const author = users.find(u => isSameUser(u.id, msg.userId));
+      const enrichedMsg: LiveStreamMessage = author
+        ? {
+            ...msg,
+            displayName: (msg.displayName && msg.displayName !== 'Viewer') ? msg.displayName : (author.displayName || author.username || 'User'),
+            username: (msg.username && msg.username !== 'viewer') ? msg.username : author.username,
+            avatar: msg.avatar || author.avatar || '',
+          }
+        : msg;
+
       setCurrentLiveStream(prev => {
-        if (prev.messages.some(m => m.id === msg.id)) return prev;
+        if (prev.messages.some(m => m.id === enrichedMsg.id)) return prev;
         return {
           ...prev,
-          messages: [...prev.messages, msg],
+          messages: [...prev.messages, enrichedMsg],
         };
       });
     };

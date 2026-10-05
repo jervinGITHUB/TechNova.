@@ -8,7 +8,7 @@ import {
 import { Avatar } from '../common/Avatar';
 import { CanvasSourceTransform } from '../../types';
 import { liveBroadcastService } from '../../services/liveBroadcastService';
-import { supabaseDb, toUuid, generateUuid } from '../../lib/supabase';
+import { supabaseDb, toUuid, generateUuid, isSameUser } from '../../lib/supabase';
 import {
   Camera,
   Mic,
@@ -63,6 +63,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   const {
     currentUser,
     currentLiveStream,
+    users,
     startHostLiveStream,
     endHostLiveStream,
     sendLiveComment,
@@ -2814,9 +2815,13 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                         );
                       }
 
+                      const author = users.find(u => isSameUser(u.id, msg.userId));
+                      const authorName = (msg.displayName && msg.displayName !== 'Viewer') ? msg.displayName : (author?.displayName || author?.username || 'User');
+                      const authorAvatar = msg.avatar || author?.avatar || '';
+
                       const isHostMsg =
-                        msg.userId === currentUser?.id ||
-                        msg.displayName === currentUser?.displayName;
+                        (currentUser && (isSameUser(msg.userId, currentUser.id) || msg.userId === currentUser.id)) ||
+                        authorName === currentUser?.displayName;
 
                       return (
                         <div
@@ -2828,15 +2833,15 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                           }`}
                         >
                           <Avatar
-                            src={msg.avatar}
-                            alt={msg.displayName}
+                            src={authorAvatar}
+                            alt={authorName}
                             size="xs"
                             className="mt-0.5 shrink-0"
                           />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 mb-0.5">
                               <span className="font-bold text-white text-[11px] truncate">
-                                {msg.displayName}
+                                {authorName}
                               </span>
                               {isHostMsg && (
                                 <span className="bg-[#ff007a] text-white text-[8px] font-black px-1.5 py-0.2 rounded-full tracking-wider uppercase">

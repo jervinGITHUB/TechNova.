@@ -11,6 +11,8 @@ import {
   Sparkles,
   Layers,
   Move,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { CanvasSourceTransform } from '../../types';
 
@@ -101,6 +103,8 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
   const gameVideoRef = useRef<HTMLVideoElement>(null);
+  const compositeVideoRef = useRef<HTMLVideoElement>(null);
+  const [isStreamMuted, setIsStreamMuted] = useState(true);
 
   // Drag & Resize tracking state
   const [activeDrag, setActiveDrag] = useState<{
@@ -704,26 +708,76 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
     >
       {/* Viewport Content */}
       {compositeStream ? (
-        <div className="w-full h-full relative overflow-hidden bg-black flex items-center justify-center">
+        <div
+          onClick={() => {
+            if (compositeVideoRef.current && isStreamMuted) {
+              compositeVideoRef.current.muted = false;
+              setIsStreamMuted(false);
+              compositeVideoRef.current.play().catch(() => {});
+            }
+          }}
+          className="w-full h-full relative overflow-hidden bg-black flex items-center justify-center cursor-pointer"
+        >
           <video
             ref={el => {
-              if (el && el.srcObject !== compositeStream) {
-                el.srcObject = compositeStream;
-                el.play().catch(() => {});
+              compositeVideoRef.current = el;
+              if (el) {
+                if (el.srcObject !== compositeStream) {
+                  el.srcObject = compositeStream;
+                }
+                el.muted = isStreamMuted;
+                const p = el.play();
+                if (p !== undefined) {
+                  p.catch(() => {
+                    // Browser blocked autoplay with audio! Mute immediately to guarantee video plays!
+                    el.muted = true;
+                    setIsStreamMuted(true);
+                    el.play().catch(() => {});
+                  });
+                }
               }
             }}
             autoPlay
             playsInline
-            muted={false}
+            muted={isStreamMuted}
             className="w-full h-full object-cover select-none"
           />
+
+          {/* Floating Audio Unmute/Mute Toggle Indicator */}
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              if (compositeVideoRef.current) {
+                const nextMuted = !isStreamMuted;
+                compositeVideoRef.current.muted = nextMuted;
+                setIsStreamMuted(nextMuted);
+                if (!nextMuted) {
+                  compositeVideoRef.current.play().catch(() => {});
+                }
+              }
+            }}
+            className="absolute bottom-4 left-4 z-40 bg-black/60 hover:bg-black/80 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/15 text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer shadow-lg"
+          >
+            {isStreamMuted ? (
+              <>
+                <VolumeX className="w-3.5 h-3.5 text-neutral-400" />
+                <span className="text-[11px]">Tap to Unmute</span>
+              </>
+            ) : (
+              <>
+                <Volume2 className="w-3.5 h-3.5 text-[#ff007a]" />
+                <span className="text-[11px]">Sound On</span>
+              </>
+            )}
+          </button>
         </div>
       ) : snapshotUrl ? (
         <div className="w-full h-full relative overflow-hidden bg-black flex items-center justify-center">
           <img
             src={snapshotUrl}
             alt="Live Stream Broadcast"
-            className="w-full h-full object-cover select-none"
+            className="w-full h-full object-cover select-none animate-fadeIn"
           />
         </div>
       ) : isCustomMode ? (

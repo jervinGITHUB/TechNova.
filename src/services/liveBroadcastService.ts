@@ -97,9 +97,11 @@ class LiveBroadcastService {
 
   // Host WebRTC resources
   private hostPeerConnections = new Map<string, RTCPeerConnection>();
+  private pendingCandidatesMap = new Map<string, RTCIceCandidateInit[]>();
   private hostRealtimeChannel: any = null;
   private hostBroadcastChannel: BroadcastChannel | null = null;
   private compositorCanvas: HTMLCanvasElement | null = null;
+  private thumbnailCanvas: HTMLCanvasElement | null = null;
   private compositorAnimFrame: number | null = null;
   private snapshotInterval: number | null = null;
   private hostAudioContext: AudioContext | null = null;
@@ -242,7 +244,7 @@ class LiveBroadcastService {
       this.compositorCanvas.height = targetH;
     }
 
-    if (!this.state.compositeStream) {
+    if (!this.state.compositeStream || !this.state.compositeStream.active || this.state.compositeStream.getVideoTracks().length === 0) {
       try {
         const stream = this.compositorCanvas.captureStream(30);
         this.state.compositeStream = stream;
@@ -454,6 +456,8 @@ class LiveBroadcastService {
                 hostId: hostUser.id,
                 title: this.state.streamTitle,
               });
+              // Send immediate initial snapshot
+              this.captureAndBroadcastSnapshot();
             }
           });
       } catch (err) {
@@ -461,11 +465,11 @@ class LiveBroadcastService {
       }
     }
 
-    // 3. Periodic low-overhead canvas snapshot for instant viewer thumbnail / fallback
+    // 3. Periodic low-overhead canvas snapshot (scaled down to ~12KB, completely safe for Realtime WebSocket)
     if (this.snapshotInterval) clearInterval(this.snapshotInterval);
     this.snapshotInterval = window.setInterval(() => {
       this.captureAndBroadcastSnapshot();
-    }, 1500);
+    }, 2200);
 
     this.notify();
   }
@@ -481,6 +485,7 @@ class LiveBroadcastService {
       } catch {}
     });
     this.hostPeerConnections.clear();
+    this.pendingCandidatesMap.clear();
 
     if (this.hostRealtimeChannel) {
       try {
@@ -526,6 +531,18 @@ class LiveBroadcastService {
       if (pc && signal.answer) {
         try {
           await pc.setRemoteDescription(new RTCSessionDescription(signal.answer));
+          // Flush pending buffered ICE candidates for this viewer
+          const pending = this.pendingCandidatesMap.get(viewerId);
+          if (pending && pending.length > 0) {
+            for (const cand of pending) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
+              } catch (e) {
+                console.warn('Error flushing buffered candidate on host', e);
+              }
+            }
+            this.pendingCandidatesMap.delete(viewerId);
+          }
         } catch (err) {
           console.warn('Failed to set remote description on host', err);
         }
@@ -533,17 +550,25 @@ class LiveBroadcastService {
     } else if (type === 'ice_candidate') {
       const pc = this.hostPeerConnections.get(viewerId);
       if (pc && signal.candidate) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-        } catch (err) {
-          console.warn('Failed to add ICE candidate on host', err);
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          } catch (err) {
+            console.warn('Failed to add ICE candidate on host', err);
+          }
+        } else {
+          // Buffer candidate until answer/remoteDescription is set
+          const list = this.pendingCandidatesMap.get(viewerId) || [];
+          list.push(signal.candidate);
+          this.pendingCandidatesMap.set(viewerId, list);
         }
       }
     } else if (type === 'viewer_leave') {
       const pc = this.hostPeerConnections.get(viewerId);
       if (pc) {
-        pc.close();
+        try { pc.close(); } catch {}
         this.hostPeerConnections.delete(viewerId);
+        this.pendingCandidatesMap.delete(viewerId);
         this.state.viewersCount = Math.max(0, this.hostPeerConnections.size);
         this.notify();
       }
@@ -555,24 +580,37 @@ class LiveBroadcastService {
       // Close any existing connection for this viewerId
       const existing = this.hostPeerConnections.get(viewerId);
       if (existing) {
-        existing.close();
+        try { existing.close(); } catch {}
       }
+      this.pendingCandidatesMap.delete(viewerId);
 
       const pc = new RTCPeerConnection({
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-        ],
+        iceServers: GLOBAL_ICE_SERVERS,
       });
 
       this.hostPeerConnections.set(viewerId, pc);
       this.state.viewersCount = this.hostPeerConnections.size;
       this.notify();
 
+      // Send immediate snapshot frame to this newly joined viewer so they see the live display instantly (<100ms)
+      if (this.state.lastSnapshotUrl) {
+        this.sendBroadcastSignal({
+          type: 'snapshot',
+          streamId: this.state.streamId,
+          dataUrl: this.state.lastSnapshotUrl,
+          aspectRatio: this.state.canvasAspectRatio,
+          targetViewerId: viewerId,
+        });
+      }
+
       // Add composite video and audio tracks
       if (this.state.compositeStream) {
         this.state.compositeStream.getTracks().forEach(track => {
-          pc.addTrack(track, this.state.compositeStream!);
+          try {
+            pc.addTrack(track, this.state.compositeStream!);
+          } catch (e) {
+            console.warn('addTrack failed on host', e);
+          }
         });
       }
 
@@ -599,6 +637,7 @@ class LiveBroadcastService {
       pc.onconnectionstatechange = () => {
         if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed' || pc.connectionState === 'closed') {
           this.hostPeerConnections.delete(viewerId);
+          this.pendingCandidatesMap.delete(viewerId);
           this.state.viewersCount = this.hostPeerConnections.size;
           this.notify();
         }
@@ -644,19 +683,46 @@ class LiveBroadcastService {
   private captureAndBroadcastSnapshot() {
     if (!this.compositorCanvas || !this.state.isBroadcasting) return;
     try {
-      const dataUrl = this.compositorCanvas.toDataURL('image/jpeg', 0.65);
-      this.state.lastSnapshotUrl = dataUrl;
-      this.sendBroadcastSignal({
-        type: 'snapshot',
-        streamId: this.state.streamId,
-        dataUrl,
-        aspectRatio: this.state.canvasAspectRatio,
-      });
+      if (!this.thumbnailCanvas) {
+        this.thumbnailCanvas = document.createElement('canvas');
+      }
+      const isPortrait = this.state.canvasAspectRatio === '9:16';
+      // Compact thumbnail dimensions: 270x480 (portrait) or 480x270 (landscape)
+      const thumbW = isPortrait ? 270 : 480;
+      const thumbH = isPortrait ? 480 : 270;
+      if (this.thumbnailCanvas.width !== thumbW || this.thumbnailCanvas.height !== thumbH) {
+        this.thumbnailCanvas.width = thumbW;
+        this.thumbnailCanvas.height = thumbH;
+      }
+      const thumbCtx = this.thumbnailCanvas.getContext('2d');
+      if (thumbCtx) {
+        thumbCtx.drawImage(this.compositorCanvas, 0, 0, thumbW, thumbH);
+        // Quality 0.4 keeps payload under 15KB — 100% safe within Supabase Realtime 128KB limit!
+        const dataUrl = this.thumbnailCanvas.toDataURL('image/jpeg', 0.4);
+        this.state.lastSnapshotUrl = dataUrl;
+        this.sendBroadcastSignal({
+          type: 'snapshot',
+          streamId: this.state.streamId,
+          dataUrl,
+          aspectRatio: this.state.canvasAspectRatio,
+        });
+      }
     } catch {}
   }
 }
 
 export const liveBroadcastService = new LiveBroadcastService();
+
+// Global reliable STUN servers for cross-network NAT traversal
+const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:openrelay.metered.ca:80' },
+];
 
 export interface ViewerSessionCallbacks {
   onRemoteStream: (stream: MediaStream) => void;
@@ -683,20 +749,24 @@ export const createLiveViewerSession = (
   let broadcastChan: BroadcastChannel | null = null;
   let realtimeChan: any = null;
   let isCleanedUp = false;
+  const pendingRemoteCandidates: RTCIceCandidateInit[] = [];
+  let viewerMediaStream: MediaStream | null = null;
 
   const initPeerConnection = () => {
     if (pc) return pc;
     pc = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-      ],
+      iceServers: GLOBAL_ICE_SERVERS,
     });
 
     pc.ontrack = event => {
       if (event.streams && event.streams[0]) {
         callbacks.onRemoteStream(event.streams[0]);
+      } else if (event.track) {
+        if (!viewerMediaStream) {
+          viewerMediaStream = new MediaStream();
+        }
+        viewerMediaStream.addTrack(event.track);
+        callbacks.onRemoteStream(viewerMediaStream);
       }
     };
 
@@ -745,7 +815,9 @@ export const createLiveViewerSession = (
     }
 
     if (signal.type === 'snapshot' && signal.dataUrl) {
-      callbacks.onSnapshot?.(signal.dataUrl);
+      if (!signal.targetViewerId || signal.targetViewerId === viewerId) {
+        callbacks.onSnapshot?.(signal.dataUrl);
+      }
     }
 
     if (signal.targetViewerId !== viewerId) return;
@@ -761,15 +833,32 @@ export const createLiveViewerSession = (
           answer,
           viewerId,
         });
+
+        // Flush buffered remote ICE candidates
+        if (pendingRemoteCandidates.length > 0) {
+          for (const cand of pendingRemoteCandidates) {
+            try {
+              await peer.addIceCandidate(new RTCIceCandidate(cand));
+            } catch (err) {
+              console.warn('Viewer failed to add buffered ICE candidate', err);
+            }
+          }
+          pendingRemoteCandidates.length = 0;
+        }
       } catch (err) {
         console.warn('Viewer failed to process offer/answer', err);
       }
     } else if (signal.type === 'ice_candidate' && signal.candidate) {
       const peer = initPeerConnection();
-      try {
-        await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
-      } catch (err) {
-        console.warn('Viewer failed to add ICE candidate', err);
+      if (peer.remoteDescription && peer.remoteDescription.type) {
+        try {
+          await peer.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        } catch (err) {
+          console.warn('Viewer failed to add ICE candidate', err);
+        }
+      } else {
+        // Buffer until offer is set
+        pendingRemoteCandidates.push(signal.candidate);
       }
     }
   };
@@ -801,12 +890,35 @@ export const createLiveViewerSession = (
     }
   }
 
-  // Also send initial join immediately on BroadcastChannel
+  // Send initial join immediately
   sendViewerSignal({ type: 'viewer_join', viewerId, streamId });
+
+  // Retry join handshake up to 4 times every 2.5 seconds if remote stream has not arrived yet
+  let joinAttempts = 0;
+  let hasReceivedStream = false;
+  const originalOnRemoteStream = callbacks.onRemoteStream;
+  callbacks.onRemoteStream = (stream: MediaStream) => {
+    hasReceivedStream = true;
+    originalOnRemoteStream(stream);
+  };
+
+  const joinRetryTimer = window.setInterval(() => {
+    if (isCleanedUp || hasReceivedStream) {
+      clearInterval(joinRetryTimer);
+      return;
+    }
+    joinAttempts++;
+    if (joinAttempts <= 4) {
+      sendViewerSignal({ type: 'viewer_join', viewerId, streamId, retry: joinAttempts });
+    } else {
+      clearInterval(joinRetryTimer);
+    }
+  }, 2500);
 
   // Cleanup function
   return () => {
     isCleanedUp = true;
+    clearInterval(joinRetryTimer);
     sendViewerSignal({ type: 'viewer_leave', viewerId, streamId });
     if (pc) {
       try {

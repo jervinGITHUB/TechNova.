@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { LiveStreamCanvas } from './LiveStreamCanvas';
 import { Avatar } from '../common/Avatar';
 import { createLiveViewerSession } from '../../services/liveBroadcastService';
-import { supabaseDb } from '../../lib/supabase';
+import { supabaseDb, isSameUser } from '../../lib/supabase';
 import {
   Send,
   X,
@@ -34,6 +34,7 @@ export const LiveStreamViewer: React.FC = () => {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<string>('connecting');
+  const [sessionKey, setSessionKey] = useState<number>(0);
 
   const hostUser = users.find(u => u.id === currentLiveStream.host.id) || currentLiveStream.host;
   const isFollowingHost = !!hostUser.isFollowing;
@@ -51,6 +52,7 @@ export const LiveStreamViewer: React.FC = () => {
       onSnapshot: url => {
         hasReceivedSignalOrStream = true;
         setSnapshotUrl(url);
+        setConnectionStatus(prev => (prev === 'connected' ? 'connected' : 'streaming'));
       },
       onStreamEnded: () => {
         setIsLiveEnded(true);
@@ -64,18 +66,18 @@ export const LiveStreamViewer: React.FC = () => {
     });
 
     // Connection watchdog:
-    // If after 12 seconds, no stream or snapshot has arrived from host, indicate waiting status to viewer
+    // If after 10 seconds, no stream or snapshot has arrived from host, indicate waiting status to viewer
     const watchdogTimeout = window.setTimeout(() => {
       if (!hasReceivedSignalOrStream) {
         setConnectionStatus('offline');
       }
-    }, 12000);
+    }, 10000);
 
     return () => {
       clearTimeout(watchdogTimeout);
       cleanup();
     };
-  }, [currentLiveStream.id]);
+  }, [currentLiveStream.id, sessionKey]);
 
   // Real-time floating hearts on likes from any user
   useEffect(() => {
@@ -111,14 +113,30 @@ export const LiveStreamViewer: React.FC = () => {
           <span>Exit Stream</span>
         </button>
 
-        {/* Demo state toggler for "Live Ended" matching Screenshot 2 bottom right */}
-        <button
-          onClick={() => setIsLiveEnded(!isLiveEnded)}
-          className="text-[11px] bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1 rounded-full flex items-center gap-1.5 transition-colors cursor-pointer"
-        >
-          <RotateCcw className="w-3 h-3" />
-          <span>Toggle State: {isLiveEnded ? 'View Live Ended (Active)' : 'View Active Stream'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {connectionStatus === 'offline' && !isLiveEnded && (
+            <button
+              onClick={() => {
+                setConnectionStatus('connecting');
+                setSessionKey(k => k + 1);
+              }}
+              className="text-[11px] bg-red-950/80 hover:bg-red-900 border border-red-500/50 text-red-200 px-3 py-1 rounded-full flex items-center gap-1.5 transition-colors cursor-pointer animate-pulse"
+              title="Click to retry connecting to host stream"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reconnect Stream</span>
+            </button>
+          )}
+
+          {/* Demo state toggler for "Live Ended" matching Screenshot 2 bottom right */}
+          <button
+            onClick={() => setIsLiveEnded(!isLiveEnded)}
+            className="text-[11px] bg-neutral-800 hover:bg-neutral-700 text-neutral-300 px-3 py-1 rounded-full flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Toggle State: {isLiveEnded ? 'View Live Ended (Active)' : 'View Active Stream'}</span>
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 flex flex-col lg:flex-row gap-4 lg:gap-6 min-h-0">
@@ -174,7 +192,13 @@ export const LiveStreamViewer: React.FC = () => {
                 showMusicBanner={false}
                 showGoalBar={false}
                 hostName={hostUser.displayName || 'Host'}
-                timerText={connectionStatus === 'connected' ? 'LIVE' : connectionStatus === 'connecting' ? 'CONNECTING...' : 'LIVE'}
+                timerText={
+                  connectionStatus === 'connected' || connectionStatus === 'streaming'
+                    ? 'LIVE'
+                    : connectionStatus === 'connecting'
+                    ? 'CONNECTING...'
+                    : 'OFFLINE'
+                }
                 isLive={!isLiveEnded}
               />
 
@@ -255,20 +279,25 @@ export const LiveStreamViewer: React.FC = () => {
                       </div>
                     );
                   }
+
+                  const author = users.find(u => isSameUser(u.id, msg.userId));
+                  const authorName = (msg.displayName && msg.displayName !== 'Viewer') ? msg.displayName : (author?.displayName || author?.username || 'User');
+                  const authorAvatar = msg.avatar || author?.avatar || '';
+
                   return (
                     <div
                       key={msg.id}
                       className="bg-black/45 backdrop-blur-md text-white rounded-2xl px-3 py-1 border border-white/10 flex items-start gap-2 max-w-[85%] shadow-md"
                     >
                       <Avatar
-                        src={msg.avatar}
-                        alt={msg.displayName}
+                        src={authorAvatar}
+                        alt={authorName}
                         size="xs"
                         className="mt-0.5"
                       />
                       <div className="min-w-0 text-left">
                         <span className="text-[11px] font-bold text-[#ff007a] drop-shadow-sm mr-1">
-                          {msg.displayName}
+                          {authorName}
                         </span>
                         <span className="text-xs text-white drop-shadow-sm">
                           {msg.text}
@@ -342,15 +371,19 @@ export const LiveStreamViewer: React.FC = () => {
                 );
               }
 
+              const author = users.find(u => isSameUser(u.id, msg.userId));
+              const authorName = (msg.displayName && msg.displayName !== 'Viewer') ? msg.displayName : (author?.displayName || author?.username || 'User');
+              const authorAvatar = msg.avatar || author?.avatar || '';
+
               return (
                 <div key={msg.id} className="flex items-start gap-2.5">
                   <Avatar
-                    src={msg.avatar}
-                    alt={msg.displayName}
+                    src={authorAvatar}
+                    alt={authorName}
                     size="sm"
                   />
                   <div className="min-w-0">
-                    <div className="font-bold text-white text-[11px]">{msg.displayName}</div>
+                    <div className="font-bold text-white text-[11px]">{authorName}</div>
                     <div className="text-neutral-300 text-xs mt-0.5">{msg.text}</div>
                   </div>
                 </div>

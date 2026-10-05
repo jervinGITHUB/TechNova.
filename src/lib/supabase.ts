@@ -3687,7 +3687,9 @@ export const supabaseDb = {
     try {
       const streamUuid = toUuid(streamId);
 
-      // Attempt PascalCase query with User relation
+      let rows: any[] = [];
+
+      // 1. Attempt relational query with User relation
       const { data, error } = await client
         .from('LiveComment')
         .select(`
@@ -3705,44 +3707,120 @@ export const supabaseDb = {
         `)
         .eq('LiveStreamID', streamUuid)
         .order('LiveCommentAt', { ascending: true })
-        .limit(40);
+        .limit(60);
 
       if (!error && data && data.length > 0) {
-        return data.map((r: any) => {
-          const u = Array.isArray(r.User) ? r.User[0] : (r.User || {});
-          return {
-            id: r.LiveCommentID || `lm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            userId: r.UserID || u.UserID || '',
-            username: u.Username || 'viewer',
-            displayName: u.DisplayName || u.Username || 'Viewer',
-            avatar: u.ProfilePictureURL || '',
-            text: r.LiveText || '',
-            timestamp: r.LiveCommentAt ? new Date(r.LiveCommentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
+        rows = data;
+      } else {
+        // Fallback: simple query on LiveComment
+        const simple = await client
+          .from('LiveComment')
+          .select('*')
+          .eq('LiveStreamID', streamUuid)
+          .order('LiveCommentAt', { ascending: true })
+          .limit(60);
+
+        if (simple.data && simple.data.length > 0) {
+          rows = simple.data;
+        } else {
+          // Also try snake_case live_comments
+          const snake = await client
+            .from('live_comments')
+            .select('*')
+            .eq('live_stream_id', streamUuid)
+            .order('created_at', { ascending: true })
+            .limit(60);
+          if (snake.data && snake.data.length > 0) {
+            rows = snake.data;
+          }
+        }
+      }
+
+      if (!rows || rows.length === 0) return [];
+
+      // Collect unique user IDs from comments
+      const rawUserIds = rows
+        .map((r: any) => r.UserID || r.user_id)
+        .filter(Boolean);
+      const uniqueUserIds = Array.from(new Set(rawUserIds));
+
+      // Build in-memory user lookup map
+      const userLookup = new Map<string, { username: string; displayName: string; avatar: string }>();
+
+      // Populate from cachedUsersResult if available (0 extra disk IO!)
+      if (cachedUsersResult?.data) {
+        for (const u of cachedUsersResult.data) {
+          const uInfo = {
+            username: u.username || 'user',
+            displayName: u.displayName || u.username || 'User',
+            avatar: u.avatar || '',
           };
-        });
+          userLookup.set(String(u.id), uInfo);
+          userLookup.set(toUuid(u.id), uInfo);
+        }
       }
 
-      // Fallback simple query
-      const simple = await client
-        .from('LiveComment')
-        .select('*')
-        .eq('LiveStreamID', streamUuid)
-        .order('LiveCommentAt', { ascending: true })
-        .limit(40);
+      // Check localStorage current user or saved accounts as another zero-IO cache
+      try {
+        const rawCurr = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_currentUser') : null;
+        if (rawCurr) {
+          const curr = JSON.parse(rawCurr);
+          if (curr?.id) {
+            const cInfo = {
+              username: curr.username || 'user',
+              displayName: curr.displayName || curr.username || 'User',
+              avatar: curr.avatar || '',
+            };
+            userLookup.set(String(curr.id), cInfo);
+            userLookup.set(toUuid(curr.id), cInfo);
+          }
+        }
+      } catch {}
 
-      if (simple.data && simple.data.length > 0) {
-        return simple.data.map((r: any) => ({
-          id: r.LiveCommentID || `lm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-          userId: r.UserID || '',
-          username: 'viewer',
-          displayName: 'Viewer',
-          avatar: '',
-          text: r.LiveText || '',
-          timestamp: r.LiveCommentAt ? new Date(r.LiveCommentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
-        }));
+      // If any user IDs are missing from lookup, fetch them in ONE single batch select query
+      const missingIds = uniqueUserIds.filter(id => !userLookup.has(String(id)) && !userLookup.has(toUuid(id)));
+      if (missingIds.length > 0) {
+        try {
+          const { data: userData } = await client
+            .from('User')
+            .select('UserID, Username, DisplayName, ProfilePictureURL')
+            .in('UserID', missingIds);
+
+          if (userData && userData.length > 0) {
+            for (const u of userData) {
+              const info = {
+                username: u.Username || 'user',
+                displayName: u.DisplayName || u.Username || 'User',
+                avatar: u.ProfilePictureURL || '',
+              };
+              userLookup.set(String(u.UserID), info);
+              userLookup.set(toUuid(u.UserID), info);
+            }
+          }
+        } catch {}
       }
 
-      return [];
+      return rows.map((r: any) => {
+        const uRel = Array.isArray(r.User) ? r.User[0] : (r.User || null);
+        const uid = r.UserID || r.user_id || uRel?.UserID || '';
+        const found = userLookup.get(String(uid)) || userLookup.get(toUuid(uid));
+
+        const username = uRel?.Username || found?.username || 'user';
+        const displayName = uRel?.DisplayName || found?.displayName || uRel?.Username || found?.username || 'User';
+        const avatar = uRel?.ProfilePictureURL || found?.avatar || '';
+        const text = r.LiveText || r.comment_text || '';
+        const rawDate = r.LiveCommentAt || r.created_at;
+
+        return {
+          id: r.LiveCommentID || r.id || `lm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          userId: uid,
+          username,
+          displayName,
+          avatar,
+          text,
+          timestamp: rawDate ? new Date(rawDate).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Just now',
+        };
+      });
     } catch (e) {
       console.warn('fetchLiveComments fallback:', e);
       return [];
