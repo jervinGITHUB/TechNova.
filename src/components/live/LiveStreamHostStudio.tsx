@@ -126,7 +126,19 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   const [screenTransform, setScreenTransform] = useState<CanvasSourceTransform>(initialBroadcast.screenTransform);
 
   // Adjustable Goal Bar Widget State
-  const [goalWidgetConfig, setGoalWidgetConfig] = useState<GoalWidgetConfig>(initialBroadcast.goalWidgetConfig);
+  const [goalWidgetConfig, setGoalWidgetConfig] = useState<GoalWidgetConfig>(() => {
+    const init = initialBroadcast.goalWidgetConfig || {};
+    return {
+      enabled: init.enabled ?? true,
+      title: init.title || 'Follower Goal',
+      current: init.current ?? 4083,
+      target: init.target ?? 4100,
+      posX: init.posX ?? 22,
+      posY: init.posY ?? 13,
+      widthPercent: init.widthPercent && init.widthPercent <= 85 ? init.widthPercent : 56,
+      theme: init.theme || 'pink',
+    };
+  });
 
   const [selectedSourceId, setSelectedSourceId] = useState<'camera' | 'screen' | 'goal_bar' | null>('camera');
 
@@ -825,24 +837,88 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             </span>
           </div>
 
-          <div className="space-y-3">
-            <div>
-              <div className="flex justify-between text-[11px] text-neutral-400 mb-1">
-                <span>Vertical Position (Y):</span>
-                <span className="font-mono text-purple-300 font-bold">{goalWidgetConfig.posY}%</span>
+          <div className="space-y-3.5">
+            {/* Horizontal & Vertical Positioning */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="flex justify-between text-[11px] text-neutral-400 mb-1">
+                  <span>Horizontal (X):</span>
+                  <span className="font-mono text-cyan-300 font-bold">{goalWidgetConfig.posX ?? 22}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max={Math.max(0, 100 - (goalWidgetConfig.widthPercent || 56))}
+                  value={goalWidgetConfig.posX ?? 22}
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    setGoalWidgetConfig(prev => {
+                      const updated = { ...prev, posX: val };
+                      liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                      return updated;
+                    });
+                  }}
+                  className="w-full h-1.5 bg-neutral-700 rounded-lg cursor-pointer accent-cyan-400"
+                />
               </div>
-              <input
-                type="range"
-                min="2"
-                max="85"
-                value={goalWidgetConfig.posY}
-                onChange={e =>
-                  setGoalWidgetConfig(prev => ({ ...prev, posY: Number(e.target.value) }))
-                }
-                className="w-full h-1.5 bg-neutral-700 rounded-lg cursor-pointer accent-purple-400"
-              />
+
+              <div>
+                <div className="flex justify-between text-[11px] text-neutral-400 mb-1">
+                  <span>Vertical (Y):</span>
+                  <span className="font-mono text-purple-300 font-bold">{goalWidgetConfig.posY}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="90"
+                  value={goalWidgetConfig.posY}
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    setGoalWidgetConfig(prev => {
+                      const updated = { ...prev, posY: val };
+                      liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                      return updated;
+                    });
+                  }}
+                  className="w-full h-1.5 bg-neutral-700 rounded-lg cursor-pointer accent-purple-400"
+                />
+              </div>
             </div>
 
+            {/* Quick Placement Presets */}
+            <div>
+              <div className="flex justify-between text-[11px] text-neutral-400 mb-1.5">
+                <span>Quick Position Snapping:</span>
+                <span className="text-[10px] text-neutral-500">Or drag directly on canvas</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {[
+                  { label: 'Top Left', x: 3, y: 10 },
+                  { label: 'Top Center', x: Math.round((100 - (goalWidgetConfig.widthPercent || 56)) / 2), y: 10 },
+                  { label: 'Top Right', x: Math.max(0, 100 - (goalWidgetConfig.widthPercent || 56) - 3), y: 10 },
+                  { label: 'Center', x: Math.round((100 - (goalWidgetConfig.widthPercent || 56)) / 2), y: 44 },
+                  { label: 'Bottom Left', x: 3, y: 76 },
+                  { label: 'Bottom Right', x: Math.max(0, 100 - (goalWidgetConfig.widthPercent || 56) - 3), y: 76 },
+                ].map(p => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => {
+                      setGoalWidgetConfig(prev => {
+                        const updated = { ...prev, posX: p.x, posY: p.y };
+                        liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                        return updated;
+                      });
+                    }}
+                    className="px-2 py-1 rounded-xl bg-[#181824] hover:bg-cyan-500/20 hover:border-cyan-400/80 border border-neutral-700/80 text-[10px] font-semibold text-neutral-300 hover:text-white transition-colors cursor-pointer"
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Width Presets & Slider */}
             <div>
               <div className="flex justify-between text-[11px] text-neutral-400 mb-1">
                 <span>Width (Scale):</span>
@@ -850,19 +926,92 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   {goalWidgetConfig.widthPercent}%
                 </span>
               </div>
+              <div className="flex items-center gap-1.5 mb-2">
+                {[
+                  { label: 'Compact', width: 42 },
+                  { label: 'Standard', width: 56 },
+                  { label: 'Wide', width: 75 },
+                  { label: 'Full', width: 92 },
+                ].map(w => (
+                  <button
+                    key={w.label}
+                    type="button"
+                    onClick={() => {
+                      setGoalWidgetConfig(prev => {
+                        const maxLeft = Math.max(0, 100 - w.width);
+                        const newX = Math.min(prev.posX ?? 22, maxLeft);
+                        const updated = { ...prev, widthPercent: w.width, posX: newX };
+                        liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                        return updated;
+                      });
+                    }}
+                    className={`flex-1 py-1 rounded-xl border text-[10px] font-semibold transition-all cursor-pointer ${
+                      (goalWidgetConfig.widthPercent || 56) === w.width
+                        ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-sm'
+                        : 'bg-[#181824] border-neutral-700/80 text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    {w.label} ({w.width}%)
+                  </button>
+                ))}
+              </div>
               <input
                 type="range"
-                min="40"
+                min="25"
                 max="100"
-                value={goalWidgetConfig.widthPercent}
-                onChange={e =>
-                  setGoalWidgetConfig(prev => ({
-                    ...prev,
-                    widthPercent: Number(e.target.value),
-                  }))
-                }
+                value={goalWidgetConfig.widthPercent || 56}
+                onChange={e => {
+                  const val = Number(e.target.value);
+                  setGoalWidgetConfig(prev => {
+                    const maxLeft = Math.max(0, 100 - val);
+                    const newX = Math.min(prev.posX ?? 22, maxLeft);
+                    const updated = { ...prev, widthPercent: val, posX: newX };
+                    liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                    return updated;
+                  });
+                }}
                 className="w-full h-1.5 bg-neutral-700 rounded-lg cursor-pointer accent-purple-400"
               />
+            </div>
+
+            {/* Color Theme Selector */}
+            <div>
+              <label className="text-[11px] font-semibold text-neutral-400 block mb-1">
+                Color Theme:
+              </label>
+              <div className="flex items-center gap-2">
+                {(['pink', 'cyan', 'purple', 'gold'] as const).map(themeKey => (
+                  <button
+                    key={themeKey}
+                    type="button"
+                    onClick={() => {
+                      setGoalWidgetConfig(prev => {
+                        const updated = { ...prev, theme: themeKey };
+                        liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                        return updated;
+                      });
+                    }}
+                    className={`flex-1 py-1 px-1.5 rounded-xl border text-[10px] font-bold capitalize transition-all cursor-pointer ${
+                      (goalWidgetConfig.theme || 'pink') === themeKey
+                        ? 'border-white bg-white/10 text-white shadow-md'
+                        : 'border-neutral-800 bg-[#161622] text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full mr-1.5 ${
+                        themeKey === 'pink'
+                          ? 'bg-[#ff007a]'
+                          : themeKey === 'cyan'
+                          ? 'bg-cyan-400'
+                          : themeKey === 'purple'
+                          ? 'bg-purple-400'
+                          : 'bg-amber-400'
+                      }`}
+                    />
+                    {themeKey}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div>
@@ -872,9 +1021,14 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               <input
                 type="text"
                 value={goalWidgetConfig.title || 'Follower Goal'}
-                onChange={e =>
-                  setGoalWidgetConfig(prev => ({ ...prev, title: e.target.value }))
-                }
+                onChange={e => {
+                  const val = e.target.value;
+                  setGoalWidgetConfig(prev => {
+                    const updated = { ...prev, title: val };
+                    liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                    return updated;
+                  });
+                }}
                 className="w-full bg-[#181824] text-xs text-white px-3 py-1.5 rounded-xl border border-neutral-700/80 focus:border-purple-400 outline-none"
               />
             </div>
@@ -887,9 +1041,14 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 <input
                   type="number"
                   value={goalWidgetConfig.current}
-                  onChange={e =>
-                    setGoalWidgetConfig(prev => ({ ...prev, current: Number(e.target.value) }))
-                  }
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    setGoalWidgetConfig(prev => {
+                      const updated = { ...prev, current: val };
+                      liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                      return updated;
+                    });
+                  }}
                   className="w-full bg-[#181824] text-xs text-white px-2.5 py-1.5 rounded-xl border border-neutral-700/80 outline-none"
                 />
               </div>
@@ -900,9 +1059,14 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 <input
                   type="number"
                   value={goalWidgetConfig.target}
-                  onChange={e =>
-                    setGoalWidgetConfig(prev => ({ ...prev, target: Number(e.target.value) }))
-                  }
+                  onChange={e => {
+                    const val = Number(e.target.value);
+                    setGoalWidgetConfig(prev => {
+                      const updated = { ...prev, target: val };
+                      liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                      return updated;
+                    });
+                  }}
                   className="w-full bg-[#181824] text-xs text-white px-2.5 py-1.5 rounded-xl border border-neutral-700/80 outline-none"
                 />
               </div>
@@ -2051,7 +2215,11 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   showGoalBar={showGoalBar || !!goalWidgetConfig.enabled}
                   goalWidgetConfig={goalWidgetConfig}
                   onUpdateGoalWidgetConfig={cfg =>
-                    setGoalWidgetConfig(prev => ({ ...prev, ...cfg }))
+                    setGoalWidgetConfig(prev => {
+                      const updated = { ...prev, ...cfg };
+                      liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                      return updated;
+                    })
                   }
                   hostName={currentUser?.displayName || 'Host'}
                   timerText="PREVIEW"
@@ -2503,7 +2671,11 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 showGoalBar={showGoalBar || !!goalWidgetConfig.enabled}
                 goalWidgetConfig={goalWidgetConfig}
                 onUpdateGoalWidgetConfig={cfg =>
-                  setGoalWidgetConfig(prev => ({ ...prev, ...cfg }))
+                  setGoalWidgetConfig(prev => {
+                    const updated = { ...prev, ...cfg };
+                    liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                    return updated;
+                  })
                 }
                 hostName={currentUser?.displayName || 'Host'}
                 timerText={formatTimer(elapsedSeconds)}

@@ -22,8 +22,9 @@ export interface GoalWidgetConfig {
   title?: string;
   current?: number;
   target?: number;
-  posY?: number; // 5% to 85%
-  widthPercent?: number; // 50% to 100%
+  posX?: number; // 0% to 100%
+  posY?: number; // 0% to 100%
+  widthPercent?: number; // 20% to 100%
   theme?: 'pink' | 'cyan' | 'purple' | 'gold';
 }
 
@@ -156,8 +157,11 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
         } else if (activeDrag.sourceId === 'screen' && onUpdateScreenTransform) {
           onUpdateScreenTransform({ x: newX, y: newY });
         } else if (activeDrag.sourceId === 'goal_bar' && onUpdateGoalWidgetConfig) {
-          const newGoalY = Math.round(Math.max(2, Math.min(85, activeDrag.initialTransform.y + deltaYPercent)));
-          onUpdateGoalWidgetConfig({ posY: newGoalY });
+          const maxLeft = Math.max(0, 100 - activeDrag.initialTransform.width);
+          const maxTop = Math.max(0, 90);
+          const newGoalX = Math.round(Math.max(0, Math.min(maxLeft, activeDrag.initialTransform.x + deltaXPercent)));
+          const newGoalY = Math.round(Math.max(1, Math.min(maxTop, activeDrag.initialTransform.y + deltaYPercent)));
+          onUpdateGoalWidgetConfig({ posX: newGoalX, posY: newGoalY });
         }
       }
 
@@ -168,9 +172,17 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
 
         if (activeResize.sourceId === 'goal_bar' && onUpdateGoalWidgetConfig) {
           const initW = activeResize.initialTransform.width;
-          const factor = activeResize.handle === 'w' ? -1 : 1;
-          const newW = Math.round(Math.max(35, Math.min(100, initW + deltaXPercent * 2 * factor)));
-          onUpdateGoalWidgetConfig({ widthPercent: newW });
+          const initX = activeResize.initialTransform.x;
+          if (activeResize.handle === 'e') {
+            const newW = Math.round(Math.max(20, Math.min(100 - initX, initW + deltaXPercent)));
+            onUpdateGoalWidgetConfig({ widthPercent: newW });
+          } else if (activeResize.handle === 'w') {
+            const proposedW = initW - deltaXPercent;
+            const proposedX = initX + deltaXPercent;
+            if (proposedW >= 20 && proposedX >= 0) {
+              onUpdateGoalWidgetConfig({ posX: Math.round(proposedX), widthPercent: Math.round(proposedW) });
+            }
+          }
           return;
         }
 
@@ -260,7 +272,7 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
         }
       }
     },
-    [activeDrag, activeResize, onUpdateCameraTransform, onUpdateScreenTransform]
+    [activeDrag, activeResize, onUpdateCameraTransform, onUpdateScreenTransform, onUpdateGoalWidgetConfig]
   );
 
   const handlePointerUp = useCallback(() => {
@@ -766,174 +778,296 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
       )}
 
       {/* Adjustable Follower Goal Bar Widget */}
-      {(showGoalBar || goalWidgetConfig?.enabled) && (
-        <div
-          onClick={e => {
-            if (isInteractive && onSelectSource) {
-              e.stopPropagation();
-              onSelectSource('goal_bar');
-            }
-          }}
-          onPointerDown={e => {
-            if (isInteractive) {
-              e.stopPropagation();
-              onSelectSource?.('goal_bar');
-              setActiveDrag({
-                sourceId: 'goal_bar',
-                startX: e.clientX,
-                startY: e.clientY,
-                initialTransform: {
-                  id: 'goal_bar',
-                  name: 'Goal Widget',
-                  type: 'overlay',
-                  x: 0,
-                  y: goalWidgetConfig?.posY ?? 13,
-                  width: goalWidgetConfig?.widthPercent ?? 92,
-                  height: 10,
-                  zIndex: 30,
-                  visible: true,
-                  opacity: 1,
-                },
-              });
-            }
-          }}
-          style={{
-            top: `${goalWidgetConfig?.posY ?? 13}%`,
-            width: `${goalWidgetConfig?.widthPercent ?? 92}%`,
-            left: '50%',
-            transform: 'translateX(-50%)',
-          }}
-          className={`absolute z-30 transition-all duration-75 select-none ${
-            isInteractive ? 'cursor-move' : 'pointer-events-none'
-          }`}
-        >
+      {(showGoalBar || goalWidgetConfig?.enabled) && (() => {
+        const widthPct = Math.max(20, Math.min(100, goalWidgetConfig?.widthPercent ?? 56));
+        const defaultLeft = Math.round((100 - widthPct) / 2);
+        const leftPct = Math.max(0, Math.min(100 - widthPct, goalWidgetConfig?.posX ?? defaultLeft));
+        const topPct = Math.max(0, Math.min(92, goalWidgetConfig?.posY ?? 13));
+        const isDraggingThis = activeDrag?.sourceId === 'goal_bar';
+        const isSelected = isInteractive && selectedSourceId === 'goal_bar';
+
+        return (
           <div
-            className={`bg-black/85 backdrop-blur-md rounded-2xl p-2.5 shadow-xl text-[10px] text-white relative transition-all ${
-              isInteractive && selectedSourceId === 'goal_bar'
-                ? 'ring-2 ring-cyan-400 shadow-[0_0_25px_rgba(6,182,212,0.5)] border border-cyan-400'
-                : 'border border-white/10'
+            onClick={e => {
+              if (isInteractive && onSelectSource) {
+                e.stopPropagation();
+                onSelectSource('goal_bar');
+              }
+            }}
+            onPointerDown={e => {
+              if (isInteractive) {
+                e.stopPropagation();
+                try {
+                  (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                } catch {
+                  // Ignore if pointer capture unsupported
+                }
+                onSelectSource?.('goal_bar');
+                setActiveDrag({
+                  sourceId: 'goal_bar',
+                  startX: e.clientX,
+                  startY: e.clientY,
+                  initialTransform: {
+                    id: 'goal_bar',
+                    name: 'Goal Widget',
+                    type: 'overlay',
+                    x: leftPct,
+                    y: topPct,
+                    width: widthPct,
+                    height: 10,
+                    zIndex: 30,
+                    visible: true,
+                    opacity: 1,
+                  },
+                });
+              }
+            }}
+            style={{
+              top: `${topPct}%`,
+              left: `${leftPct}%`,
+              width: `${widthPct}%`,
+            }}
+            className={`absolute z-30 touch-none select-none ${
+              isDraggingThis
+                ? 'transition-none cursor-grabbing ring-2 ring-cyan-400 shadow-[0_0_30px_rgba(6,182,212,0.6)]'
+                : isInteractive
+                ? 'cursor-grab transition-all duration-75'
+                : 'pointer-events-none'
             }`}
           >
-            {/* Interactive selection badge & resize handles */}
-            {isInteractive && selectedSourceId === 'goal_bar' && (
-              <>
-                <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-cyan-500 text-black font-extrabold text-[9px] px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md whitespace-nowrap pointer-events-none">
-                  <Move className="w-2.5 h-2.5" />
-                  <span>Goal Widget · Drag to move · Drag ends to resize</span>
-                </div>
+            <div
+              className={`bg-black/90 backdrop-blur-md rounded-2xl p-2.5 shadow-xl text-[10px] text-white relative transition-all ${
+                isSelected
+                  ? 'ring-2 ring-cyan-400 shadow-[0_0_25px_rgba(6,182,212,0.5)] border border-cyan-400'
+                  : 'border border-white/10'
+              }`}
+            >
+              {/* Interactive selection badge, position toolbar & resize handles */}
+              {isSelected && (
+                <>
+                  <div
+                    onPointerDown={e => e.stopPropagation()}
+                    onClick={e => e.stopPropagation()}
+                    className={`absolute left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 bg-neutral-900/95 border border-cyan-400/80 px-2 py-1 rounded-xl shadow-2xl whitespace-nowrap text-[9px] pointer-events-auto ${
+                      topPct < 16 ? 'top-full mt-2' : '-top-9'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1 text-cyan-300 font-bold pr-1 border-r border-white/15">
+                      <Move className="w-3 h-3 text-cyan-400" />
+                      <span>X:{leftPct}% Y:{topPct}%</span>
+                    </div>
 
-                {/* Left resize handle */}
-                <div
-                  onPointerDown={e => {
-                    e.stopPropagation();
-                    setActiveResize({
-                      sourceId: 'goal_bar',
-                      handle: 'w',
-                      startX: e.clientX,
-                      startY: e.clientY,
-                      initialTransform: {
-                        id: 'goal_bar',
-                        name: 'Goal Widget',
-                        type: 'overlay',
-                        x: 0,
-                        y: goalWidgetConfig?.posY ?? 13,
-                        width: goalWidgetConfig?.widthPercent ?? 92,
-                        height: 10,
-                        zIndex: 30,
-                        visible: true,
-                        opacity: 1,
-                      },
-                    });
-                  }}
-                  className="absolute -left-2 top-1/2 -translate-y-1/2 w-3.5 h-6 bg-cyan-400 hover:bg-white rounded-md cursor-ew-resize flex items-center justify-center shadow-lg pointer-events-auto border border-black/40"
-                  title="Resize width"
-                />
+                    {/* Quick Alignment presets */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        title="Align Left"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onUpdateGoalWidgetConfig?.({ posX: 3 });
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-black/60 hover:bg-cyan-500/30 text-white font-medium cursor-pointer"
+                      >
+                        Left
+                      </button>
+                      <button
+                        type="button"
+                        title="Align Center"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onUpdateGoalWidgetConfig?.({ posX: defaultLeft });
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-black/60 hover:bg-cyan-500/30 text-white font-medium cursor-pointer"
+                      >
+                        Center
+                      </button>
+                      <button
+                        type="button"
+                        title="Align Right"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onUpdateGoalWidgetConfig?.({ posX: Math.max(0, 100 - widthPct - 3) });
+                        }}
+                        className="px-1.5 py-0.5 rounded bg-black/60 hover:bg-cyan-500/30 text-white font-medium cursor-pointer"
+                      >
+                        Right
+                      </button>
+                    </div>
 
-                {/* Right resize handle */}
-                <div
-                  onPointerDown={e => {
-                    e.stopPropagation();
-                    setActiveResize({
-                      sourceId: 'goal_bar',
-                      handle: 'e',
-                      startX: e.clientX,
-                      startY: e.clientY,
-                      initialTransform: {
-                        id: 'goal_bar',
-                        name: 'Goal Widget',
-                        type: 'overlay',
-                        x: 0,
-                        y: goalWidgetConfig?.posY ?? 13,
-                        width: goalWidgetConfig?.widthPercent ?? 92,
-                        height: 10,
-                        zIndex: 30,
-                        visible: true,
-                        opacity: 1,
-                      },
-                    });
-                  }}
-                  className="absolute -right-2 top-1/2 -translate-y-1/2 w-3.5 h-6 bg-cyan-400 hover:bg-white rounded-md cursor-ew-resize flex items-center justify-center shadow-lg pointer-events-auto border border-black/40"
-                  title="Resize width"
-                />
-              </>
-            )}
+                    {/* Quick Width presets */}
+                    <div className="flex items-center gap-1 pl-1 border-l border-white/15">
+                      <button
+                        type="button"
+                        title="Compact Width"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onUpdateGoalWidgetConfig?.({ widthPercent: 42 });
+                        }}
+                        className={`px-1.5 py-0.5 rounded font-medium cursor-pointer ${
+                          widthPct <= 45 ? 'bg-cyan-500 text-black font-bold' : 'bg-black/60 hover:bg-cyan-500/30 text-white'
+                        }`}
+                      >
+                        42%
+                      </button>
+                      <button
+                        type="button"
+                        title="Standard Width"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onUpdateGoalWidgetConfig?.({ widthPercent: 56 });
+                        }}
+                        className={`px-1.5 py-0.5 rounded font-medium cursor-pointer ${
+                          widthPct > 45 && widthPct < 75 ? 'bg-cyan-500 text-black font-bold' : 'bg-black/60 hover:bg-cyan-500/30 text-white'
+                        }`}
+                      >
+                        56%
+                      </button>
+                      <button
+                        type="button"
+                        title="Wide Width"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onUpdateGoalWidgetConfig?.({
+                            widthPercent: 90,
+                            posX: Math.min(leftPct, 10),
+                          });
+                        }}
+                        className={`px-1.5 py-0.5 rounded font-medium cursor-pointer ${
+                          widthPct >= 75 ? 'bg-cyan-500 text-black font-bold' : 'bg-black/60 hover:bg-cyan-500/30 text-white'
+                        }`}
+                      >
+                        90%
+                      </button>
+                    </div>
+                  </div>
 
-            <div className="flex justify-between items-center font-bold mb-1.5 pointer-events-auto">
-              <span className="text-white tracking-wide flex items-center gap-1.5">
+                  {/* Left resize handle */}
+                  <div
+                    onPointerDown={e => {
+                      e.stopPropagation();
+                      try {
+                        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                      } catch {
+                        // Ignore
+                      }
+                      setActiveResize({
+                        sourceId: 'goal_bar',
+                        handle: 'w',
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        initialTransform: {
+                          id: 'goal_bar',
+                          name: 'Goal Widget',
+                          type: 'overlay',
+                          x: leftPct,
+                          y: topPct,
+                          width: widthPct,
+                          height: 10,
+                          zIndex: 30,
+                          visible: true,
+                          opacity: 1,
+                        },
+                      });
+                    }}
+                    className="absolute -left-2.5 top-1/2 -translate-y-1/2 w-4 h-7 bg-cyan-400 hover:bg-white rounded-md cursor-ew-resize flex items-center justify-center shadow-lg pointer-events-auto border border-black/50 touch-none"
+                    title="Drag to resize width from left"
+                  >
+                    <div className="w-0.5 h-3 bg-black/60 rounded-full" />
+                  </div>
+
+                  {/* Right resize handle */}
+                  <div
+                    onPointerDown={e => {
+                      e.stopPropagation();
+                      try {
+                        (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);
+                      } catch {
+                        // Ignore
+                      }
+                      setActiveResize({
+                        sourceId: 'goal_bar',
+                        handle: 'e',
+                        startX: e.clientX,
+                        startY: e.clientY,
+                        initialTransform: {
+                          id: 'goal_bar',
+                          name: 'Goal Widget',
+                          type: 'overlay',
+                          x: leftPct,
+                          y: topPct,
+                          width: widthPct,
+                          height: 10,
+                          zIndex: 30,
+                          visible: true,
+                          opacity: 1,
+                        },
+                      });
+                    }}
+                    className="absolute -right-2.5 top-1/2 -translate-y-1/2 w-4 h-7 bg-cyan-400 hover:bg-white rounded-md cursor-ew-resize flex items-center justify-center shadow-lg pointer-events-auto border border-black/50 touch-none"
+                    title="Drag to resize width from right"
+                  >
+                    <div className="w-0.5 h-3 bg-black/60 rounded-full" />
+                  </div>
+                </>
+              )}
+
+              <div className="flex justify-between items-center font-bold mb-1.5 select-none pointer-events-none">
+                <span className="text-white tracking-wide flex items-center gap-1.5 truncate">
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                      goalWidgetConfig?.theme === 'cyan'
+                        ? 'bg-cyan-400'
+                        : goalWidgetConfig?.theme === 'gold'
+                        ? 'bg-amber-400'
+                        : goalWidgetConfig?.theme === 'purple'
+                        ? 'bg-purple-400'
+                        : 'bg-[#ff007a]'
+                    } animate-pulse`}
+                  />
+                  <span className="truncate">{goalWidgetConfig?.title || 'Follower Goal'}</span>
+                </span>
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${
+                  className={`font-mono font-bold shrink-0 ml-2 ${
                     goalWidgetConfig?.theme === 'cyan'
-                      ? 'bg-cyan-400'
+                      ? 'text-cyan-400'
                       : goalWidgetConfig?.theme === 'gold'
-                      ? 'bg-amber-400'
+                      ? 'text-amber-400'
                       : goalWidgetConfig?.theme === 'purple'
-                      ? 'bg-purple-400'
-                      : 'bg-[#ff007a]'
-                  } animate-pulse`}
+                      ? 'text-purple-400'
+                      : 'text-[#ff007a]'
+                  }`}
+                >
+                  {(goalWidgetConfig?.current ?? 4083).toLocaleString()} /{' '}
+                  {(goalWidgetConfig?.target ?? 4100).toLocaleString()}
+                </span>
+              </div>
+              <div className="w-full h-2 bg-neutral-800/80 rounded-full overflow-hidden p-0.5 border border-white/5 select-none pointer-events-none">
+                <div
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.max(
+                        0,
+                        ((goalWidgetConfig?.current ?? 4083) / (goalWidgetConfig?.target ?? 4100)) *
+                          100
+                      )
+                    )}%`,
+                  }}
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    goalWidgetConfig?.theme === 'cyan'
+                      ? 'bg-gradient-to-r from-cyan-500 to-blue-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]'
+                      : goalWidgetConfig?.theme === 'gold'
+                      ? 'bg-gradient-to-r from-amber-500 to-yellow-400 shadow-[0_0_10px_rgba(245,158,11,0.5)]'
+                      : goalWidgetConfig?.theme === 'purple'
+                      ? 'bg-gradient-to-r from-purple-500 to-indigo-500 shadow-[0_0_10px_rgba(168,85,247,0.5)]'
+                      : 'bg-gradient-to-r from-[#ff007a] to-rose-500 shadow-[0_0_10px_rgba(255,0,122,0.5)]'
+                  }`}
                 />
-                <span>{goalWidgetConfig?.title || 'Follower Goal'}</span>
-              </span>
-              <span
-                className={`font-mono font-bold ${
-                  goalWidgetConfig?.theme === 'cyan'
-                    ? 'text-cyan-400'
-                    : goalWidgetConfig?.theme === 'gold'
-                    ? 'text-amber-400'
-                    : goalWidgetConfig?.theme === 'purple'
-                    ? 'text-purple-400'
-                    : 'text-[#ff007a]'
-                }`}
-              >
-                {(goalWidgetConfig?.current ?? 4083).toLocaleString()} /{' '}
-                {(goalWidgetConfig?.target ?? 4100).toLocaleString()}
-              </span>
-            </div>
-            <div className="w-full h-2 bg-neutral-800/80 rounded-full overflow-hidden p-0.5 border border-white/5 pointer-events-auto">
-              <div
-                style={{
-                  width: `${Math.min(
-                    100,
-                    Math.max(
-                      0,
-                      ((goalWidgetConfig?.current ?? 4083) / (goalWidgetConfig?.target ?? 4100)) *
-                        100
-                    )
-                  )}%`,
-                }}
-                className={`h-full rounded-full transition-all duration-300 ${
-                  goalWidgetConfig?.theme === 'cyan'
-                    ? 'bg-gradient-to-r from-cyan-500 to-blue-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]'
-                    : goalWidgetConfig?.theme === 'gold'
-                    ? 'bg-gradient-to-r from-amber-500 to-yellow-400 shadow-[0_0_10px_rgba(245,158,11,0.5)]'
-                    : goalWidgetConfig?.theme === 'purple'
-                    ? 'bg-gradient-to-r from-purple-500 to-indigo-500 shadow-[0_0_10px_rgba(168,85,247,0.5)]'
-                    : 'bg-gradient-to-r from-[#ff007a] to-rose-500 shadow-[0_0_10px_rgba(255,0,122,0.5)]'
-                }`}
-              />
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 };

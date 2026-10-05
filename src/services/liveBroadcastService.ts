@@ -63,8 +63,9 @@ const DEFAULT_GOAL_CONFIG: GoalWidgetConfig = {
   title: 'Follower Goal',
   current: 4083,
   target: 4100,
+  posX: 22,
   posY: 13,
-  widthPercent: 92,
+  widthPercent: 56,
   theme: 'pink',
 };
 
@@ -363,8 +364,9 @@ class LiveBroadcastService {
     // 4. Render Goal Bar Widget Overlay
     const goal = this.state.goalWidgetConfig;
     if (goal && goal.enabled) {
-      const goalW = (Math.max(50, Math.min(100, goal.widthPercent ?? 92)) / 100) * w;
-      const goalX = (w - goalW) / 2;
+      const goalW = (Math.max(20, Math.min(100, goal.widthPercent ?? 56)) / 100) * w;
+      const defaultGoalX = (w - goalW) / 2;
+      const goalX = goal.posX !== undefined ? ((goal.posX) / 100) * w : defaultGoalX;
       const goalY = ((goal.posY ?? 13) / 100) * h;
       const goalH = 50;
 
