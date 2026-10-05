@@ -2321,6 +2321,7 @@ export const supabaseDb = {
             userId: uId,
             likesCount,
             isLiked,
+            likedBy: rawLikedBy,
           });
           repliesMap.set(pId, list);
         } else {
@@ -2332,6 +2333,7 @@ export const supabaseDb = {
             timestamp,
             likesCount,
             isLiked,
+            likedBy: rawLikedBy,
             userId: uId,
             replies: [],
           });
@@ -2450,9 +2452,9 @@ export const supabaseDb = {
     videoId: string,
     userId: string,
     isLiked: boolean
-  ): Promise<boolean> {
+  ): Promise<{ success: boolean; likedBy: string[]; count: number }> {
     const client = getSupabaseClient();
-    if (!client || !commentId || !userId) return false;
+    if (!client || !commentId || !userId) return { success: false, likedBy: [], count: 0 };
 
     try {
       const cUuid = toUuid(commentId);
@@ -2493,10 +2495,10 @@ export const supabaseDb = {
         console.warn('Supabase toggleCommentLike update warning:', error.message);
       }
 
-      return !error;
+      return { success: !error, likedBy: updatedLikedBy, count: updatedCount };
     } catch (e) {
       console.warn('Supabase toggleCommentLike exception:', e);
-      return false;
+      return { success: false, likedBy: [], count: 0 };
     }
   },
 

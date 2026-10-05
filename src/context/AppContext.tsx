@@ -744,11 +744,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (remote !== null) {
         setCommentsMap(prev => {
           const existing = prev[videoId] || [];
-          const existingMap = new Map<string, { isLiked?: boolean; likesCount?: number }>();
+          const existingMap = new Map<string, { isLiked?: boolean; likesCount?: number; likedBy?: string[] }>();
           existing.forEach(c => {
-            existingMap.set(c.id, { isLiked: c.isLiked, likesCount: c.likesCount });
-            (c.replies || []).forEach(r => existingMap.set(r.id, { isLiked: r.isLiked, likesCount: r.likesCount }));
+            existingMap.set(c.id, { isLiked: c.isLiked, likesCount: c.likesCount, likedBy: c.likedBy });
+            if (toUuid(c.id) !== c.id) existingMap.set(toUuid(c.id), { isLiked: c.isLiked, likesCount: c.likesCount, likedBy: c.likedBy });
+            (c.replies || []).forEach(r => {
+              existingMap.set(r.id, { isLiked: r.isLiked, likesCount: r.likesCount, likedBy: r.likedBy });
+              if (toUuid(r.id) !== r.id) existingMap.set(toUuid(r.id), { isLiked: r.isLiked, likesCount: r.likesCount, likedBy: r.likedBy });
+            });
           });
+
+          const mergeLikes = (remoteLikedBy?: string[], localLikedBy?: string[], fallbackCount = 0) => {
+            const set = new Set<string>();
+            const list: string[] = [];
+            for (const id of [...(remoteLikedBy || []), ...(localLikedBy || [])]) {
+              if (!id) continue;
+              const k = String(id).toLowerCase();
+              if (!set.has(k)) {
+                set.add(k);
+                list.push(id);
+              }
+            }
+            const count = list.length > 0 ? list.length : fallbackCount;
+            const liked = Boolean(currentUser && list.some(id => isSameUser(id, currentUser.id)));
+            return { likedBy: list, likesCount: count, isLiked: liked };
+          };
 
           const merged = remote.map(c => {
             const seenReplyIds = new Set<string>();
@@ -758,20 +778,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               if (k) seenReplyIds.add(k);
               return true;
             }).map(r => {
-              const exR = existingMap.get(r.id);
+              const exR = existingMap.get(r.id) || existingMap.get(toUuid(r.id));
+              const mInfo = mergeLikes(r.likedBy, exR?.likedBy, Math.max(r.likesCount || 0, exR?.likesCount || 0));
               return {
                 ...r,
-                isLiked: r.isLiked ?? exR?.isLiked ?? false,
-                likesCount: r.likesCount ?? exR?.likesCount ?? 0,
+                likedBy: mInfo.likedBy,
+                likesCount: mInfo.likesCount,
+                isLiked: mInfo.isLiked || Boolean(exR?.isLiked),
               };
             });
 
-            const exC = existingMap.get(c.id);
+            const exC = existingMap.get(c.id) || existingMap.get(toUuid(c.id));
+            const mInfo = mergeLikes(c.likedBy, exC?.likedBy, Math.max(c.likesCount || 0, exC?.likesCount || 0));
             return {
               ...c,
               replies: cleanReplies,
-              isLiked: c.isLiked ?? exC?.isLiked ?? false,
-              likesCount: c.likesCount ?? exC?.likesCount ?? 0,
+              likedBy: mInfo.likedBy,
+              likesCount: mInfo.likesCount,
+              isLiked: mInfo.isLiked || Boolean(exC?.isLiked),
             };
           });
 
@@ -2152,16 +2176,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             })
             .on('broadcast', { event: 'comment_liked' }, ({ payload }: any) => {
               if (!payload) return;
-              const { videoId, commentId, isLiked, likesCount, userId } = payload;
+              const { videoId, commentId, isLiked, userId, likedBy } = payload;
               setCommentsMap(prev => {
                 const list = prev[videoId] || [];
-                const isMe = currentUser && isSameUser(userId, currentUser.id);
                 const updated = list.map(c => {
-                  if (c.id === commentId || toUuid(c.id) === toUuid(commentId)) {
+                  const isTarget = c.id === commentId || toUuid(c.id) === toUuid(commentId);
+                  if (isTarget) {
+                    let nextLikedBy: string[];
+                    if (Array.isArray(likedBy) && likedBy.length > 0) {
+                      nextLikedBy = Array.from(new Set(likedBy));
+                    } else {
+                      const cur = c.likedBy || [];
+                      if (isLiked) {
+                        nextLikedBy = cur.some(id => isSameUser(id, userId)) ? cur : [...cur, userId];
+                      } else {
+                        nextLikedBy = cur.filter(id => !isSameUser(id, userId));
+                      }
+                    }
+                    const count = nextLikedBy.length;
+                    const liked = Boolean(currentUser && nextLikedBy.some(id => isSameUser(id, currentUser.id)));
                     return {
                       ...c,
-                      likesCount: typeof likesCount === 'number' ? likesCount : (c.likesCount || 0),
-                      isLiked: isMe ? isLiked : c.isLiked,
+                      likedBy: nextLikedBy,
+                      likesCount: count,
+                      isLiked: liked,
                     };
                   }
                   if (c.replies && c.replies.length > 0) {
@@ -2169,10 +2207,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       ...c,
                       replies: c.replies.map(r => {
                         if (r.id === commentId || toUuid(r.id) === toUuid(commentId)) {
+                          let nextLikedBy: string[];
+                          if (Array.isArray(likedBy) && likedBy.length > 0) {
+                            nextLikedBy = Array.from(new Set(likedBy));
+                          } else {
+                            const cur = r.likedBy || [];
+                            if (isLiked) {
+                              nextLikedBy = cur.some(id => isSameUser(id, userId)) ? cur : [...cur, userId];
+                            } else {
+                              nextLikedBy = cur.filter(id => !isSameUser(id, userId));
+                            }
+                          }
+                          const count = nextLikedBy.length;
+                          const liked = Boolean(currentUser && nextLikedBy.some(id => isSameUser(id, currentUser.id)));
                           return {
                             ...r,
-                            likesCount: typeof likesCount === 'number' ? likesCount : (r.likesCount || 0),
-                            isLiked: isMe ? isLiked : r.isLiked,
+                            likedBy: nextLikedBy,
+                            likesCount: count,
+                            isLiked: liked,
                           };
                         }
                         return r;
@@ -2185,6 +2237,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 storage.set('video_comments_v2', next);
                 return next;
               });
+            })
+            .on('broadcast', { event: 'comment_added' }, ({ payload }: any) => {
+              if (!payload) return;
+              const { videoId, replyToCommentId, comment } = payload;
+              if (!videoId || !comment) return;
+              setCommentsMap(prev => {
+                const list = prev[videoId] || [];
+                if (replyToCommentId) {
+                  const updated = list.map(c => {
+                    if (c.id === replyToCommentId || toUuid(c.id) === toUuid(replyToCommentId)) {
+                      const curReplies = c.replies || [];
+                      if (curReplies.some(r => r.id === comment.id || toUuid(r.id) === toUuid(comment.id))) {
+                        return c;
+                      }
+                      return { ...c, replies: [...curReplies, comment] };
+                    }
+                    return c;
+                  });
+                  const next = { ...prev, [videoId]: updated };
+                  storage.set('video_comments_v2', next);
+                  return next;
+                } else {
+                  if (list.some(c => c.id === comment.id || toUuid(c.id) === toUuid(comment.id))) {
+                    return prev;
+                  }
+                  const next = { ...prev, [videoId]: [...list, comment] };
+                  storage.set('video_comments_v2', next);
+                  return next;
+                }
+              });
+              setVideos(prev =>
+                prev.map(v =>
+                  v.id === videoId || toUuid(v.id) === toUuid(videoId)
+                    ? { ...v, commentsCount: (v.commentsCount || 0) + 1 }
+                    : v
+                )
+              );
+            })
+            .on('broadcast', { event: 'in_app_notification' }, ({ payload }: any) => {
+              if (!payload || !currentUser) return;
+              if (isSameUser(payload.recipientId, currentUser.id)) {
+                setNotifications(prev => deduplicateNotifications([payload, ...prev]));
+                setActiveNotificationPopup(payload);
+              }
             })
             .subscribe();
 
@@ -3310,7 +3406,89 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       replyToCommentId
     );
 
-    // 3. Trigger notification to the VIDEO CREATOR (if not currentUser)
+    // Broadcast new comment / reply to all active devices instantly (<50ms)
+    try {
+      const client = getSupabaseClient();
+      const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+      if (broadcastCh) {
+        const broadcastCommentEntry = replyToCommentId
+          ? {
+              id: commentUuid,
+              name: currentUser.displayName || currentUser.username || 'User',
+              avatar: currentUser.avatar || '',
+              text: cleanText,
+              timestamp: nowIso,
+              userId: currentUser.id,
+              likesCount: 0,
+              isLiked: false,
+              likedBy: [],
+            }
+          : {
+              id: commentUuid,
+              name: currentUser.displayName || currentUser.username || 'User',
+              avatar: currentUser.avatar || '',
+              text: cleanText,
+              timestamp: nowIso,
+              likesCount: 0,
+              isLiked: false,
+              likedBy: [],
+              userId: currentUser.id,
+              replies: [],
+            };
+
+        broadcastCh.send({
+          type: 'broadcast',
+          event: 'comment_added',
+          payload: {
+            videoId,
+            replyToCommentId,
+            comment: broadcastCommentEntry,
+          },
+        });
+      }
+    } catch {}
+
+    // 3. Trigger notification to the PARENT COMMENT AUTHOR if this is a reply
+    if (replyToCommentId) {
+      const videoComments = commentsMap[videoId] || [];
+      const parentComment = videoComments.find(
+        c => c.id === replyToCommentId || toUuid(c.id) === toUuid(replyToCommentId)
+      );
+      if (parentComment && parentComment.userId && !isSameUser(parentComment.userId, currentUser.id)) {
+        const replyNotif: NotificationItem = {
+          id: `notif_${Date.now()}_rep_${Math.random().toString(36).slice(2, 6)}`,
+          recipientId: parentComment.userId,
+          type: 'comment',
+          actor: {
+            id: currentUser.id,
+            username: currentUser.username,
+            displayName: currentUser.displayName,
+            avatar: currentUser.avatar,
+          },
+          targetText: `replied to your comment: "${cleanText.slice(0, 35)}"`,
+          timestamp: nowIso,
+          createdAt: nowIso,
+          isUnread: true,
+          videoId: videoId,
+        };
+        setNotifications(prev => deduplicateNotifications([replyNotif, ...prev]));
+        supabaseDb.insertNotification(replyNotif, parentComment.userId);
+
+        try {
+          const client = getSupabaseClient();
+          const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+          if (broadcastCh) {
+            broadcastCh.send({
+              type: 'broadcast',
+              event: 'in_app_notification',
+              payload: replyNotif,
+            });
+          }
+        } catch {}
+      }
+    }
+
+    // 4. Trigger notification to the VIDEO CREATOR (if not currentUser and not parent author already notified)
     const video = videos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
     if (video && !isSameUser(video.creatorId, currentUser.id)) {
       const newNotif: NotificationItem = {
@@ -3335,6 +3513,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return next;
       });
       supabaseDb.insertNotification(newNotif, video.creatorId);
+
+      try {
+        const client = getSupabaseClient();
+        const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+        if (broadcastCh) {
+          broadcastCh.send({
+            type: 'broadcast',
+            event: 'in_app_notification',
+            payload: newNotif,
+          });
+        }
+      } catch {}
     }
 
     return success;
@@ -3373,6 +3563,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let targetIsLiked = false;
     let targetLikesCount = 0;
+    let targetLikedBy: string[] = [];
+    let targetAuthorId = '';
+    let targetCommentText = '';
+    let targetIsReply = false;
 
     setCommentsMap(prev => {
       const list = prev[videoId] || [];
@@ -3380,10 +3574,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const isTargetComment = c.id === commentId || toUuid(c.id) === toUuid(commentId);
         if (isTargetComment) {
           const liked = !c.isLiked;
-          const count = Math.max(0, (c.likesCount || 0) + (liked ? 1 : -1));
+          const curLikedBy = c.likedBy || [];
+          const nextLikedBy = liked
+            ? (curLikedBy.some(id => isSameUser(id, currentUser.id)) ? curLikedBy : [...curLikedBy, currentUser.id])
+            : curLikedBy.filter(id => !isSameUser(id, currentUser.id));
+          const count = nextLikedBy.length;
           targetIsLiked = liked;
           targetLikesCount = count;
-          return { ...c, isLiked: liked, likesCount: count };
+          targetLikedBy = nextLikedBy;
+          targetAuthorId = c.userId || '';
+          targetCommentText = c.text || '';
+          targetIsReply = false;
+          return { ...c, isLiked: liked, likesCount: count, likedBy: nextLikedBy };
         }
 
         if (c.replies && c.replies.length > 0) {
@@ -3392,10 +3594,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (r.id === commentId || toUuid(r.id) === toUuid(commentId)) {
               replyChanged = true;
               const liked = !r.isLiked;
-              const count = Math.max(0, (r.likesCount || 0) + (liked ? 1 : -1));
+              const curLikedBy = r.likedBy || [];
+              const nextLikedBy = liked
+                ? (curLikedBy.some(id => isSameUser(id, currentUser.id)) ? curLikedBy : [...curLikedBy, currentUser.id])
+                : curLikedBy.filter(id => !isSameUser(id, currentUser.id));
+              const count = nextLikedBy.length;
               targetIsLiked = liked;
               targetLikesCount = count;
-              return { ...r, isLiked: liked, likesCount: count };
+              targetLikedBy = nextLikedBy;
+              targetAuthorId = r.userId || '';
+              targetCommentText = r.text || '';
+              targetIsReply = true;
+              return { ...r, isLiked: liked, likesCount: count, likedBy: nextLikedBy };
             }
             return r;
           });
@@ -3425,13 +3635,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             userId: currentUser.id,
             isLiked: targetIsLiked,
             likesCount: targetLikesCount,
+            likedBy: targetLikedBy,
           },
         });
       }
     } catch {}
 
-    // 2. Persist to Supabase Comment table
-    await supabaseDb.toggleCommentLike(commentId, videoId, currentUser.id, targetIsLiked);
+    // 2. Notification to comment / reply author if liked (NOT currentUser)
+    if (targetIsLiked && targetAuthorId && !isSameUser(targetAuthorId, currentUser.id)) {
+      const nowIso = new Date().toISOString();
+      const notifItem: NotificationItem = {
+        id: `notif_${Date.now()}_clike_${Math.random().toString(36).slice(2, 6)}`,
+        recipientId: targetAuthorId,
+        type: 'like',
+        actor: {
+          id: currentUser.id,
+          username: currentUser.username,
+          displayName: currentUser.displayName,
+          avatar: currentUser.avatar,
+        },
+        targetText: `liked your ${targetIsReply ? 'reply' : 'comment'}: "${targetCommentText.slice(0, 35)}"`,
+        timestamp: nowIso,
+        createdAt: nowIso,
+        isUnread: true,
+        videoId: videoId,
+      };
+      setNotifications(prev => deduplicateNotifications([notifItem, ...prev]));
+      supabaseDb.insertNotification(notifItem, targetAuthorId);
+
+      try {
+        const client = getSupabaseClient();
+        const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+        if (broadcastCh) {
+          broadcastCh.send({
+            type: 'broadcast',
+            event: 'in_app_notification',
+            payload: notifItem,
+          });
+        }
+      } catch {}
+    }
+
+    // 3. Persist to Supabase Comment table
+    const result = await supabaseDb.toggleCommentLike(commentId, videoId, currentUser.id, targetIsLiked);
+    if (result.success && result.likedBy && result.likedBy.length > 0) {
+      setCommentsMap(prev => {
+        const list = prev[videoId] || [];
+        const updated = list.map(c => {
+          if (c.id === commentId || toUuid(c.id) === toUuid(commentId)) {
+            const liked = Boolean(currentUser && result.likedBy.some(id => isSameUser(id, currentUser.id)));
+            return { ...c, likedBy: result.likedBy, likesCount: result.likedBy.length, isLiked: liked };
+          }
+          if (c.replies && c.replies.length > 0) {
+            return {
+              ...c,
+              replies: c.replies.map(r => {
+                if (r.id === commentId || toUuid(r.id) === toUuid(commentId)) {
+                  const liked = Boolean(currentUser && result.likedBy.some(id => isSameUser(id, currentUser.id)));
+                  return { ...r, likedBy: result.likedBy, likesCount: result.likedBy.length, isLiked: liked };
+                }
+                return r;
+              }),
+            };
+          }
+          return c;
+        });
+        const next = { ...prev, [videoId]: updated };
+        storage.set('video_comments_v2', next);
+        return next;
+      });
+    }
   };
 
   // Share Video (BR-019, BR-020, BR-023)

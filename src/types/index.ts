@@ -41,6 +41,7 @@ export interface CommentReplyEntry {
   userId?: string;
   likesCount?: number;
   isLiked?: boolean;
+  likedBy?: string[];
 }
 
 export interface CommentEntry {
@@ -51,6 +52,7 @@ export interface CommentEntry {
   timestamp?: string;
   likesCount?: number;
   isLiked?: boolean;
+  likedBy?: string[];
   replyTo?: string;
   userId?: string;
   replies?: CommentReplyEntry[];
