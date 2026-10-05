@@ -241,7 +241,7 @@ export interface CanvasSourceTransform {
   height: number;
   zIndex: number;
   visible: boolean;
-  locked: boolean;
+  locked?: boolean;
   mirrored?: boolean;
   borderRadius?: number;
   borderStyle?: 'none' | 'pink' | 'cyan' | 'hairline';

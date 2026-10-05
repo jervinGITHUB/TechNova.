@@ -17,6 +17,16 @@ import { CanvasSourceTransform } from '../../types';
 export type LayoutMode = 'split' | 'pip' | 'game_only' | 'camera_only' | 'custom';
 export type GamePreset = 'genshin' | 'valorant' | 'cyberpunk' | 'custom_screen';
 
+export interface GoalWidgetConfig {
+  enabled?: boolean;
+  title?: string;
+  current?: number;
+  target?: number;
+  posY?: number; // 5% to 85%
+  widthPercent?: number; // 50% to 100%
+  theme?: 'pink' | 'cyan' | 'purple' | 'gold';
+}
+
 export interface LiveStreamCanvasProps {
   layoutMode?: LayoutMode;
   splitRatio?: number; // e.g. 50 (50% camera, 50% game)
@@ -30,6 +40,7 @@ export interface LiveStreamCanvasProps {
   showMusicBanner?: boolean;
   showChatOverlay?: boolean;
   showGoalBar?: boolean;
+  goalWidgetConfig?: GoalWidgetConfig;
   streamTitle?: string;
   hostName?: string;
   hostAvatar?: string;
@@ -40,10 +51,11 @@ export interface LiveStreamCanvasProps {
   canvasAspectRatio?: '9:16' | '16:9';
   cameraTransform?: CanvasSourceTransform;
   screenTransform?: CanvasSourceTransform;
-  selectedSourceId?: 'camera' | 'screen' | null;
-  onSelectSource?: (sourceId: 'camera' | 'screen' | null) => void;
+  selectedSourceId?: 'camera' | 'screen' | 'goal_bar' | null;
+  onSelectSource?: (sourceId: 'camera' | 'screen' | 'goal_bar' | null) => void;
   onUpdateCameraTransform?: (transform: Partial<CanvasSourceTransform>) => void;
   onUpdateScreenTransform?: (transform: Partial<CanvasSourceTransform>) => void;
+  onUpdateGoalWidgetConfig?: (config: Partial<GoalWidgetConfig>) => void;
   showGrid?: boolean;
   showSafeArea?: boolean;
 }
@@ -63,6 +75,8 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
   showMusicBanner = false,
   showChatOverlay = false,
   showGoalBar = false,
+  goalWidgetConfig,
+  onUpdateGoalWidgetConfig,
   streamTitle = '',
   hostName = 'Host',
   hostAvatar = '',
@@ -85,14 +99,14 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
 
   // Drag & Resize tracking state
   const [activeDrag, setActiveDrag] = useState<{
-    sourceId: 'camera' | 'screen';
+    sourceId: 'camera' | 'screen' | 'goal_bar';
     startX: number;
     startY: number;
     initialTransform: CanvasSourceTransform;
   } | null>(null);
 
   const [activeResize, setActiveResize] = useState<{
-    sourceId: 'camera' | 'screen';
+    sourceId: 'camera' | 'screen' | 'goal_bar';
     handle: ResizeHandle;
     startX: number;
     startY: number;
@@ -137,6 +151,9 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
           onUpdateCameraTransform({ x: newX, y: newY });
         } else if (activeDrag.sourceId === 'screen' && onUpdateScreenTransform) {
           onUpdateScreenTransform({ x: newX, y: newY });
+        } else if (activeDrag.sourceId === 'goal_bar' && onUpdateGoalWidgetConfig) {
+          const newGoalY = Math.round(Math.max(2, Math.min(85, activeDrag.initialTransform.y + deltaYPercent)));
+          onUpdateGoalWidgetConfig({ posY: newGoalY });
         }
       }
 
@@ -144,6 +161,14 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
       if (activeResize) {
         const deltaXPercent = ((e.clientX - activeResize.startX) / rect.width) * 100;
         const deltaYPercent = ((e.clientY - activeResize.startY) / rect.height) * 100;
+
+        if (activeResize.sourceId === 'goal_bar' && onUpdateGoalWidgetConfig) {
+          const initW = activeResize.initialTransform.width;
+          const factor = activeResize.handle === 'w' ? -1 : 1;
+          const newW = Math.round(Math.max(35, Math.min(100, initW + deltaXPercent * 2 * factor)));
+          onUpdateGoalWidgetConfig({ widthPercent: newW });
+          return;
+        }
 
         const init = activeResize.initialTransform;
         let newX = init.x;
@@ -693,18 +718,170 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
         </div>
       )}
 
-      {/* Optional Follower Goal Bar */}
-      {showGoalBar && (
-        <div className="absolute top-14 left-3 right-3 z-30 pointer-events-none">
-          <div className="bg-black/75 backdrop-blur-md border border-white/10 rounded-xl p-2 shadow-lg text-[10px] text-white pointer-events-auto">
-            <div className="flex justify-between font-bold mb-1">
-              <span>Follower Goal</span>
-              <span className="text-[#ff007a] font-mono">4,083 / 4,100</span>
+      {/* Adjustable Follower Goal Bar Widget */}
+      {(showGoalBar || goalWidgetConfig?.enabled) && (
+        <div
+          onClick={e => {
+            if (isInteractive && onSelectSource) {
+              e.stopPropagation();
+              onSelectSource('goal_bar');
+            }
+          }}
+          onPointerDown={e => {
+            if (isInteractive) {
+              e.stopPropagation();
+              onSelectSource?.('goal_bar');
+              setActiveDrag({
+                sourceId: 'goal_bar',
+                startX: e.clientX,
+                startY: e.clientY,
+                initialTransform: {
+                  id: 'goal_bar',
+                  name: 'Goal Widget',
+                  type: 'overlay',
+                  x: 0,
+                  y: goalWidgetConfig?.posY ?? 13,
+                  width: goalWidgetConfig?.widthPercent ?? 92,
+                  height: 10,
+                  zIndex: 30,
+                  visible: true,
+                  opacity: 1,
+                },
+              });
+            }
+          }}
+          style={{
+            top: `${goalWidgetConfig?.posY ?? 13}%`,
+            width: `${goalWidgetConfig?.widthPercent ?? 92}%`,
+            left: '50%',
+            transform: 'translateX(-50%)',
+          }}
+          className={`absolute z-30 transition-all duration-75 select-none ${
+            isInteractive ? 'cursor-move' : 'pointer-events-none'
+          }`}
+        >
+          <div
+            className={`bg-black/85 backdrop-blur-md rounded-2xl p-2.5 shadow-xl text-[10px] text-white relative transition-all ${
+              isInteractive && selectedSourceId === 'goal_bar'
+                ? 'ring-2 ring-cyan-400 shadow-[0_0_25px_rgba(6,182,212,0.5)] border border-cyan-400'
+                : 'border border-white/10'
+            }`}
+          >
+            {/* Interactive selection badge & resize handles */}
+            {isInteractive && selectedSourceId === 'goal_bar' && (
+              <>
+                <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-cyan-500 text-black font-extrabold text-[9px] px-2 py-0.5 rounded-full flex items-center gap-1 shadow-md whitespace-nowrap pointer-events-none">
+                  <Move className="w-2.5 h-2.5" />
+                  <span>Goal Widget · Drag to move · Drag ends to resize</span>
+                </div>
+
+                {/* Left resize handle */}
+                <div
+                  onPointerDown={e => {
+                    e.stopPropagation();
+                    setActiveResize({
+                      sourceId: 'goal_bar',
+                      handle: 'w',
+                      startX: e.clientX,
+                      startY: e.clientY,
+                      initialTransform: {
+                        id: 'goal_bar',
+                        name: 'Goal Widget',
+                        type: 'overlay',
+                        x: 0,
+                        y: goalWidgetConfig?.posY ?? 13,
+                        width: goalWidgetConfig?.widthPercent ?? 92,
+                        height: 10,
+                        zIndex: 30,
+                        visible: true,
+                        opacity: 1,
+                      },
+                    });
+                  }}
+                  className="absolute -left-2 top-1/2 -translate-y-1/2 w-3.5 h-6 bg-cyan-400 hover:bg-white rounded-md cursor-ew-resize flex items-center justify-center shadow-lg pointer-events-auto border border-black/40"
+                  title="Resize width"
+                />
+
+                {/* Right resize handle */}
+                <div
+                  onPointerDown={e => {
+                    e.stopPropagation();
+                    setActiveResize({
+                      sourceId: 'goal_bar',
+                      handle: 'e',
+                      startX: e.clientX,
+                      startY: e.clientY,
+                      initialTransform: {
+                        id: 'goal_bar',
+                        name: 'Goal Widget',
+                        type: 'overlay',
+                        x: 0,
+                        y: goalWidgetConfig?.posY ?? 13,
+                        width: goalWidgetConfig?.widthPercent ?? 92,
+                        height: 10,
+                        zIndex: 30,
+                        visible: true,
+                        opacity: 1,
+                      },
+                    });
+                  }}
+                  className="absolute -right-2 top-1/2 -translate-y-1/2 w-3.5 h-6 bg-cyan-400 hover:bg-white rounded-md cursor-ew-resize flex items-center justify-center shadow-lg pointer-events-auto border border-black/40"
+                  title="Resize width"
+                />
+              </>
+            )}
+
+            <div className="flex justify-between items-center font-bold mb-1.5 pointer-events-auto">
+              <span className="text-white tracking-wide flex items-center gap-1.5">
+                <span
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    goalWidgetConfig?.theme === 'cyan'
+                      ? 'bg-cyan-400'
+                      : goalWidgetConfig?.theme === 'gold'
+                      ? 'bg-amber-400'
+                      : goalWidgetConfig?.theme === 'purple'
+                      ? 'bg-purple-400'
+                      : 'bg-[#ff007a]'
+                  } animate-pulse`}
+                />
+                <span>{goalWidgetConfig?.title || 'Follower Goal'}</span>
+              </span>
+              <span
+                className={`font-mono font-bold ${
+                  goalWidgetConfig?.theme === 'cyan'
+                    ? 'text-cyan-400'
+                    : goalWidgetConfig?.theme === 'gold'
+                    ? 'text-amber-400'
+                    : goalWidgetConfig?.theme === 'purple'
+                    ? 'text-purple-400'
+                    : 'text-[#ff007a]'
+                }`}
+              >
+                {(goalWidgetConfig?.current ?? 4083).toLocaleString()} /{' '}
+                {(goalWidgetConfig?.target ?? 4100).toLocaleString()}
+              </span>
             </div>
-            <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+            <div className="w-full h-2 bg-neutral-800/80 rounded-full overflow-hidden p-0.5 border border-white/5 pointer-events-auto">
               <div
-                style={{ width: `${(4083 / 4100) * 100}%` }}
-                className="h-full bg-gradient-to-r from-[#ff007a] to-cyan-400"
+                style={{
+                  width: `${Math.min(
+                    100,
+                    Math.max(
+                      0,
+                      ((goalWidgetConfig?.current ?? 4083) / (goalWidgetConfig?.target ?? 4100)) *
+                        100
+                    )
+                  )}%`,
+                }}
+                className={`h-full rounded-full transition-all duration-300 ${
+                  goalWidgetConfig?.theme === 'cyan'
+                    ? 'bg-gradient-to-r from-cyan-500 to-blue-500 shadow-[0_0_10px_rgba(6,182,212,0.5)]'
+                    : goalWidgetConfig?.theme === 'gold'
+                    ? 'bg-gradient-to-r from-amber-500 to-yellow-400 shadow-[0_0_10px_rgba(245,158,11,0.5)]'
+                    : goalWidgetConfig?.theme === 'purple'
+                    ? 'bg-gradient-to-r from-purple-500 to-indigo-500 shadow-[0_0_10px_rgba(168,85,247,0.5)]'
+                    : 'bg-gradient-to-r from-[#ff007a] to-rose-500 shadow-[0_0_10px_rgba(255,0,122,0.5)]'
+                }`}
               />
             </div>
           </div>

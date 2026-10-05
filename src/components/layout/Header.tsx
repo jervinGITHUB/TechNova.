@@ -21,7 +21,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     navigateToUserProfile,
   } = useApp();
 
-  const isLiveStudioSetup = activeTab === 'live_host_setup';
+  const isLiveStudio = activeTab === 'live_host_setup' || activeTab === 'live_host_active';
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
@@ -52,8 +52,9 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     }
   }, [mobileSearchOpen]);
 
-  // In Live Studio Setup: hide search bar, notification icon, and upload button. Show 3 lines menu icon to keep layout wide.
-  if (isLiveStudioSetup) {
+  // In Live Studio (Setup or Active): hide search bar, notification icon, and upload button. Show 3 lines menu icon to keep layout wide.
+  if (isLiveStudio) {
+    const isLiveActive = activeTab === 'live_host_active';
     return (
       <header className="h-14 sm:h-16 px-3 sm:px-6 border-b border-neutral-800/80 bg-[#0d0d12]/95 backdrop-blur-md sticky top-0 z-30 flex items-center justify-between gap-3 select-none">
         {/* Left: 3-Lines (Hamburger) Button + Logo + Title */}
@@ -78,7 +79,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
           <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-neutral-800">
             <span className="w-2 h-2 rounded-full bg-[#ff007a] animate-pulse" />
             <span className="text-xs font-bold font-brand text-white tracking-wider">
-              LIVE STUDIO SETUP
+              {isLiveActive ? 'LIVE BROADCAST' : 'LIVE STUDIO SETUP'}
             </span>
           </div>
         </div>
@@ -88,7 +89,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
           <button
             onClick={() => setActiveTab('live')}
             className="px-3 py-1.5 rounded-xl text-xs font-semibold text-neutral-400 hover:text-white hover:bg-neutral-800/80 transition-colors flex items-center gap-1.5 cursor-pointer border border-neutral-800 hover:border-neutral-700"
-            title="Exit Live Studio Setup"
+            title="Exit Live Studio"
           >
             <X className="w-4 h-4" />
             <span className="hidden sm:inline">Exit Studio</span>

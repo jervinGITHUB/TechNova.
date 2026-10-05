@@ -145,20 +145,20 @@ const AppContent: React.FC = () => {
     }
   };
 
-  const isLiveStudioSetup = activeTab === 'live_host_setup';
+  const isLiveStudio = activeTab === 'live_host_setup' || activeTab === 'live_host_active';
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-[#0c0c10] text-white flex flex-col md:flex-row antialiased selection:bg-[#ff007a] selection:text-white">
-      {/* Desktop Fixed Sidebar: Hidden in Live Studio Setup so workspace is wide */}
-      {!isLiveStudioSetup && (
+      {/* Desktop Fixed Sidebar: Hidden in Live Studio Setup & Active Broadcast so workspace is wide */}
+      {!isLiveStudio && (
         <div className="hidden md:block h-full shrink-0">
           <Sidebar />
         </div>
       )}
 
-      {/* Slide-over Drawer Navigation: Available on mobile, and on desktop when in Live Studio Setup */}
+      {/* Slide-over Drawer Navigation: Available on mobile, and on desktop when in Live Studio */}
       {mobileNavOpen && (
-        <div className={`fixed inset-0 z-50 flex ${!isLiveStudioSetup ? 'md:hidden' : ''}`}>
+        <div className={`fixed inset-0 z-50 flex ${!isLiveStudio ? 'md:hidden' : ''}`}>
           <div
             className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
             onClick={() => setMobileNavOpen(false)}
