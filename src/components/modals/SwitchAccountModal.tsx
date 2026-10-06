@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { User } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { ViralHubLogo } from '../common/ViralHubLogo';
-import { checkIsUserBanned, isGoogleAccount } from '../../lib/supabase';
+import { checkIsUserBanned, isGoogleAccount, isAccountLoggedInOnDevice } from '../../lib/supabase';
 import {
   X,
   UserCheck,
@@ -33,6 +33,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
     removeSavedAccount,
     admins,
     quickLoginAs,
+    prepareAddNewAccount,
     logout,
     setAuthView,
     loginWithGoogle,
@@ -70,6 +71,15 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
   })();
 
   const handleSwitchTo = async (target: User) => {
+    // If the account has an active session on this device (was not logged out),
+    // switch to it INSTANTLY without asking for any password or Google chooser!
+    if (isAccountLoggedInOnDevice(target.id, target.email)) {
+      quickLoginAs(target.id);
+      onClose();
+      return;
+    }
+
+    // If the account was explicitly logged out, require credentials or Google chooser
     if (isGoogleAccount(target)) {
       setIsConnectingGoogle(true);
       onClose();
@@ -89,9 +99,8 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
 
   const handleAddNewAccount = () => {
     onClose();
-    // Open auth page in login or register mode
-    setAuthView('login');
-    logout();
+    // Do NOT call logout()! This keeps current account logged in on device!
+    prepareAddNewAccount();
   };
 
   return (
@@ -155,6 +164,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
             {displayAccounts.map(u => {
               const isCurrent = currentUser?.id === u.id;
               const isGoogle = isGoogleAccount(u);
+              const isLoggedInOnDevice = isAccountLoggedInOnDevice(u.id, u.email);
               const roleLower = String(u.role || '').toLowerCase();
               const isAdminAccount = roleLower === 'admin' || roleLower === 'super admin' || roleLower === 'administrator';
               const isBannedAccount = u.isBanned || checkIsUserBanned(u.id, u.email, u).isBanned;
@@ -184,7 +194,11 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                         <span className="text-xs font-bold text-white truncate">
                           {u.displayName || u.username}
                         </span>
-                        {isGoogle ? (
+                        {isLoggedInOnDevice && !isCurrent ? (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[9px] font-bold shrink-0">
+                            Logged In
+                          </span>
+                        ) : isGoogle ? (
                           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30 text-[9px] font-bold shrink-0">
                             Google
                           </span>
@@ -220,7 +234,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                           onClick={() => handleSwitchTo(u)}
                           className="text-xs font-bold text-[#ff007a] hover:underline px-2 py-1 rounded-lg hover:bg-[#ff007a]/10 cursor-pointer"
                         >
-                          {isGoogle ? 'Choose Account →' : 'Enter Password →'}
+                          {isLoggedInOnDevice ? 'Switch →' : isGoogle ? 'Choose Account →' : 'Enter Password →'}
                         </button>
                         <button
                           type="button"

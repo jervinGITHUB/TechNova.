@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useApp, AppTab } from '../../context/AppContext';
 import { ViralHubLogo } from '../common/ViralHubLogo';
 import { Avatar } from '../common/Avatar';
-import { isGoogleAccount } from '../../lib/supabase';
+import { isGoogleAccount, isAccountLoggedInOnDevice } from '../../lib/supabase';
 import {
   Home,
   Compass,
@@ -229,6 +229,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
                               onClick={async () => {
                                 setProfileMenuOpen(false);
                                 if (isCurrent) return;
+                                if (isAccountLoggedInOnDevice(u.id, u.email)) {
+                                  quickLoginAs(u.id);
+                                  return;
+                                }
                                 if (isGoogleAccount(u)) {
                                   await loginWithGoogle({ prompt: 'select_account' });
                                 } else {

@@ -51,6 +51,9 @@ import {
   isGoogleAccount,
   recordGoogleAccount,
   GoogleAuthOptions,
+  isAccountLoggedInOnDevice,
+  markAccountLoggedInOnDevice,
+  markAccountLoggedOutOnDevice,
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
 import { toTimestampMillis } from '../utils/time';
@@ -316,6 +319,7 @@ interface AppContextType {
   loginWithGoogle: (options?: GoogleAuthOptions) => Promise<{ success: boolean; message?: string }>;
   logout: (saveToDevice?: boolean) => void;
   quickLoginAs: (userId: string) => void;
+  prepareAddNewAccount: () => void;
 
   // Navigation
   activeTab: AppTab;
@@ -513,6 +517,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return null;
   });
+
+  // Ensure current active user session is marked active on this device
+  useEffect(() => {
+    if (currentUser && currentUser.id) {
+      markAccountLoggedInOnDevice(currentUser.id, currentUser.email);
+    }
+  }, []);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const hash = window.location.hash || '';
@@ -740,6 +751,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeSavedAccount = (userId: string) => {
+    markAccountLoggedOutOnDevice(userId);
     setSavedAccounts(prev => {
       const next = prev.filter(a => !isSameUser(a.id, userId));
       storage.set('saved_accounts_v2', next);
@@ -1602,6 +1614,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isGoogleAuth) {
       recordGoogleAccount(finalUserId, sbUser.email || email);
     }
+
+    markAccountLoggedInOnDevice(finalUserId, sbUser.email || email);
 
     const finalUser: User = {
       id: finalUserId,
@@ -2686,6 +2700,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             storage.set('currentUser', loggedInUser);
             if (isAdminRecord) setIsAdmin(true);
             recordSavedAccount(loggedInUser);
+            markAccountLoggedInOnDevice(loggedInUser.id, loggedInUser.email);
             setActiveConversationId(null);
             setMessagesMobileView('list');
             setSelectedUserId(null);
@@ -2723,6 +2738,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setCurrentUser(patchedFound);
       storage.set('currentUser', patchedFound);
       recordSavedAccount(patchedFound);
+      markAccountLoggedInOnDevice(patchedFound.id, patchedFound.email);
       if (patchedFound.role === 'admin') setIsAdmin(true);
       setActiveConversationId(null);
       setMessagesMobileView('list');
@@ -2806,6 +2822,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setCurrentUser(newUser);
         storage.set('currentUser', newUser);
         recordSavedAccount(newUser);
+        markAccountLoggedInOnDevice(newUser.id, newUser.email);
         setActiveConversationId(null);
         setMessagesMobileView('list');
         setSelectedUserId(null);
@@ -2832,6 +2849,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCurrentUser(newUser);
     storage.set('currentUser', newUser);
     recordSavedAccount(newUser);
+    markAccountLoggedInOnDevice(newUser.id, newUser.email);
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setSelectedUserId(null);
@@ -2887,6 +2905,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return next;
         });
       }
+    }
+
+    if (currentUser) {
+      markAccountLoggedOutOnDevice(currentUser.id, currentUser.email);
     }
 
     if (typeof window !== 'undefined') {
@@ -2973,6 +2995,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     storage.set('currentUser', updatedTarget);
     setIsAdmin(isTargetAdmin);
     recordSavedAccount(updatedTarget);
+    markAccountLoggedInOnDevice(updatedTarget.id, updatedTarget.email);
 
     setActiveConversationId(null);
     setMessagesMobileView('list');
@@ -2990,6 +3013,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       }).catch(() => {});
     }
+  };
+
+  const prepareAddNewAccount = () => {
+    if (currentUser) {
+      markAccountLoggedInOnDevice(currentUser.id, currentUser.email);
+      recordSavedAccount(currentUser);
+    }
+    setCurrentUser(null);
+    storage.remove('currentUser');
+    setAuthView('login');
   };
 
   const navigateToUserProfile = (userId: string) => {
@@ -6072,6 +6105,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         loginWithGoogle,
         logout,
         quickLoginAs,
+        prepareAddNewAccount,
         activeTab,
         setActiveTab,
         selectedUserId,

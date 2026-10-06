@@ -15,7 +15,7 @@ import {
   Users,
 } from 'lucide-react';
 import { SupabaseVercelModal } from '../modals/SupabaseVercelModal';
-import { resendConfirmationEmail, isGoogleAccount } from '../../lib/supabase';
+import { resendConfirmationEmail, isGoogleAccount, isAccountLoggedInOnDevice } from '../../lib/supabase';
 
 export const AuthPage: React.FC = () => {
   const {
@@ -322,13 +322,24 @@ export const AuthPage: React.FC = () => {
                 <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                   {validSavedAccounts.map(acc => {
                     const isGoogle = isGoogleAccount(acc);
+                    const isDeviceLoggedIn = isAccountLoggedInOnDevice(acc.id, acc.email);
                     const roleLower = String(acc.role || '').toLowerCase();
                     const isAdmin = roleLower === 'admin' || roleLower === 'super admin' || roleLower === 'administrator';
+
+                    const handleClick = () => {
+                      if (isDeviceLoggedIn) {
+                        quickLoginAs(acc.id);
+                      } else if (isGoogle) {
+                        handleGoogleAccountClick(acc);
+                      } else {
+                        handleCredentialAccountClick(acc);
+                      }
+                    };
 
                     return (
                       <div
                         key={acc.id}
-                        onClick={() => (isGoogle ? handleGoogleAccountClick(acc) : handleCredentialAccountClick(acc))}
+                        onClick={handleClick}
                         className="flex items-center justify-between p-3.5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800 hover:border-[#ff007a]/70 transition-all cursor-pointer group shadow-sm"
                       >
                         <div className="flex items-center gap-3 min-w-0">
@@ -343,7 +354,12 @@ export const AuthPage: React.FC = () => {
                               <span className="text-xs sm:text-sm font-bold text-white truncate group-hover:text-[#ff007a] transition-colors">
                                 {acc.displayName || acc.username}
                               </span>
-                              {isGoogle ? (
+                              {isDeviceLoggedIn ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[9px] font-bold shrink-0">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                                  Active on device
+                                </span>
+                              ) : isGoogle ? (
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-500/15 text-blue-300 border border-blue-500/30 text-[9px] font-bold shrink-0">
                                   <svg className="w-2.5 h-2.5" viewBox="0 0 24 24">
                                     <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.1 8.9 5 12 5z"/>
@@ -385,7 +401,7 @@ export const AuthPage: React.FC = () => {
                           </button>
 
                           <div className="h-7 px-2.5 rounded-full bg-[#ff007a]/15 group-hover:bg-[#ff007a] text-[#ff007a] group-hover:text-white flex items-center justify-center gap-1 text-[11px] font-bold transition-all">
-                            <span>{isGoogle ? 'Choose Account' : 'Enter Password'}</span>
+                            <span>{isDeviceLoggedIn ? 'Switch to Account' : isGoogle ? 'Choose Account' : 'Enter Password'}</span>
                             <ArrowRight className="w-3 h-3" />
                           </div>
                         </div>

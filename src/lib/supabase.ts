@@ -512,6 +512,54 @@ export const recordGoogleAccount = (userId?: string | null, email?: string | nul
   } catch {}
 };
 
+// =========================================================================
+// Active Device Sessions Tracker
+// Tracks accounts that have an active logged-in session on this device.
+// When an account is logged in, it's added here.
+// When an account is explicitly LOGGED OUT, it is removed here.
+// Switching accounts retains logged-in status so switching back is instant (0 credentials / no Google prompt).
+// =========================================================================
+export const markAccountLoggedInOnDevice = (userId?: string | null, email?: string | null) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = localStorage.getItem('viralhub_active_device_accounts_v1') || '[]';
+    const list: string[] = JSON.parse(raw);
+    const set = new Set(list.map(s => s.toLowerCase()));
+    if (userId) set.add(String(userId).toLowerCase());
+    if (email) set.add(email.trim().toLowerCase());
+    localStorage.setItem('viralhub_active_device_accounts_v1', JSON.stringify(Array.from(set)));
+  } catch {}
+};
+
+export const markAccountLoggedOutOnDevice = (userId?: string | null, email?: string | null) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = localStorage.getItem('viralhub_active_device_accounts_v1') || '[]';
+    const list: string[] = JSON.parse(raw);
+    const idLower = userId ? String(userId).toLowerCase() : null;
+    const emailLower = email ? email.trim().toLowerCase() : null;
+    const next = list.filter(item => {
+      const lower = item.toLowerCase();
+      if (idLower && lower === idLower) return false;
+      if (emailLower && lower === emailLower) return false;
+      return true;
+    });
+    localStorage.setItem('viralhub_active_device_accounts_v1', JSON.stringify(next));
+  } catch {}
+};
+
+export const isAccountLoggedInOnDevice = (userId?: string | null, email?: string | null): boolean => {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = localStorage.getItem('viralhub_active_device_accounts_v1') || '[]';
+    const list: string[] = JSON.parse(raw);
+    const set = new Set(list.map(s => s.toLowerCase()));
+    if (userId && set.has(String(userId).toLowerCase())) return true;
+    if (email && set.has(email.trim().toLowerCase())) return true;
+  } catch {}
+  return false;
+};
+
 export const isGoogleAccount = (user?: Partial<User> | null): boolean => {
   if (!user) return false;
   if (user.authProvider === 'google') return true;
