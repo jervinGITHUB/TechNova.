@@ -22,11 +22,13 @@ import { SwitchAccountModal } from './components/modals/SwitchAccountModal';
 import { AdminDashboardView } from './components/admin/AdminDashboardView';
 import { BannedAccountView } from './components/auth/BannedAccountView';
 import { InAppNotificationToast } from './components/notifications/InAppNotificationToast';
+import { ViralHubLogo } from './components/common/ViralHubLogo';
 import { X } from 'lucide-react';
 
 const AppContent: React.FC = () => {
   const {
     currentUser,
+    isAuthLoading,
     activeTab,
     supabaseModalOpen,
     setSupabaseModalOpen,
@@ -36,6 +38,19 @@ const AppContent: React.FC = () => {
     setSwitchAccountModalOpen,
   } = useApp();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  // Show full-screen branded loader while authenticating via Google OAuth
+  if (isAuthLoading) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#0c0c10] text-white select-none">
+        <ViralHubLogo size="xl" />
+        <div className="mt-6 flex items-center gap-3 text-neutral-400 text-sm font-medium">
+          <div className="w-4 h-4 border-2 border-[#ff007a] border-t-transparent rounded-full animate-spin" />
+          <span>Signing in with Google...</span>
+        </div>
+      </div>
+    );
+  }
 
   // If user is not authenticated, show Auth Page first
   if (!currentUser) {

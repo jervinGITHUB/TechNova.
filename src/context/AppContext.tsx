@@ -47,6 +47,7 @@ import {
   checkIsUserBanned,
   recordUserBan,
   recordUserUnban,
+  injectUserIntoCache,
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
 import { toTimestampMillis } from '../utils/time';
@@ -300,6 +301,7 @@ interface ReportModalConfig {
 interface AppContextType {
   // Auth state
   currentUser: User | null;
+  isAuthLoading: boolean;
   authView: 'login' | 'register';
   setAuthView: (view: 'login' | 'register') => void;
   login: (usernameOrEmail: string, password?: string) => Promise<{ success: boolean; message?: string }>;
@@ -507,6 +509,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
     return null;
+  });
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const hash = window.location.hash || '';
+    const search = window.location.search || '';
+    const inProgress =
+      sessionStorage.getItem('viralhub_oauth_in_progress') === 'true' ||
+      localStorage.getItem('viralhub_oauth_in_progress') === 'true';
+    return inProgress || hash.includes('access_token=') || search.includes('code=');
   });
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
 
@@ -965,71 +976,78 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 1. Synchronize Users
       if (remoteUsers !== null) {
-        if (remoteUsers.length === 0) {
-          // DATABASE WAS EMPTIED! Reset all user-related state on this device
-          setUsers([]);
-          storage.set('users', []);
-          setSavedAccounts([]);
-          storage.set('saved_accounts_v2', []);
-          setVideos([]);
-          storage.set('videos', []);
-          setFollowRelations([]);
-          storage.set('follow_relations_v2', []);
-          setFollowRequests([]);
-          storage.set('follow_requests_v2', []);
-          setNotifications([]);
-          storage.set('notifications', []);
-          setConversations([]);
-          storage.set('conversations', []);
-
-          if (currentUser) {
-            console.warn('Database was cleared. Logging out current session...');
+        // Only log out if currentUser was explicitly deleted by an administrator
+        if (currentUser && !isAdmin) {
+          const isDeleted = isUserIdDeleted(currentUser.id, currentUser.email);
+          if (isDeleted) {
+            console.warn('Current account was deleted by administrator. Logging out session...');
             logout(false);
+            return;
           }
-        } else {
-          // Database has users:
-          // 1. Check if currentUser still exists in remoteUsers
-          if (currentUser && !isAdmin) {
-            const isDeleted = isUserIdDeleted(currentUser.id, currentUser.email);
-            const stillInDb = remoteUsers.some(
-              u =>
-                isSameUser(u.id, currentUser.id) ||
-                (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+        }
+
+        // Ensure currentUser is always preserved in remoteUsers list if not deleted!
+        if (currentUser && !isUserIdDeleted(currentUser.id, currentUser.email)) {
+          const inRemote = remoteUsers.some(
+            u =>
+              isSameUser(u.id, currentUser.id) ||
+              (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+          );
+          if (!inRemote) {
+            remoteUsers.unshift(currentUser);
+            // Gently ensure they are recorded in database in the background without blocking
+            supabaseDb.upsertUser(currentUser).catch(() => {});
+          }
+        }
+
+        // 2. Synchronize savedAccounts: NEVER discard an account unless explicitly deleted!
+        setSavedAccounts(prevAccounts => {
+          const nonDeleted = prevAccounts.filter(a => !isUserIdDeleted(a.id, a.email));
+          const updated = nonDeleted.map(a => {
+            const matchingRemote = remoteUsers.find(
+              ru =>
+                isSameUser(ru.id, a.id) ||
+                (a.email && ru.email && a.email.toLowerCase() === ru.email.toLowerCase())
             );
-            if (isDeleted || !stillInDb) {
-              console.warn('Current account was deleted from database. Logging out session...');
-              logout(false);
+            const banInfo = checkIsUserBanned(a.id, a.email, matchingRemote || a);
+            return {
+              ...(matchingRemote ? { ...a, ...matchingRemote } : a),
+              isBanned: banInfo.isBanned,
+              banReason: banInfo.isBanned ? banInfo.banReason : undefined,
+              bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
+              appealStatus: banInfo.appealStatus,
+              appealReason: banInfo.appealReason,
+              appealSubmittedAt: banInfo.appealSubmittedAt,
+            };
+          });
+
+          // Ensure currentUser is always preserved in saved accounts on this device
+          if (currentUser && !isUserIdDeleted(currentUser.id, currentUser.email)) {
+            const hasCurrent = updated.some(
+              a =>
+                isSameUser(a.id, currentUser.id) ||
+                (currentUser.email && a.email && currentUser.email.toLowerCase() === a.email.toLowerCase())
+            );
+            if (!hasCurrent) {
+              const curBanInfo = checkIsUserBanned(currentUser.id, currentUser.email, currentUser);
+              updated.unshift({
+                ...currentUser,
+                isBanned: curBanInfo.isBanned,
+                banReason: curBanInfo.isBanned ? curBanInfo.banReason : undefined,
+                bannedAt: curBanInfo.isBanned ? curBanInfo.bannedAt : undefined,
+                appealStatus: curBanInfo.appealStatus,
+                appealReason: curBanInfo.appealReason,
+                appealSubmittedAt: curBanInfo.appealSubmittedAt,
+              });
             }
           }
 
-          // 2. Clean up savedAccounts to ONLY retain accounts currently existing in remoteUsers & apply ban checks
-          setSavedAccounts(prevAccounts => {
-            const filtered = prevAccounts
-              .filter(a => {
-                if (isUserIdDeleted(a.id, a.email)) return false;
-                return remoteUsers.some(
-                  ru =>
-                    isSameUser(ru.id, a.id) ||
-                    (a.email && ru.email && a.email.toLowerCase() === ru.email.toLowerCase())
-                );
-              })
-              .map(a => {
-                const banInfo = checkIsUserBanned(a.id, a.email, a);
-                return {
-                  ...a,
-                  isBanned: banInfo.isBanned,
-                  banReason: banInfo.isBanned ? banInfo.banReason : undefined,
-                  bannedAt: banInfo.isBanned ? banInfo.bannedAt : undefined,
-                  appealStatus: banInfo.appealStatus,
-                  appealReason: banInfo.appealReason,
-                  appealSubmittedAt: banInfo.appealSubmittedAt,
-                };
-              });
-            storage.set('saved_accounts_v2', filtered);
-            return filtered;
-          });
+          const finalSaved = updated.slice(0, 5);
+          storage.set('saved_accounts_v2', finalSaved);
+          return finalSaved;
+        });
 
-          // 3. Set users to remoteUsers (authoritative, deduplicated, excluding any deleted users)
+        // 3. Set users to remoteUsers (authoritative, deduplicated, excluding any deleted users)
           const userMap = new Map<string, User>();
           const emailMap = new Map<string, string>(); // email -> id
 
@@ -1127,7 +1145,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
           }
         }
-      }
 
       // 2. Synchronize Videos (authoritative: Supabase is single source of truth!)
       if (remoteVideos !== null) {
@@ -1497,7 +1514,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (typeof window === 'undefined') return false;
     const hash = window.location.hash || '';
     const search = window.location.search || '';
-    const inProgress = sessionStorage.getItem('viralhub_oauth_in_progress') === 'true';
+    const inProgress =
+      sessionStorage.getItem('viralhub_oauth_in_progress') === 'true' ||
+      localStorage.getItem('viralhub_oauth_in_progress') === 'true';
     const hasAuthParams =
       hash.includes('access_token=') ||
       hash.includes('refresh_token=') ||
@@ -1505,6 +1524,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       search.includes('error=');
     if (hasAuthParams) {
       sessionStorage.setItem('viralhub_oauth_in_progress', 'true');
+      localStorage.setItem('viralhub_oauth_in_progress', 'true');
       return true;
     }
     return inProgress;
@@ -1588,6 +1608,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       appealSubmittedAt: existingUser?.appealSubmittedAt || banInfo.appealSubmittedAt,
     };
 
+    // Invalidate and inject directly into memory cache immediately (0 disk IO)
+    injectUserIntoCache(finalUser);
+
     setCurrentUser(finalUser);
     storage.set('currentUser', finalUser);
     recordSavedAccount(finalUser);
@@ -1601,6 +1624,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [finalUser, ...filtered];
     });
 
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('viralhub_oauth_in_progress');
+      localStorage.removeItem('viralhub_oauth_in_progress');
+      if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+    setIsAuthLoading(false);
+
     // Record user profile in Supabase database
     await supabaseDb.upsertUser(finalUser);
   };
@@ -1608,76 +1640,121 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Listen to real Supabase Auth events (Google OAuth redirects, session tokens, sign out)
   useEffect(() => {
     const client = getSupabaseClient();
-    if (!client) return;
+    if (!client) {
+      setIsAuthLoading(false);
+      return;
+    }
 
     const isInitialOAuth = checkIsOAuthRedirect();
+
+    // Safety timer: Never leave user stuck on authentication screen for more than 4 seconds
+    const safetyTimer = setTimeout(() => {
+      setIsAuthLoading(false);
+    }, 4000);
+
+    // Direct PKCE callback exchange for Google OAuth
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const code = urlParams.get('code');
+      if (code) {
+        client.auth.exchangeCodeForSession(code).then(({ data, error }) => {
+          if (data?.session?.user) {
+            handleSupabaseUserSession(data.session.user).finally(() => {
+              setIsAuthLoading(false);
+              clearTimeout(safetyTimer);
+            });
+          } else {
+            setIsAuthLoading(false);
+          }
+        }).catch(() => {
+          setIsAuthLoading(false);
+        });
+      }
+    }
 
     // Check existing session on load
     client.auth.getSession().then(({ data: { session } }) => {
       const activeStored = storage.get<User | null>('currentUser', null);
       if (session?.user) {
-        if (isInitialOAuth || !activeStored) {
+        if (isInitialOAuth || !activeStored || !currentUser) {
           if (typeof window !== 'undefined') {
             sessionStorage.removeItem('viralhub_oauth_in_progress');
+            localStorage.removeItem('viralhub_oauth_in_progress');
           }
-          handleSupabaseUserSession(session.user);
+          handleSupabaseUserSession(session.user).finally(() => {
+            setIsAuthLoading(false);
+            clearTimeout(safetyTimer);
+          });
+          return;
         }
       }
+      setIsAuthLoading(false);
     });
 
     // Listen to live auth state changes
     const { data: authSubscription } = client.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN') {
+      if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
         if (session?.user) {
           const activeStored = storage.get<User | null>('currentUser', null);
           const isExplicitOAuth = checkIsOAuthRedirect();
 
-          // If returning from an explicit OAuth action, always finalize login!
+          // If returning from an explicit OAuth action, ALWAYS finalize login!
           if (isExplicitOAuth) {
             if (typeof window !== 'undefined') {
               sessionStorage.removeItem('viralhub_oauth_in_progress');
+              localStorage.removeItem('viralhub_oauth_in_progress');
             }
             await handleSupabaseUserSession(session.user);
+            setIsAuthLoading(false);
+            clearTimeout(safetyTimer);
+            return;
+          }
+
+          // If user is not yet logged in on screen (on AuthPage), ALWAYS log in!
+          if (!activeStored || !currentUser) {
+            await handleSupabaseUserSession(session.user);
+            setIsAuthLoading(false);
+            clearTimeout(safetyTimer);
             return;
           }
 
           // If there is an active user currently in storage, check if this event belongs to them
-          if (activeStored) {
-            const isSameUser =
-              activeStored.id === session.user.id ||
-              toUuid(activeStored.id) === toUuid(session.user.id) ||
-              (activeStored.email &&
-                session.user.email &&
-                activeStored.email.trim().toLowerCase() === session.user.email.trim().toLowerCase());
+          const isSameUser =
+            activeStored.id === session.user.id ||
+            toUuid(activeStored.id) === toUuid(session.user.id) ||
+            (activeStored.email &&
+              session.user.email &&
+              activeStored.email.trim().toLowerCase() === session.user.email.trim().toLowerCase());
 
-            // If the user deliberately switched to a different account (e.g. Account 2),
-            // a background tab-focus / token refresh from Account 1 MUST NOT switch them back!
-            if (!isSameUser) {
-              return;
-            }
-          }
-
-          await handleSupabaseUserSession(session.user);
-        }
-      } else if (event === 'INITIAL_SESSION') {
-        const isExplicitOAuth = checkIsOAuthRedirect();
-        if (isExplicitOAuth && session?.user) {
-          if (typeof window !== 'undefined') {
-            sessionStorage.removeItem('viralhub_oauth_in_progress');
-          }
-          await handleSupabaseUserSession(session.user);
-        } else {
-          const activeStored = storage.get<User | null>('currentUser', null);
-          if (!activeStored && session?.user) {
+          if (isSameUser) {
             await handleSupabaseUserSession(session.user);
           }
+          setIsAuthLoading(false);
+          clearTimeout(safetyTimer);
+        }
+      } else if (event === 'INITIAL_SESSION') {
+        if (session?.user) {
+          const isExplicitOAuth = checkIsOAuthRedirect();
+          const activeStored = storage.get<User | null>('currentUser', null);
+          if (isExplicitOAuth || !activeStored || !currentUser) {
+            if (typeof window !== 'undefined') {
+              sessionStorage.removeItem('viralhub_oauth_in_progress');
+              localStorage.removeItem('viralhub_oauth_in_progress');
+            }
+            await handleSupabaseUserSession(session.user);
+            setIsAuthLoading(false);
+            clearTimeout(safetyTimer);
+          }
+        } else {
+          setIsAuthLoading(false);
         }
       } else if (event === 'SIGNED_OUT') {
-        // Do not force wipe if user is just switching local accounts
+        setIsAuthLoading(false);
       }
     });
 
     return () => {
+      clearTimeout(safetyTimer);
       authSubscription?.subscription?.unsubscribe();
     };
   }, []);
@@ -2744,12 +2821,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (typeof window !== 'undefined') {
       sessionStorage.setItem('viralhub_oauth_in_progress', 'true');
+      localStorage.setItem('viralhub_oauth_in_progress', 'true');
     }
 
     const { error } = await signInWithGoogle();
     if (error) {
       if (typeof window !== 'undefined') {
         sessionStorage.removeItem('viralhub_oauth_in_progress');
+        localStorage.removeItem('viralhub_oauth_in_progress');
       }
       return { success: false, message: error.message };
     }
@@ -5941,6 +6020,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider
       value={{
         currentUser,
+        isAuthLoading,
         authView,
         setAuthView,
         login,
