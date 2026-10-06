@@ -795,22 +795,6 @@ export const HomeFeed: React.FC = () => {
         };
       });
 
-    // Provide friendly fallback if few tags exist
-    if (sorted.length < 4) {
-      const fallbacks = ['#viral', '#trending', '#fyp', '#explore'];
-      fallbacks.forEach((fb, idx) => {
-        if (!sorted.some(s => s.tag === fb)) {
-          const c = counts.get(fb) || 0;
-          sorted.push({
-            tag: fb,
-            count: `${c} ${c === 1 ? 'video' : 'videos'}`,
-            rawCount: c,
-            icon: ['🔥', '✨', '⚡', '🚀'][idx % 4],
-          });
-        }
-      });
-    }
-
     return sorted.slice(0, 5);
   }, [videos]);
 
@@ -1029,24 +1013,30 @@ export const HomeFeed: React.FC = () => {
           </div>
 
           <div className="space-y-3">
-            {trendingHashtags.map(({ tag, count, icon }) => (
-              <button
-                key={tag}
-                onClick={() => {
-                  setSearchQuery(tag);
-                  setActiveTab('explore');
-                }}
-                className="w-full flex items-center justify-between p-3 rounded-2xl bg-[#181824] hover:bg-[#20202e] border border-neutral-800/80 transition-all cursor-pointer group text-left"
-              >
-                <div>
-                  <div className="text-xs font-bold text-white group-hover:text-[#ff007a] transition-colors">
-                    {tag}
+            {trendingHashtags.length > 0 ? (
+              trendingHashtags.map(({ tag, count, icon }) => (
+                <button
+                  key={tag}
+                  onClick={() => {
+                    setSearchQuery(tag);
+                    setActiveTab('explore');
+                  }}
+                  className="w-full flex items-center justify-between p-3 rounded-2xl bg-[#181824] hover:bg-[#20202e] border border-neutral-800/80 transition-all cursor-pointer group text-left"
+                >
+                  <div>
+                    <div className="text-xs font-bold text-white group-hover:text-[#ff007a] transition-colors">
+                      {tag}
+                    </div>
+                    <div className="text-[11px] text-neutral-400">{count}</div>
                   </div>
-                  <div className="text-[11px] text-neutral-400">{count}</div>
-                </div>
-                <span className="text-sm">{icon}</span>
-              </button>
-            ))}
+                  <span className="text-sm">{icon}</span>
+                </button>
+              ))
+            ) : (
+              <p className="text-xs text-neutral-500 py-3 text-center italic">
+                No hashtags yet. Tag videos with #hashtag to feature here automatically!
+              </p>
+            )}
           </div>
         </div>
       </div>

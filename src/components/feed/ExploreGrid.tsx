@@ -24,6 +24,7 @@ import {
   Clock,
   ArrowRight,
   Sparkles,
+  Hash,
 } from 'lucide-react';
 
 const formatCount = (count?: number | string): string => {
@@ -59,25 +60,51 @@ export const ExploreGrid: React.FC = () => {
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const modalVideoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Extract dynamic trending hashtags from existing videos in memory
-  const trendingTags = useMemo(() => {
+  // Extract 100% dynamic trending hashtags from real videos in memory (0 random/fake fallback tags)
+  // If someone uses a hashtag in a video's hashtags or caption, it automatically shows up here!
+  const trendingTagsData = useMemo(() => {
     const tagCountMap = new Map<string, number>();
-    const defaultTags = ['#fyp', '#viral', '#trending', '#music', '#dance', '#comedy', '#gaming'];
-
-    defaultTags.forEach(t => tagCountMap.set(t.toLowerCase(), 1));
 
     videos.forEach(v => {
+      if (v.status === 'rejected') return;
+      if (v.creator?.isBanned) return;
+      if (checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned) return;
+
+      const foundInThisVideo = new Set<string>();
+
+      // 1. Tags explicitly stored in v.hashtags array
       (v.hashtags || []).forEach(h => {
-        const clean = h.startsWith('#') ? h.toLowerCase() : `#${h.toLowerCase()}`;
-        tagCountMap.set(clean, (tagCountMap.get(clean) || 0) + 1);
+        if (!h) return;
+        const clean = h.trim();
+        if (!clean) return;
+        const normalized = clean.startsWith('#') ? clean.toLowerCase() : `#${clean.toLowerCase()}`;
+        foundInThisVideo.add(normalized);
+      });
+
+      // 2. Tags typed into v.caption (e.g. #viral, #gaming)
+      if (v.caption) {
+        const matches = v.caption.match(/#[a-zA-Z0-9_\u0080-\uFFFF]+/g);
+        if (matches) {
+          matches.forEach(m => {
+            const normalized = m.trim().toLowerCase();
+            foundInThisVideo.add(normalized);
+          });
+        }
+      }
+
+      foundInThisVideo.forEach(tag => {
+        tagCountMap.set(tag, (tagCountMap.get(tag) || 0) + 1);
       });
     });
 
-    const sorted = Array.from(tagCountMap.entries())
+    // Sort strictly by most used to least used (first hashtag is the most used), limited to 8 max
+    return Array.from(tagCountMap.entries())
       .sort((a, b) => b[1] - a[1])
-      .map(([tag]) => tag);
-
-    return ['all', ...sorted.slice(0, 10)];
+      .slice(0, 8)
+      .map(([tag, count]) => ({
+        tag,
+        count,
+      }));
   }, [videos]);
 
   const cleanQuery = searchQuery.toLowerCase().replace('#', '').replace('@', '').trim();
@@ -217,43 +244,82 @@ export const ExploreGrid: React.FC = () => {
         )}
       </div>
 
-      {/* 2. Trending Hashtag Chips Bar (replaces clunky All / Creators / Videos tabs) */}
-      <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-6 scrollbar-none select-none">
-        {trendingTags.map(tag => {
-          const isActive = selectedTag === tag;
-          const isAll = tag === 'all';
-          return (
-            <button
-              key={tag}
-              type="button"
-              onClick={() => setSelectedTag(tag)}
-              className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
-                isActive
-                  ? 'bg-gradient-to-r from-[#ff007a] to-[#9900f0] text-white shadow-[0_0_14px_rgba(255,0,122,0.4)] scale-[1.02]'
-                  : 'bg-[#151520] hover:bg-[#1f1f2e] text-neutral-400 hover:text-white border border-neutral-800 hover:border-neutral-700'
-              }`}
-            >
-              {isAll ? (
-                <>
-                  <Flame className={`w-3.5 h-3.5 ${isActive ? 'text-amber-300' : 'text-[#ff007a]'}`} />
-                  <span>Trending</span>
-                </>
-              ) : (
-                <span>{tag}</span>
-              )}
-            </button>
-          );
-        })}
+      {/* 2. Trending Hashtags (Option C: Sleek Minimalist Neon Pill Bar with Active Glow & Automatic Hashtags) */}
+      <div className="mb-6 select-none">
+        <div className="flex items-center justify-between mb-2.5 px-0.5">
+          <div className="flex items-center gap-2">
+            <Hash className="w-4 h-4 text-[#ff007a]" />
+            <span className="text-xs font-bold uppercase tracking-wider text-neutral-300">
+              Trending Hashtags
+            </span>
+            {trendingTagsData.length > 0 && (
+              <span className="text-[10px] font-semibold text-neutral-400 bg-[#171724] px-2 py-0.5 rounded-full border border-neutral-800">
+                {trendingTagsData.length} {trendingTagsData.length === 1 ? 'topic' : 'topics'}
+              </span>
+            )}
+          </div>
 
-        {selectedTag !== 'all' && (
+          {selectedTag !== 'all' && (
+            <button
+              type="button"
+              onClick={() => setSelectedTag('all')}
+              className="text-xs text-[#ff007a] hover:text-[#ff3399] flex items-center gap-1 font-semibold transition-colors cursor-pointer"
+              title="Show all videos"
+            >
+              <span>Show all</span>
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Scrollable Neon Pill Bar (Top 8 Most Used Hashtags + All, No Side Overlap) */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none max-w-full">
+          {/* "All" Videos Pill - Counter removed */}
           <button
             type="button"
             onClick={() => setSelectedTag('all')}
-            className="text-[11px] text-neutral-400 hover:text-white underline px-2 cursor-pointer font-medium"
+            className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+              selectedTag === 'all'
+                ? 'bg-gradient-to-r from-[#ff007a] via-[#e6006c] to-[#9900f0] text-white shadow-[0_0_16px_rgba(255,0,122,0.45)] ring-1 ring-white/30 scale-[1.02]'
+                : 'bg-[#151520] hover:bg-[#1f1f2e] text-neutral-300 hover:text-white border border-neutral-800 hover:border-neutral-700'
+            }`}
           >
-            Reset filter
+            <Flame className={`w-3.5 h-3.5 ${selectedTag === 'all' ? 'text-amber-300' : 'text-[#ff007a]'}`} />
+            <span>All</span>
           </button>
-        )}
+
+          {/* Dynamic Hashtag Pills - 100% Automatic from Real Videos */}
+          {trendingTagsData.map(({ tag, count }) => {
+            const isActive = selectedTag === tag;
+            return (
+              <button
+                key={tag}
+                type="button"
+                onClick={() => setSelectedTag(tag)}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                  isActive
+                    ? 'bg-gradient-to-r from-[#ff007a] via-[#e6006c] to-[#9900f0] text-white shadow-[0_0_16px_rgba(255,0,122,0.45)] ring-1 ring-white/30 scale-[1.02]'
+                    : 'bg-[#151520] hover:bg-[#1f1f2e] text-neutral-300 hover:text-white border border-neutral-800 hover:border-neutral-700'
+                }`}
+              >
+                <span>{tag}</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
+                    isActive ? 'bg-black/35 text-white' : 'bg-neutral-800 text-neutral-400'
+                  }`}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+
+          {trendingTagsData.length === 0 && (
+            <div className="text-xs text-neutral-500 py-1 px-2 italic">
+              No hashtags in videos yet. Add hashtags in captions to feature them here automatically!
+            </div>
+          )}
+        </div>
       </div>
 
       {/* 3. Matching Creators Rail (Contextual - Only shown when user searches for creators) */}
