@@ -387,9 +387,10 @@ export const MessagesView: React.FC = () => {
               </div>
               <input
                 type="text"
+                maxLength={50}
                 placeholder="Search messages..."
                 value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
+                onChange={e => setSearchQuery(e.target.value.slice(0, 50))}
                 className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-9 pr-4 py-2.5 rounded-2xl border border-neutral-700/80 focus:border-[#ff007a] outline-none transition-all"
               />
             </div>

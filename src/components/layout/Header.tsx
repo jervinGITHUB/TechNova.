@@ -27,6 +27,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement>(null);
   const mobileInputRef = useRef<HTMLInputElement>(null);
+  const desktopInputRef = useRef<HTMLInputElement>(null);
 
   // Close dropdown and mobile search mode when clicking outside
   useEffect(() => {
@@ -51,6 +52,21 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
       mobileInputRef.current.focus();
     }
   }, [mobileSearchOpen]);
+
+  // Listen for global search focus trigger (e.g. clicking search button on video in feed)
+  useEffect(() => {
+    const handleFocusSearch = () => {
+      if (window.innerWidth < 768) {
+        setMobileSearchOpen(true);
+        setTimeout(() => mobileInputRef.current?.focus(), 60);
+      } else {
+        desktopInputRef.current?.focus();
+        setDropdownOpen(true);
+      }
+    };
+    window.addEventListener('focus-search-input', handleFocusSearch);
+    return () => window.removeEventListener('focus-search-input', handleFocusSearch);
+  }, []);
 
   // In Live Studio (Setup or Active): hide search bar, notification icon, and upload button. Show 3 lines menu icon to keep layout wide.
   if (isLiveStudio) {
@@ -141,10 +157,24 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
   };
 
   return (
-    <header className="h-16 px-3 sm:px-8 border-b border-neutral-800/80 bg-[#0d0d12]/95 backdrop-blur-md sticky top-0 z-30 flex items-center justify-between gap-3">
+    <header className="h-16 px-3 sm:px-8 border-b border-neutral-800/80 bg-[#0d0d12] sticky top-0 z-[70] flex items-center justify-between gap-3 shadow-md">
+      {/* Background Dim Backdrop: Ensures search is always in the foreground and NEVER "on the back" of videos or feeds */}
+      {((dropdownOpen && cleanQuery) || mobileSearchOpen) && (
+        <div
+          className="fixed inset-0 bg-black/65 backdrop-blur-[2px] z-30 transition-opacity animate-fadeIn cursor-pointer"
+          onClick={() => {
+            setDropdownOpen(false);
+            if (!searchQuery) {
+              setMobileSearchOpen(false);
+            }
+          }}
+          title="Click to dismiss search"
+        />
+      )}
+
       {/* Mobile Search Active Full-Width Header */}
       {mobileSearchOpen ? (
-        <div ref={searchContainerRef} className="w-full flex items-center gap-2 md:hidden animate-fadeIn">
+        <div ref={searchContainerRef} className="w-full flex items-center gap-2 md:hidden animate-fadeIn relative z-40">
           <button
             type="button"
             onClick={() => {
@@ -164,31 +194,46 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             <input
               ref={mobileInputRef}
               type="text"
+              maxLength={50}
               value={searchQuery}
               onChange={e => {
-                setSearchQuery(e.target.value);
+                const val = e.target.value.slice(0, 50);
+                setSearchQuery(val);
                 setDropdownOpen(true);
               }}
               placeholder="Search users, creators, videos, hashtags..."
-              className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-10 pr-9 py-2.5 rounded-full border border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none shadow-lg"
+              className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-10 pr-20 py-2.5 rounded-full border border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none shadow-lg"
             />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery('');
-                  setDropdownOpen(false);
-                }}
-                className="absolute right-3 text-neutral-400 hover:text-white p-1"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
+            <div className="absolute right-3 flex items-center gap-1.5">
+              {searchQuery.length >= 35 && (
+                <span
+                  className={`text-[10px] font-mono select-none px-1 py-0.5 rounded ${
+                    searchQuery.length >= 50
+                      ? 'text-pink-400 font-bold bg-pink-950/60 border border-pink-500/40'
+                      : 'text-neutral-400'
+                  }`}
+                >
+                  {searchQuery.length}/50
+                </span>
+              )}
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setDropdownOpen(false);
+                  }}
+                  className="text-neutral-400 hover:text-white p-1"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </form>
 
           {/* Full-width suggestions dropdown for mobile */}
           {dropdownOpen && cleanQuery && (
-            <div className="fixed top-16 left-2 right-2 bg-[#161622] border border-neutral-700/90 rounded-2xl shadow-2xl p-3 z-50 text-left max-h-[75vh] overflow-y-auto backdrop-blur-xl animate-fadeIn space-y-3">
+            <div className="fixed top-16 left-2 right-2 bg-[#14141e] border border-neutral-700/90 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.95)] p-3 z-[100] text-left max-h-[75vh] overflow-y-auto animate-fadeIn space-y-3">
               {/* Creators list */}
               {matchedUsers.length > 0 && (
                 <div>
@@ -303,13 +348,15 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
           </button>
 
           {/* Center Search Input with Instant Dropdown (Desktop & Mobile Compact) */}
-          <div ref={searchContainerRef} className="flex-1 max-w-xl relative">
+          <div ref={searchContainerRef} className="flex-1 max-w-xl relative z-40">
             <form onSubmit={handleSearchSubmit} className="relative flex items-center">
               <div className="absolute left-3.5 text-neutral-400 pointer-events-none">
                 <Search className="w-4 h-4" />
               </div>
               <input
+                ref={desktopInputRef}
                 type="text"
+                maxLength={50}
                 value={searchQuery}
                 onFocus={() => {
                   // On mobile screens, activate full-width wide search bar!
@@ -324,29 +371,43 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
                   }
                 }}
                 onChange={e => {
-                  setSearchQuery(e.target.value);
+                  const val = e.target.value.slice(0, 50);
+                  setSearchQuery(val);
                   setDropdownOpen(true);
                 }}
                 placeholder="Search users, creators, videos, hashtags..."
-                className="w-full bg-[#181822] text-xs sm:text-sm text-white placeholder-neutral-500 pl-10 pr-9 py-2 sm:py-2.5 rounded-full border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all cursor-pointer sm:cursor-text"
+                className="w-full bg-[#181822] text-xs sm:text-sm text-white placeholder-neutral-500 pl-10 pr-20 py-2 sm:py-2.5 rounded-full border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all cursor-pointer sm:cursor-text"
               />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('');
-                    setDropdownOpen(false);
-                  }}
-                  className="absolute right-3 text-neutral-400 hover:text-white p-1"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
+              <div className="absolute right-3 flex items-center gap-1.5">
+                {searchQuery.length >= 35 && (
+                  <span
+                    className={`text-[10px] font-mono select-none px-1 py-0.5 rounded ${
+                      searchQuery.length >= 50
+                        ? 'text-pink-400 font-bold bg-pink-950/60 border border-pink-500/40'
+                        : 'text-neutral-400'
+                    }`}
+                  >
+                    {searchQuery.length}/50
+                  </span>
+                )}
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setDropdownOpen(false);
+                    }}
+                    className="text-neutral-400 hover:text-white p-1"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
             </form>
 
             {/* Dropdown Results for Desktop */}
             {dropdownOpen && cleanQuery && (
-              <div className="absolute top-12 left-0 right-0 bg-[#161622] border border-neutral-700/80 rounded-2xl shadow-2xl p-3 z-50 text-left max-h-96 overflow-y-auto backdrop-blur-xl animate-fadeIn space-y-3">
+              <div className="absolute top-12 left-0 right-0 bg-[#14141e] border border-neutral-700/90 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.95)] p-3 z-[100] text-left max-h-96 overflow-y-auto animate-fadeIn space-y-3">
                 {/* Matching Users / Creators */}
                 {matchedUsers.length > 0 && (
                   <div>

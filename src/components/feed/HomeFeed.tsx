@@ -845,7 +845,7 @@ export const HomeFeed: React.FC = () => {
       {/* ========================================================================= */}
       <div className="flex-1 max-w-[430px] h-full relative flex flex-col items-center">
         {/* Floating Top Navigation: LIVE | Friends | Following | For You | Search */}
-        <div className="absolute top-2 inset-x-0 z-30 px-3 py-1 flex items-center justify-between pointer-events-none">
+        <div className="absolute top-2 inset-x-0 z-20 px-3 py-1 flex items-center justify-between pointer-events-none">
           {/* LIVE Button on the left */}
           <button
             onClick={() => setActiveTab('live')}
@@ -909,7 +909,10 @@ export const HomeFeed: React.FC = () => {
 
           {/* Search Button on the right */}
           <button
-            onClick={() => setActiveTab('explore')}
+            onClick={() => {
+              setActiveTab('explore');
+              window.dispatchEvent(new CustomEvent('focus-search-input'));
+            }}
             className="p-1.5 rounded-full bg-black/45 hover:bg-black/65 backdrop-blur-md border border-white/15 text-white/90 hover:text-white transition-all pointer-events-auto cursor-pointer shadow-lg"
             title="Search & Explore"
           >

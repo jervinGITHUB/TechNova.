@@ -172,9 +172,10 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
             <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3 pointer-events-none" />
             <input
               type="text"
+              maxLength={50}
               placeholder="Search user..."
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
+              onChange={e => setSearchQuery(e.target.value.slice(0, 50))}
               className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-8 pr-7 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
             />
             {searchQuery && (

@@ -872,7 +872,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [reportModal, setReportModal] = useState<ReportModalConfig | null>(null);
   const [audioLibraryOpen, setAudioLibraryOpen] = useState<boolean>(false);
   const [onSelectAudioCallback, setOnSelectAudioCallback] = useState<((track: AudioTrack) => void) | null>(null);
-  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [searchQuery, setSearchQueryRaw] = useState<string>('');
+  const setSearchQuery = (query: string) => {
+    setSearchQueryRaw(typeof query === 'string' ? query.slice(0, 50) : '');
+  };
   const [supabaseModalOpen, setSupabaseModalOpen] = useState<boolean>(false);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(() => getSupabaseConfig().isConnected);
 
