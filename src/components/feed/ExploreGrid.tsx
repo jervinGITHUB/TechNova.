@@ -252,11 +252,6 @@ export const ExploreGrid: React.FC = () => {
             <span className="text-xs font-bold uppercase tracking-wider text-neutral-300">
               Trending Hashtags
             </span>
-            {trendingTagsData.length > 0 && (
-              <span className="text-[10px] font-semibold text-neutral-400 bg-[#171724] px-2 py-0.5 rounded-full border border-neutral-800">
-                {trendingTagsData.length} {trendingTagsData.length === 1 ? 'topic' : 'topics'}
-              </span>
-            )}
           </div>
 
           {selectedTag !== 'all' && (
