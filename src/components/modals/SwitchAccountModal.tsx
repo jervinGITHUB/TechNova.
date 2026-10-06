@@ -3,7 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { User } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { ViralHubLogo } from '../common/ViralHubLogo';
-import { checkIsUserBanned } from '../../lib/supabase';
+import { checkIsUserBanned, isGoogleAccount } from '../../lib/supabase';
 import {
   X,
   UserCheck,
@@ -14,6 +14,7 @@ import {
   Check,
   Plus,
   Trash2,
+  Lock,
 } from 'lucide-react';
 
 interface SwitchAccountModalProps {
@@ -68,9 +69,22 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
     return Array.from(map.values());
   })();
 
-  const handleSwitchTo = (userId: string) => {
-    quickLoginAs(userId);
-    onClose();
+  const handleSwitchTo = async (target: User) => {
+    if (isGoogleAccount(target)) {
+      setIsConnectingGoogle(true);
+      onClose();
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('viralhub_user_logged_out');
+      }
+      await loginWithGoogle({ prompt: 'select_account' });
+    } else {
+      onClose();
+      logout();
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('viralhub_prefill_login', target.email || target.username);
+      }
+      setAuthView('login');
+    }
   };
 
   const handleAddNewAccount = () => {
@@ -140,6 +154,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
           <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
             {displayAccounts.map(u => {
               const isCurrent = currentUser?.id === u.id;
+              const isGoogle = isGoogleAccount(u);
               const roleLower = String(u.role || '').toLowerCase();
               const isAdminAccount = roleLower === 'admin' || roleLower === 'super admin' || roleLower === 'administrator';
               const isBannedAccount = u.isBanned || checkIsUserBanned(u.id, u.email, u).isBanned;
@@ -156,7 +171,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                   }`}
                 >
                   <div
-                    onClick={() => !isCurrent && handleSwitchTo(u.id)}
+                    onClick={() => !isCurrent && handleSwitchTo(u)}
                     className={`flex items-center gap-3 min-w-0 flex-1 ${!isCurrent ? 'cursor-pointer' : ''}`}
                   >
                     <Avatar
@@ -165,10 +180,19 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                       size="sm"
                     />
                     <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="text-xs font-bold text-white truncate">
                           {u.displayName || u.username}
                         </span>
+                        {isGoogle ? (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30 text-[9px] font-bold shrink-0">
+                            Google
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-neutral-800 text-neutral-300 border border-neutral-700 text-[9px] font-bold shrink-0">
+                            Password
+                          </span>
+                        )}
                         {isBannedAccount && (
                           <span className="px-1.5 py-0.2 rounded bg-red-500/20 text-red-400 border border-red-500/30 text-[9px] font-extrabold uppercase tracking-wider shrink-0">
                             Banned
@@ -180,7 +204,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                           </span>
                         )}
                       </div>
-                      <div className="text-[11px] text-neutral-400 truncate">
+                      <div className="text-[11px] text-neutral-400 truncate mt-0.5">
                         @{u.username} {u.email ? `· ${u.email}` : ''}
                       </div>
                     </div>
@@ -193,10 +217,10 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                       <>
                         <button
                           type="button"
-                          onClick={() => handleSwitchTo(u.id)}
+                          onClick={() => handleSwitchTo(u)}
                           className="text-xs font-bold text-[#ff007a] hover:underline px-2 py-1 rounded-lg hover:bg-[#ff007a]/10 cursor-pointer"
                         >
-                          Switch →
+                          {isGoogle ? 'Choose Account →' : 'Enter Password →'}
                         </button>
                         <button
                           type="button"
@@ -227,7 +251,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
             onClick={async () => {
               setIsConnectingGoogle(true);
               onClose();
-              await loginWithGoogle();
+              await loginWithGoogle({ prompt: 'select_account' });
             }}
             className="w-full flex items-center justify-center gap-2.5 py-2.5 px-4 rounded-xl bg-[#1c1c27] hover:bg-[#232332] border border-neutral-700/80 text-white font-bold text-xs transition-colors cursor-pointer disabled:opacity-50"
           >

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { ViralHubLogo } from '../common/ViralHubLogo';
 import { Avatar } from '../common/Avatar';
@@ -15,7 +15,7 @@ import {
   Users,
 } from 'lucide-react';
 import { SupabaseVercelModal } from '../modals/SupabaseVercelModal';
-import { resendConfirmationEmail } from '../../lib/supabase';
+import { resendConfirmationEmail, isGoogleAccount } from '../../lib/supabase';
 
 export const AuthPage: React.FC = () => {
   const {
@@ -38,6 +38,19 @@ export const AuthPage: React.FC = () => {
     .slice(0, 5);
 
   const [showManualLoginForm, setShowManualLoginForm] = useState(false);
+
+  // Prefill login identifier if redirected from switch account or sidebar
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const prefill = sessionStorage.getItem('viralhub_prefill_login');
+      if (prefill) {
+        sessionStorage.removeItem('viralhub_prefill_login');
+        setLoginIdentifier(prefill);
+        setShowManualLoginForm(true);
+        setInfoMessage(`Please enter your password for ${prefill} to continue.`);
+      }
+    }
+  }, []);
 
   // Login form state
   const [loginIdentifier, setLoginIdentifier] = useState('');
@@ -139,7 +152,7 @@ export const AuthPage: React.FC = () => {
     setInfoMessage('');
     setIsSubmitting(true);
     try {
-      const res = await loginWithGoogle();
+      const res = await loginWithGoogle({ prompt: 'select_account' });
       if (!res.success && res.message) {
         setErrorMessage(res.message);
       }
@@ -148,6 +161,30 @@ export const AuthPage: React.FC = () => {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleGoogleAccountClick = async (acc: any) => {
+    setErrorMessage('');
+    setInfoMessage('');
+    setIsSubmitting(true);
+    try {
+      const res = await loginWithGoogle({ prompt: 'select_account' });
+      if (!res.success && res.message) {
+        setErrorMessage(res.message);
+        setIsSubmitting(false);
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Google sign-in could not be initiated.');
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleCredentialAccountClick = (acc: any) => {
+    setErrorMessage('');
+    setInfoMessage(`Welcome back, @${acc.username || acc.displayName}! Please enter your password to sign in.`);
+    setLoginIdentifier(acc.email || acc.username);
+    setLoginPassword('');
+    setShowManualLoginForm(true);
   };
 
   return (
@@ -278,19 +315,20 @@ export const AuthPage: React.FC = () => {
                     Choose an Account
                   </h2>
                   <p className="text-xs text-neutral-400 mt-1">
-                    Select your profile to continue instantly without entering credentials
+                    Select an account to authenticate and sign in to ViralHub
                   </p>
                 </div>
 
                 <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
                   {validSavedAccounts.map(acc => {
+                    const isGoogle = isGoogleAccount(acc);
                     const roleLower = String(acc.role || '').toLowerCase();
                     const isAdmin = roleLower === 'admin' || roleLower === 'super admin' || roleLower === 'administrator';
 
                     return (
                       <div
                         key={acc.id}
-                        onClick={() => quickLoginAs(acc.id)}
+                        onClick={() => (isGoogle ? handleGoogleAccountClick(acc) : handleCredentialAccountClick(acc))}
                         className="flex items-center justify-between p-3.5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800 hover:border-[#ff007a]/70 transition-all cursor-pointer group shadow-sm"
                       >
                         <div className="flex items-center gap-3 min-w-0">
@@ -301,17 +339,33 @@ export const AuthPage: React.FC = () => {
                             className="border border-neutral-700 group-hover:border-[#ff007a] transition-colors"
                           />
                           <div className="min-w-0">
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="text-xs sm:text-sm font-bold text-white truncate group-hover:text-[#ff007a] transition-colors">
                                 {acc.displayName || acc.username}
                               </span>
+                              {isGoogle ? (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-blue-500/15 text-blue-300 border border-blue-500/30 text-[9px] font-bold shrink-0">
+                                  <svg className="w-2.5 h-2.5" viewBox="0 0 24 24">
+                                    <path fill="#EA4335" d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.4 1 3.5 3.6 1.6 7.4l3.7 2.9C6.2 7.1 8.9 5 12 5z"/>
+                                    <path fill="#4285F4" d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"/>
+                                    <path fill="#FBBC05" d="M5.3 14.7c-.2-.7-.4-1.5-.4-2.7s.2-2 .4-2.7L1.6 6.4C.6 8.3 0 10.1 0 12s.6 3.7 1.6 5.6l3.7-2.9z"/>
+                                    <path fill="#34A853" d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3.1 0-5.8-2.1-6.7-5.3L1.6 16c1.9 3.8 5.8 7 10.4 7z"/>
+                                  </svg>
+                                  Google Account
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-neutral-800 text-neutral-300 border border-neutral-700 text-[9px] font-bold shrink-0">
+                                  <Lock className="w-2.5 h-2.5 text-neutral-400" />
+                                  Password
+                                </span>
+                              )}
                               {isAdmin && (
                                 <span className="px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-extrabold uppercase tracking-wider shrink-0">
                                   Admin
                                 </span>
                               )}
                             </div>
-                            <div className="text-[11px] text-neutral-400 truncate">
+                            <div className="text-[11px] text-neutral-400 truncate mt-0.5">
                               @{acc.username} {acc.email ? `· ${acc.email}` : ''}
                             </div>
                           </div>
@@ -330,8 +384,9 @@ export const AuthPage: React.FC = () => {
                             <X className="w-3.5 h-3.5" />
                           </button>
 
-                          <div className="w-7 h-7 rounded-full bg-[#ff007a]/15 group-hover:bg-[#ff007a] text-[#ff007a] group-hover:text-white flex items-center justify-center transition-all">
-                            <ArrowRight className="w-3.5 h-3.5" />
+                          <div className="h-7 px-2.5 rounded-full bg-[#ff007a]/15 group-hover:bg-[#ff007a] text-[#ff007a] group-hover:text-white flex items-center justify-center gap-1 text-[11px] font-bold transition-all">
+                            <span>{isGoogle ? 'Choose Account' : 'Enter Password'}</span>
+                            <ArrowRight className="w-3 h-3" />
                           </div>
                         </div>
                       </div>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp, AppTab } from '../../context/AppContext';
 import { ViralHubLogo } from '../common/ViralHubLogo';
 import { Avatar } from '../common/Avatar';
+import { isGoogleAccount } from '../../lib/supabase';
 import {
   Home,
   Compass,
@@ -35,6 +36,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
     navigateToUserProfile,
     setSwitchAccountModalOpen,
     refreshFeed,
+    loginWithGoogle,
+    setAuthView,
   } = useApp();
 
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -223,9 +226,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
                           return (
                             <button
                               key={u.id}
-                              onClick={() => {
+                              onClick={async () => {
                                 setProfileMenuOpen(false);
-                                quickLoginAs(u.id);
+                                if (isCurrent) return;
+                                if (isGoogleAccount(u)) {
+                                  await loginWithGoogle({ prompt: 'select_account' });
+                                } else {
+                                  logout();
+                                  if (typeof window !== 'undefined') {
+                                    sessionStorage.setItem('viralhub_prefill_login', u.email || u.username);
+                                  }
+                                  setAuthView('login');
+                                }
                               }}
                               className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs transition-colors cursor-pointer ${
                                 isCurrent

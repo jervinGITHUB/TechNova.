@@ -500,7 +500,45 @@ export const getSupabaseClient = (): SupabaseClient | null => {
 // =========================================================================
 // Real Supabase Authentication (OAuth Google & Email/Password)
 // =========================================================================
-export const signInWithGoogle = async (redirectTo?: string): Promise<{ data: any; error: any }> => {
+export const recordGoogleAccount = (userId?: string | null, email?: string | null) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = localStorage.getItem('viralhub_google_accounts_v1') || '[]';
+    const list: string[] = JSON.parse(raw);
+    const set = new Set(list.map(s => s.toLowerCase()));
+    if (userId) set.add(String(userId).toLowerCase());
+    if (email) set.add(email.trim().toLowerCase());
+    localStorage.setItem('viralhub_google_accounts_v1', JSON.stringify(Array.from(set)));
+  } catch {}
+};
+
+export const isGoogleAccount = (user?: Partial<User> | null): boolean => {
+  if (!user) return false;
+  if (user.authProvider === 'google') return true;
+  const cleanEmail = (user.email || '').trim().toLowerCase();
+  if (cleanEmail && cleanEmail.endsWith('@gmail.com')) return true;
+  if (user.avatar && user.avatar.includes('googleusercontent.com')) return true;
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem('viralhub_google_accounts_v1') || '[]';
+      const list: string[] = JSON.parse(raw);
+      const set = new Set(list.map(s => s.toLowerCase()));
+      if (user.id && set.has(String(user.id).toLowerCase())) return true;
+      if (cleanEmail && set.has(cleanEmail)) return true;
+    } catch {}
+  }
+  return false;
+};
+
+export interface GoogleAuthOptions {
+  redirectTo?: string;
+  loginHint?: string;
+  prompt?: string;
+}
+
+export const signInWithGoogle = async (
+  options?: GoogleAuthOptions | string
+): Promise<{ data: any; error: any }> => {
   const client = getSupabaseClient();
   if (!client) {
     return {
@@ -508,16 +546,22 @@ export const signInWithGoogle = async (redirectTo?: string): Promise<{ data: any
       error: new Error('Supabase is not connected. Please verify your Supabase URL and Anon Key in Vercel environment variables or the connection settings.'),
     };
   }
-  const targetRedirect = redirectTo || (typeof window !== 'undefined' ? window.location.origin : '');
+  const opts: GoogleAuthOptions = typeof options === 'string' ? { redirectTo: options } : (options || {});
+  const targetRedirect = opts.redirectTo || (typeof window !== 'undefined' ? window.location.origin : '');
+  const queryParams: Record<string, string> = {
+    access_type: 'offline',
+    prompt: opts.prompt || 'select_account',
+  };
+  if (opts.loginHint) {
+    queryParams.login_hint = opts.loginHint;
+  }
+
   try {
     const res = await client.auth.signInWithOAuth({
       provider: 'google',
       options: {
         redirectTo: targetRedirect,
-        queryParams: {
-          access_type: 'offline',
-          prompt: 'consent',
-        },
+        queryParams,
       },
     });
     return res;
@@ -607,6 +651,23 @@ export const resendConfirmationEmail = async (
 };
 
 export const signOutSupabase = async (): Promise<{ error: any }> => {
+  if (typeof window !== 'undefined') {
+    try {
+      // Clear any cached supabase auth tokens from storage
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('-auth-token'))) {
+          localStorage.removeItem(key);
+        }
+      }
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const key = sessionStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('-auth-token'))) {
+          sessionStorage.removeItem(key);
+        }
+      }
+    } catch {}
+  }
   const client = getSupabaseClient();
   if (!client) return { error: null };
   try {

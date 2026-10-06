@@ -48,6 +48,9 @@ import {
   recordUserBan,
   recordUserUnban,
   injectUserIntoCache,
+  isGoogleAccount,
+  recordGoogleAccount,
+  GoogleAuthOptions,
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
 import { toTimestampMillis } from '../utils/time';
@@ -310,7 +313,7 @@ interface AppContextType {
     email: string,
     password?: string
   ) => Promise<{ success: boolean; message?: string; needsEmailConfirmation?: boolean; email?: string }>;
-  loginWithGoogle: () => Promise<{ success: boolean; message?: string }>;
+  loginWithGoogle: (options?: GoogleAuthOptions) => Promise<{ success: boolean; message?: string }>;
   logout: (saveToDevice?: boolean) => void;
   quickLoginAs: (userId: string) => void;
 
@@ -1588,6 +1591,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       recordUserUnban(finalUserId, sbUser.email || email, existingUser?.username || username);
     }
 
+    const isGoogleAuth = Boolean(
+      sbUser.app_metadata?.provider === 'google' ||
+      sbUser.identities?.some((i: any) => i.provider === 'google') ||
+      (sbUser.email && sbUser.email.endsWith('@gmail.com')) ||
+      (avatar && avatar.includes('googleusercontent.com')) ||
+      isGoogleAccount(existingUser)
+    );
+
+    if (isGoogleAuth) {
+      recordGoogleAccount(finalUserId, sbUser.email || email);
+    }
+
     const finalUser: User = {
       id: finalUserId,
       username: existingUser?.username || username,
@@ -1600,6 +1615,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       likesCount: existingUser?.likesCount || '0',
       isPrivate: existingUser?.isPrivate || false,
       role: isAdminRole ? 'admin' : (existingUser?.role || 'creator'),
+      authProvider: isGoogleAuth ? 'google' : (existingUser?.authProvider || 'email'),
       isBanned: isBannedFinal,
       banReason: isBannedFinal ? (existingUser?.banReason || banInfo.banReason || 'Violation of Community Guidelines') : undefined,
       bannedAt: isBannedFinal ? (existingUser?.bannedAt || banInfo.bannedAt || new Date().toISOString()) : undefined,
@@ -1625,6 +1641,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('viralhub_user_logged_out');
       sessionStorage.removeItem('viralhub_oauth_in_progress');
       localStorage.removeItem('viralhub_oauth_in_progress');
       if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
@@ -1674,10 +1691,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Check existing session on load
     client.auth.getSession().then(({ data: { session } }) => {
+      const isExplicitOAuth = checkIsOAuthRedirect();
+      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('viralhub_user_logged_out') === 'true';
       const activeStored = storage.get<User | null>('currentUser', null);
-      if (session?.user) {
+      if (session?.user && (!isLoggedOut || isExplicitOAuth)) {
         if (isInitialOAuth || !activeStored || !currentUser) {
           if (typeof window !== 'undefined') {
+            sessionStorage.removeItem('viralhub_user_logged_out');
             sessionStorage.removeItem('viralhub_oauth_in_progress');
             localStorage.removeItem('viralhub_oauth_in_progress');
           }
@@ -1693,6 +1713,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Listen to live auth state changes
     const { data: authSubscription } = client.auth.onAuthStateChange(async (event, session) => {
+      const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('viralhub_user_logged_out') === 'true';
       if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
         if (session?.user) {
           const activeStored = storage.get<User | null>('currentUser', null);
@@ -1701,12 +1722,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           // If returning from an explicit OAuth action, ALWAYS finalize login!
           if (isExplicitOAuth) {
             if (typeof window !== 'undefined') {
+              sessionStorage.removeItem('viralhub_user_logged_out');
               sessionStorage.removeItem('viralhub_oauth_in_progress');
               localStorage.removeItem('viralhub_oauth_in_progress');
             }
             await handleSupabaseUserSession(session.user);
             setIsAuthLoading(false);
             clearTimeout(safetyTimer);
+            return;
+          }
+
+          // If user explicitly logged out, do not restore in background without user interaction!
+          if (isLoggedOut) {
+            setIsAuthLoading(false);
             return;
           }
 
@@ -2534,6 +2562,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     usernameOrEmail: string,
     password?: string
   ): Promise<{ success: boolean; message?: string }> => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('viralhub_user_logged_out');
+    }
     const trimmed = usernameOrEmail.trim();
     if (!trimmed) {
       return { success: false, message: 'Please enter your username or email' };
@@ -2716,6 +2747,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     needsEmailConfirmation?: boolean;
     email?: string;
   }> => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('viralhub_user_logged_out');
+    }
     const clean = username.replace('@', '').trim().toLowerCase();
     const cleanEmail = email.trim();
 
@@ -2805,7 +2839,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  const loginWithGoogle = async (): Promise<{ success: boolean; message?: string }> => {
+  const loginWithGoogle = async (options?: GoogleAuthOptions): Promise<{ success: boolean; message?: string }> => {
     const config = getSupabaseConfig();
     if (!config.isConnected) {
       return {
@@ -2820,11 +2854,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('viralhub_user_logged_out');
       sessionStorage.setItem('viralhub_oauth_in_progress', 'true');
       localStorage.setItem('viralhub_oauth_in_progress', 'true');
     }
 
-    const { error } = await signInWithGoogle();
+    const { error } = await signInWithGoogle(options || { prompt: 'select_account' });
     if (error) {
       if (typeof window !== 'undefined') {
         sessionStorage.removeItem('viralhub_oauth_in_progress');
@@ -2851,6 +2886,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           storage.set('saved_accounts_v2', next);
           return next;
         });
+      }
+    }
+
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('viralhub_user_logged_out', 'true');
+      sessionStorage.removeItem('viralhub_oauth_in_progress');
+      localStorage.removeItem('viralhub_oauth_in_progress');
+      if (window.location.search.includes('code=') || window.location.hash.includes('access_token=')) {
+        window.history.replaceState({}, document.title, window.location.pathname);
       }
     }
 

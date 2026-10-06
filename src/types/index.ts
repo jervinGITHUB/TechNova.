@@ -19,6 +19,7 @@ export interface User {
   appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
   appealReason?: string;
   appealSubmittedAt?: string;
+  authProvider?: 'google' | 'email';
 }
 
 export interface AudioTrack {
