@@ -17,6 +17,9 @@ import {
   Plus,
   Video as VideoIcon,
   Clock,
+  Search,
+  Users,
+  UserCheck,
 } from 'lucide-react';
 
 interface VideoFeedCardProps {
@@ -38,6 +41,9 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     setSearchQuery,
     setActiveTab,
     recordVideoView,
+    currentUser,
+    getFollowStatus,
+    toggleFollowUser,
   } = useApp();
 
   const [isPlaying, setIsPlaying] = useState(true);
@@ -294,7 +300,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
       {/* Pending Moderation Banner for Creator's POV */}
       {video.status === 'pending' && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-extrabold shadow-lg backdrop-blur-md animate-pulse whitespace-nowrap">
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-extrabold shadow-lg backdrop-blur-md animate-pulse whitespace-nowrap">
           <Clock className="w-3 h-3" />
           <span>Awaiting Admin Approval (Only you see this)</span>
         </div>
@@ -305,10 +311,10 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         className="absolute right-3 bottom-24 z-20 flex flex-col items-center gap-5"
         onClick={e => e.stopPropagation()}
       >
-        {/* Creator Avatar with click to navigate */}
+        {/* Creator Avatar with click to navigate & Quick Follow Plus */}
         <div
           onClick={() => navigateToUserProfile(video.creator.id)}
-          className="relative cursor-pointer group/avatar"
+          className="relative group/avatar cursor-pointer"
         >
           <Avatar
             src={video.creator.avatar}
@@ -316,6 +322,20 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
             size="md"
             className="border-2 border-white group-hover/avatar:border-[#ff007a] transition-all"
           />
+          {currentUser &&
+            !isSameUser(currentUser.id, video.creator.id) &&
+            getFollowStatus(video.creator.id) === 'none' && (
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  toggleFollowUser(video.creator.id);
+                }}
+                className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-[#ff007a] hover:bg-[#ff1a8c] text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110 active:scale-95 cursor-pointer z-10"
+                title="Follow creator"
+              >
+                <Plus className="w-3.5 h-3.5 stroke-[3]" />
+              </button>
+            )}
         </div>
 
         {/* Like Button */}
@@ -464,6 +484,48 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   );
 };
 
+// Empty state for Friends feed
+const EmptyFriendsFeedCard: React.FC<{ onDiscover: () => void }> = ({ onDiscover }) => {
+  return (
+    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100vh-6rem)] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none shrink-0 mb-6 flex flex-col items-center justify-center p-6 text-center">
+      <div className="w-16 h-16 rounded-3xl bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center text-[#ff007a] mb-4 shadow-[0_0_20px_rgba(255,0,122,0.3)]">
+        <Users className="w-8 h-8" />
+      </div>
+      <h3 className="text-base font-bold text-white font-brand mb-1">Friends Feed</h3>
+      <p className="text-xs text-neutral-400 max-w-xs mb-5 leading-relaxed">
+        When you and another creator follow each other, you become friends! Their newest videos will show up here.
+      </p>
+      <button
+        onClick={onDiscover}
+        className="flex items-center gap-2 py-2.5 px-5 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95"
+      >
+        <span>Discover on For You</span>
+      </button>
+    </div>
+  );
+};
+
+// Empty state for Following feed
+const EmptyFollowingFeedCard: React.FC<{ onDiscover: () => void }> = ({ onDiscover }) => {
+  return (
+    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100vh-6rem)] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none shrink-0 mb-6 flex flex-col items-center justify-center p-6 text-center">
+      <div className="w-16 h-16 rounded-3xl bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center text-[#ff007a] mb-4 shadow-[0_0_20px_rgba(255,0,122,0.3)]">
+        <UserCheck className="w-8 h-8" />
+      </div>
+      <h3 className="text-base font-bold text-white font-brand mb-1">Following Feed</h3>
+      <p className="text-xs text-neutral-400 max-w-xs mb-5 leading-relaxed">
+        Follow your favorite creators to see their latest videos right here in your Following feed.
+      </p>
+      <button
+        onClick={onDiscover}
+        className="flex items-center gap-2 py-2.5 px-5 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95"
+      >
+        <span>Discover Creators</span>
+      </button>
+    </div>
+  );
+};
+
 // Wireframe Layout Card displayed when feed has no uploaded videos yet
 const EmptyFeedLayoutCard: React.FC = () => {
   const { setActiveTab } = useApp();
@@ -546,7 +608,13 @@ export const HomeFeed: React.FC = () => {
     currentLiveStream,
     syncWithSupabase,
     feedRefreshKey,
+    followRelations,
+    getFollowStatus,
+    toggleFollowUser,
   } = useApp();
+
+  type FeedTab = 'friends' | 'following' | 'foryou';
+  const [feedTab, setFeedTab] = useState<FeedTab>('foryou');
 
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
   const [activeVideoId, setActiveVideoId] = useState<string>('');
@@ -577,9 +645,37 @@ export const HomeFeed: React.FC = () => {
     });
   }, [videos, users, currentUser]);
 
-  // Feed ordering rule:
-  // "every user when logging in on the app will see their feed randomly videos , but the recently uploaded must be on the first feed, also when refreshing home the video will be random again/shuffle."
-  const feedVideos = useMemo(() => {
+  // Following videos: videos from creators followed by currentUser
+  const followingVideos = useMemo(() => {
+    if (!currentUser) return [];
+    return visibleApprovedVideos.filter(v => {
+      const creatorId = v.creatorId || v.creator?.id;
+      if (!creatorId) return false;
+      const status = getFollowStatus(creatorId);
+      return status === 'following' || status === 'friends';
+    }).sort((a, b) => {
+      const timeA = new Date(a.createdAt || 0).getTime() || 0;
+      const timeB = new Date(b.createdAt || 0).getTime() || 0;
+      return timeB - timeA;
+    });
+  }, [visibleApprovedVideos, currentUser, getFollowStatus, followRelations]);
+
+  // Friends videos: videos from mutual friends (both users follow each other)
+  const friendsVideos = useMemo(() => {
+    if (!currentUser) return [];
+    return visibleApprovedVideos.filter(v => {
+      const creatorId = v.creatorId || v.creator?.id;
+      if (!creatorId) return false;
+      return getFollowStatus(creatorId) === 'friends';
+    }).sort((a, b) => {
+      const timeA = new Date(a.createdAt || 0).getTime() || 0;
+      const timeB = new Date(b.createdAt || 0).getTime() || 0;
+      return timeB - timeA;
+    });
+  }, [visibleApprovedVideos, currentUser, getFollowStatus, followRelations]);
+
+  // For You videos: randomized discovery feed with newest video first
+  const forYouVideos = useMemo(() => {
     if (visibleApprovedVideos.length <= 1) return visibleApprovedVideos;
 
     // 1. Sort by upload date to find the most recent upload
@@ -599,12 +695,32 @@ export const HomeFeed: React.FC = () => {
     return [newestVideo, ...shuffledOthers];
   }, [visibleApprovedVideos, shuffleSeed]);
 
-  // Set initial active video
-  useEffect(() => {
-    if (feedVideos.length > 0 && (!activeVideoId || !feedVideos.some(v => v.id === activeVideoId))) {
-      setActiveVideoId(feedVideos[0].id);
+  // Active video list based on selected feed tab
+  const feedVideos = useMemo(() => {
+    switch (feedTab) {
+      case 'friends':
+        return friendsVideos;
+      case 'following':
+        return followingVideos;
+      case 'foryou':
+      default:
+        return forYouVideos;
     }
-  }, [feedVideos, activeVideoId]);
+  }, [feedTab, friendsVideos, followingVideos, forYouVideos]);
+
+  const hasFriendsVideos = friendsVideos.length > 0;
+
+  // Set initial active video and reset scroll position when changing tabs
+  useEffect(() => {
+    if (feedVideos.length > 0) {
+      setActiveVideoId(feedVideos[0].id);
+    } else {
+      setActiveVideoId('');
+    }
+    if (videoFeedRef.current) {
+      videoFeedRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [feedTab]);
 
   // Reference to the middle scrollable video container
   const videoFeedRef = useRef<HTMLDivElement>(null);
@@ -725,33 +841,115 @@ export const HomeFeed: React.FC = () => {
       />
 
       {/* ========================================================================= */}
-      {/* MIDDLE: ONLY THIS SCROLLS (Scrollable Videos Feed Container with snap-y)    */}
+      {/* MIDDLE: VIDEOS FEED CONTAINER WITH FLOATING TOP BAR (SNAP-Y)             */}
       {/* ========================================================================= */}
-      <div
-        ref={videoFeedRef}
-        className="flex-1 max-w-[430px] h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar pt-1 pb-16 relative"
-      >
-        {feedVideos.length === 0 ? (
-          <EmptyFeedLayoutCard />
-        ) : (
-          feedVideos.map(video => (
-            <div
-              key={video.id}
-              data-video-id={video.id}
-              ref={el => {
-                if (el) itemRefs.current.set(video.id, el);
-                else itemRefs.current.delete(video.id);
-              }}
-              className="snap-start snap-always w-full flex justify-center"
+      <div className="flex-1 max-w-[430px] h-full relative flex flex-col items-center">
+        {/* Floating Top Navigation: LIVE | Friends | Following | For You | Search */}
+        <div className="absolute top-2 inset-x-0 z-30 px-3 py-1 flex items-center justify-between pointer-events-none">
+          {/* LIVE Button on the left */}
+          <button
+            onClick={() => setActiveTab('live')}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/45 hover:bg-black/65 backdrop-blur-md border border-white/15 text-white text-xs font-bold transition-all pointer-events-auto cursor-pointer shadow-lg"
+            title="Browse Live Streams"
+          >
+            <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse" />
+            <span>LIVE</span>
+          </button>
+
+          {/* Center Navigation Tabs: Friends | Following | For You */}
+          <div className="flex items-center gap-4 sm:gap-5 pointer-events-auto drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
+            {/* Friends Tab */}
+            <button
+              onClick={() => setFeedTab('friends')}
+              className={`relative px-1 py-1 text-sm sm:text-base transition-all cursor-pointer ${
+                feedTab === 'friends'
+                  ? 'font-extrabold text-white scale-105'
+                  : 'font-semibold text-neutral-400 hover:text-white'
+              }`}
             >
-              <VideoFeedCard
-                video={video}
-                isActive={activeVideoId === video.id}
-                onShare={handleShare}
-              />
-            </div>
-          ))
-        )}
+              <span>Friends</span>
+              {hasFriendsVideos && (
+                <span className="absolute top-0.5 -right-1.5 w-2 h-2 rounded-full bg-[#ff007a] ring-2 ring-black animate-pulse" />
+              )}
+              {feedTab === 'friends' && (
+                <div className="w-5 h-0.5 bg-white rounded-full mx-auto mt-0.5" />
+              )}
+            </button>
+
+            {/* Following Tab */}
+            <button
+              onClick={() => setFeedTab('following')}
+              className={`relative px-1 py-1 text-sm sm:text-base transition-all cursor-pointer ${
+                feedTab === 'following'
+                  ? 'font-extrabold text-white scale-105'
+                  : 'font-semibold text-neutral-400 hover:text-white'
+              }`}
+            >
+              <span>Following</span>
+              {feedTab === 'following' && (
+                <div className="w-5 h-0.5 bg-white rounded-full mx-auto mt-0.5" />
+              )}
+            </button>
+
+            {/* For You Tab */}
+            <button
+              onClick={() => setFeedTab('foryou')}
+              className={`relative px-1 py-1 text-sm sm:text-base transition-all cursor-pointer ${
+                feedTab === 'foryou'
+                  ? 'font-extrabold text-white scale-105'
+                  : 'font-semibold text-neutral-400 hover:text-white'
+              }`}
+            >
+              <span>For You</span>
+              {feedTab === 'foryou' && (
+                <div className="w-5 h-0.5 bg-white rounded-full mx-auto mt-0.5" />
+              )}
+            </button>
+          </div>
+
+          {/* Search Button on the right */}
+          <button
+            onClick={() => setActiveTab('explore')}
+            className="p-1.5 rounded-full bg-black/45 hover:bg-black/65 backdrop-blur-md border border-white/15 text-white/90 hover:text-white transition-all pointer-events-auto cursor-pointer shadow-lg"
+            title="Search & Explore"
+          >
+            <Search className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Scrollable Videos Feed Container */}
+        <div
+          ref={videoFeedRef}
+          className="w-full h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar pt-1 pb-16 relative"
+        >
+          {feedVideos.length === 0 ? (
+            feedTab === 'friends' ? (
+              <EmptyFriendsFeedCard onDiscover={() => setFeedTab('foryou')} />
+            ) : feedTab === 'following' ? (
+              <EmptyFollowingFeedCard onDiscover={() => setFeedTab('foryou')} />
+            ) : (
+              <EmptyFeedLayoutCard />
+            )
+          ) : (
+            feedVideos.map(video => (
+              <div
+                key={video.id}
+                data-video-id={video.id}
+                ref={el => {
+                  if (el) itemRefs.current.set(video.id, el);
+                  else itemRefs.current.delete(video.id);
+                }}
+                className="snap-start snap-always w-full flex justify-center"
+              >
+                <VideoFeedCard
+                  video={video}
+                  isActive={activeVideoId === video.id}
+                  onShare={handleShare}
+                />
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {/* ========================================================================= */}

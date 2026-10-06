@@ -18,13 +18,26 @@ export const CommentsDrawer: React.FC = () => {
     fetchCommentsForVideo,
   } = useApp();
 
-  // Bottom-sheet height state (starts at 50% = half of video)
+  // Bottom-sheet height state for mobile (starts at 50% = half of video)
   const [heightPercent, setHeightPercent] = useState<number>(50);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [inputVal, setInputVal] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // Desktop viewport check (>= 768px docks on the right side)
+  const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : false
+  );
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsDesktop(window.innerWidth >= 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Drag tracking refs
   const dragStartY = useRef<number>(0);
@@ -154,23 +167,36 @@ export const CommentsDrawer: React.FC = () => {
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden pointer-events-none flex flex-col justify-end">
-      {/* Upper Scrim: Semi-transparent backdrop so video on top half is clearly visible and playing */}
+    <div
+      className={`fixed inset-0 z-50 overflow-hidden pointer-events-none flex ${
+        isDesktop
+          ? 'justify-end items-stretch'
+          : 'flex-col justify-end items-center'
+      }`}
+    >
+      {/* Upper Scrim / Backdrop */}
       <div
-        className="fixed inset-0 z-40 bg-black/30 backdrop-blur-[1px] transition-opacity cursor-pointer pointer-events-auto"
+        className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[1px] md:bg-black/30 md:backdrop-blur-none transition-opacity cursor-pointer pointer-events-auto"
         onClick={() => setCommentsVideoId(null)}
-        title="Tap video area to close comments"
+        title="Tap outside to close comments"
       />
 
-      {/* Adjustable Bottom Sheet: Pops up on half of video (50vh) & draggable up to 85vh */}
-      <div className="w-full flex justify-center z-50 pointer-events-none">
-        <div
-          style={{ height: `${heightPercent}vh` }}
-          className={`relative w-full max-w-[430px] sm:max-w-lg bg-[#111117]/95 backdrop-blur-2xl border-t border-x border-neutral-700/80 rounded-t-3xl shadow-[0_-12px_40px_rgba(0,0,0,0.85)] flex flex-col pointer-events-auto select-none ${
-            isDragging ? 'transition-none' : 'transition-[height] duration-300 ease-out'
-          }`}
-        >
-          {/* Top Pill Drag Handle (Draggable by user) */}
+      {/* Main Comments Drawer:
+          - Desktop (isDesktop): docked full-height on the RIGHT SIDE (w-[420px] lg:w-[460px], border-l, shadow-[-20px_0_50px_rgba(0,0,0,0.85)])
+          - Mobile (!isDesktop): bottom sheet at middle/bottom (w-full max-w-[430px] sm:max-w-lg rounded-t-3xl)
+      */}
+      <div
+        style={isDesktop ? undefined : { height: `${heightPercent}vh` }}
+        className={`relative z-50 bg-[#111117] backdrop-blur-2xl flex flex-col pointer-events-auto select-none ${
+          isDesktop
+            ? 'w-[420px] lg:w-[460px] h-full border-l border-neutral-800 shadow-[-20px_0_50px_rgba(0,0,0,0.85)] animate-in slide-in-from-right duration-200'
+            : `w-full max-w-[430px] sm:max-w-lg border-t border-x border-neutral-700/80 rounded-t-3xl shadow-[0_-12px_40px_rgba(0,0,0,0.85)] ${
+                isDragging ? 'transition-none' : 'transition-[height] duration-300 ease-out'
+              }`
+        }`}
+      >
+        {/* Top Pill Drag Handle (Mobile only) */}
+        {!isDesktop && (
           <div
             onMouseDown={handleMouseDown}
             onTouchStart={handleTouchStart}
@@ -181,35 +207,45 @@ export const CommentsDrawer: React.FC = () => {
           >
             <div className="w-12 h-1.5 rounded-full bg-neutral-600 group-hover:bg-[#ff007a] transition-colors" />
           </div>
+        )}
 
-          {/* Header: Title + Drag Hint + Expand/Collapse + Refresh + Close */}
-          <div className="flex items-center justify-between px-5 pb-3 border-b border-neutral-800 shrink-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm sm:text-base font-bold text-white font-brand flex items-center gap-1.5">
-                <MessageSquare className="w-4 h-4 text-[#ff007a]" />
-                <span>Comments</span>
-              </h2>
-              <span className="text-xs text-neutral-400 font-semibold">
-                ({totalCommentsCount})
-              </span>
-              <span className="text-[10px] text-neutral-400 bg-neutral-800/80 px-2 py-0.5 rounded-full hidden sm:inline-block">
-                {heightPercent > 65 ? 'Expanded view' : 'Half view'}
-              </span>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-neutral-800 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-full bg-[#ff007a]/15 text-[#ff007a] flex items-center justify-center shrink-0">
+              <MessageSquare className="w-4 h-4" />
             </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm sm:text-base font-bold text-white font-brand truncate">
+                  Comments
+                </h2>
+                <span className="text-xs text-neutral-400 font-semibold shrink-0">
+                  ({totalCommentsCount})
+                </span>
+              </div>
+              {currentVideo?.creator && (
+                <p className="text-[11px] text-neutral-400 truncate">
+                  Video by @{currentVideo.creator.username || 'creator'}
+                </p>
+              )}
+            </div>
+          </div>
 
-            <div className="flex items-center gap-1">
-              {/* Refresh button */}
-              <button
-                type="button"
-                onClick={handleRefresh}
-                disabled={isLoading}
-                className="p-1.5 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition-colors cursor-pointer disabled:opacity-50"
-                title="Refresh comments from Supabase"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-[#ff007a]' : ''}`} />
-              </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Refresh button */}
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isLoading}
+              className="p-1.5 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition-colors cursor-pointer disabled:opacity-50"
+              title="Refresh comments"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-[#ff007a]' : ''}`} />
+            </button>
 
-              {/* Quick toggle height button */}
+            {/* Quick toggle height button (mobile only) */}
+            {!isDesktop && (
               <button
                 type="button"
                 onClick={() => {
@@ -218,7 +254,7 @@ export const CommentsDrawer: React.FC = () => {
                   currentHeightRef.current = target;
                 }}
                 className="p-1.5 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition-colors cursor-pointer"
-                title={heightPercent > 65 ? 'Shrink to half video' : 'Expand full'}
+                title={heightPercent > 65 ? 'Shrink' : 'Expand full'}
               >
                 {heightPercent > 65 ? (
                   <ChevronDown className="w-4 h-4" />
@@ -226,18 +262,19 @@ export const CommentsDrawer: React.FC = () => {
                   <ChevronUp className="w-4 h-4" />
                 )}
               </button>
+            )}
 
-              {/* Close Button */}
-              <button
-                type="button"
-                onClick={() => setCommentsVideoId(null)}
-                className="p-1.5 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition-colors cursor-pointer"
-                title="Close comments"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+            {/* Close Button */}
+            <button
+              type="button"
+              onClick={() => setCommentsVideoId(null)}
+              className="p-1.5 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800 transition-colors cursor-pointer"
+              title="Close comments"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
+        </div>
 
           {/* Scrollable Comments List */}
           <div className="flex-1 overflow-y-auto px-4 sm:px-5 py-3 space-y-4 pr-2 min-h-0 text-left">
@@ -459,7 +496,6 @@ export const CommentsDrawer: React.FC = () => {
             </div>
           </form>
         </div>
-      </div>
     </div>
   );
 };
