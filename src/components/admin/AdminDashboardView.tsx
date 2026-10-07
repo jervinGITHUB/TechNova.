@@ -329,6 +329,7 @@ export const AdminDashboardView: React.FC = () => {
       let finalAudioUrl = '';
       let finalCoverUrl = '';
       let storageAudioUploaded = false;
+      let storageUploadError = '';
 
       // 1. Upload audio file to Supabase Storage (bucket 'audio')
       if (selectedAudioFile) {
@@ -338,6 +339,7 @@ export const AdminDashboardView: React.FC = () => {
           storageAudioUploaded = true;
         } else {
           finalAudioUrl = audioPreviewUrl || URL.createObjectURL(selectedAudioFile);
+          storageUploadError = uploadRes.error || 'Storage upload failed';
           if (uploadRes.error) {
             console.warn('[Admin Audio] Storage upload note:', uploadRes.error);
           }
@@ -375,12 +377,22 @@ export const AdminDashboardView: React.FC = () => {
       };
 
       // Automatically saves locally AND automatically records into Supabase AudioLibrary table
-      await addAudioTrack(newTrack);
+      const savedResult = await addAudioTrack(newTrack);
+      const dbSuccess = savedResult?.dbSuccess;
+      const dbError = savedResult?.dbError;
 
-      if (storageAudioUploaded) {
-        showToast(`Track "${newAudioTitle.trim()}" published to Supabase AudioLibrary and Storage bucket!`);
+      if (storageAudioUploaded && dbSuccess) {
+        showToast(`Track "${newAudioTitle.trim()}" successfully recorded to Supabase AudioLibrary and Storage bucket! 🎉`);
+      } else if (storageAudioUploaded && !dbSuccess) {
+        showToast(`Audio stored in Supabase Storage. AudioLibrary table notice: ${dbError || 'check table RLS policies'}`);
+      } else if (!storageAudioUploaded && dbSuccess) {
+        if (storageUploadError.includes('RLS') || storageUploadError.includes('policy')) {
+          showToast(`Track saved to AudioLibrary table! Storage bucket "audio" requires an INSERT policy on storage.objects.`);
+        } else {
+          showToast(`Track recorded to AudioLibrary! Storage note: ${storageUploadError}`);
+        }
       } else {
-        showToast(`Track "${newAudioTitle.trim()}" recorded to AudioLibrary!`);
+        showToast(`Track saved locally. Supabase note: ${storageUploadError || dbError || 'verify Supabase storage and table policies.'}`);
       }
 
       // Reset form

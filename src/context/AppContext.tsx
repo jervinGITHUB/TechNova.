@@ -423,7 +423,7 @@ interface AppContextType {
   videos: Video[];
   audioTracks: AudioTrack[];
   audioTracksList: AudioTrack[];
-  addAudioTrack: (track: Omit<AudioTrack, 'id'> | AudioTrack) => Promise<AudioTrack>;
+  addAudioTrack: (track: Omit<AudioTrack, 'id'> | AudioTrack) => Promise<AudioTrack & { dbSuccess?: boolean; dbError?: string; isRlsBlocked?: boolean; isMissingColumns?: boolean }>;
   deleteAudioTrack: (trackId: string) => Promise<boolean>;
   refreshAudioTracks: (force?: boolean) => Promise<void>;
   conversations: Conversation[];
@@ -5272,7 +5272,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAudioLibraryOpen(true);
   };
 
-  const addAudioTrack = async (trackData: Omit<AudioTrack, 'id'> | AudioTrack): Promise<AudioTrack> => {
+  const addAudioTrack = async (trackData: Omit<AudioTrack, 'id'> | AudioTrack): Promise<AudioTrack & { dbSuccess?: boolean; dbError?: string; isRlsBlocked?: boolean; isMissingColumns?: boolean }> => {
     const id = ('id' in trackData && trackData.id && isUuid(trackData.id))
       ? trackData.id
       : crypto.randomUUID();
@@ -5289,8 +5289,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    await supabaseDb.insertAudioTrack(newTrack);
-    return newTrack;
+    const dbRes = await supabaseDb.insertAudioTrack(newTrack);
+    return {
+      ...newTrack,
+      dbSuccess: dbRes.success,
+      dbError: dbRes.error,
+      isRlsBlocked: dbRes.isRlsBlocked,
+      isMissingColumns: dbRes.isMissingColumns,
+    };
   };
 
   const deleteAudioTrack = async (trackId: string): Promise<boolean> => {

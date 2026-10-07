@@ -2080,7 +2080,7 @@ export const supabaseDb = {
     }
   },
 
-  async insertAudioTrack(track: AudioTrack): Promise<{ success: boolean; error?: string }> {
+  async insertAudioTrack(track: AudioTrack): Promise<{ success: boolean; error?: string; isRlsBlocked?: boolean; isMissingColumns?: boolean }> {
     cachedAudioTracksResult = null;
     const client = getSupabaseClient();
     if (!client) return { success: true };
@@ -2088,8 +2088,7 @@ export const supabaseDb = {
     try {
       const trackUuid = toUuid(track.id);
 
-      // Primary payload strictly matching user's public."AudioLibrary" schema
-      // (AudioTrackID, AudioTitle, AudioArtist as visible in Supabase Table Editor)
+      // Full payload with all columns
       const fullPayload: Record<string, any> = {
         AudioTrackID: trackUuid,
         AudioTitle: track.title,
@@ -2101,6 +2100,13 @@ export const supabaseDb = {
         CreatedAt: new Date().toISOString(),
       };
 
+      // Minimal payload (AudioTrackID, AudioTitle, AudioArtist as seen in Supabase schema)
+      const minimalPayload: Record<string, any> = {
+        AudioTrackID: trackUuid,
+        AudioTitle: track.title,
+        AudioArtist: track.artist,
+      };
+
       // Candidate tables in priority order
       const tablesToTry = workingAudioTable
         ? [workingAudioTable, 'AudioLibrary', 'AudioTrack', 'audio_library', 'audio_tracks']
@@ -2110,84 +2116,78 @@ export const supabaseDb = {
       let lastErr: any = null;
 
       for (const table of uniqueTables) {
-        let currentPayload = { ...fullPayload };
+        // Attempt 1: Full payload
+        const insertRes = await client.from(table).insert(fullPayload);
+        if (!insertRes.error) {
+          workingAudioTable = table as any;
+          return { success: true };
+        }
 
-        // Try inserting up to 4 attempts (pruning missing columns if code 42703)
-        for (let attempt = 0; attempt < 4; attempt++) {
-          // Standard insert (safest, does not require onConflict constraint specification)
-          const insertRes = await client.from(table).insert(currentPayload);
-          if (!insertRes.error) {
+        // Duplicate key check: update instead
+        if (insertRes.error.code === '23505' || insertRes.error.message?.includes('duplicate key')) {
+          const updateRes = await client.from(table).update(fullPayload).or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${track.id}`);
+          if (!updateRes.error) {
             workingAudioTable = table as any;
             return { success: true };
-          }
-
-          // If duplicate key (code 23505), update existing row
-          if (insertRes.error.code === '23505' || insertRes.error.message?.includes('duplicate key')) {
-            const updateRes = await client.from(table).update(currentPayload).or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${track.id}`);
-            if (!updateRes.error) {
-              workingAudioTable = table as any;
-              return { success: true };
-            }
-          }
-
-          lastErr = insertRes.error;
-
-          // If table does not exist (code 42P01), switch to next table immediately
-          if (insertRes.error.code === '42P01' || insertRes.error.message?.includes('does not exist')) {
-            break;
-          }
-
-          // If error is missing column (code 42703)
-          if (insertRes.error.code === '42703' || insertRes.error.message?.includes('column')) {
-            const match = insertRes.error.message.match(/column ["']?([^"' ]+)["']? of relation/i) ||
-                          insertRes.error.message.match(/could not find the ['"]([^'"]+)['"] column/i) ||
-                          insertRes.error.message.match(/column ["']?([^"' ]+)["']? does not exist/i);
-            if (match && match[1]) {
-              delete currentPayload[match[1]];
-              continue;
-            }
-
-            if ('Category' in currentPayload) {
-              delete currentPayload.Category;
-            } else if ('CreatedAt' in currentPayload) {
-              delete currentPayload.CreatedAt;
-            } else if ('Duration' in currentPayload) {
-              delete currentPayload.Duration;
-            } else if ('CoverURL' in currentPayload) {
-              delete currentPayload.CoverURL;
-            } else if ('AudioURL' in currentPayload) {
-              delete currentPayload.AudioURL;
-            } else {
-              break;
-            }
-          } else {
-            // Other error (e.g. RLS policy violation), don't loop endlessly to protect Disk IO
-            break;
           }
         }
 
-        // If uppercase columns failed with 42703, attempt lowercase column names
-        if (lastErr && (lastErr.code === '42703' || lastErr.message?.includes('column'))) {
-          const lowerPayload: Record<string, any> = {
-            audiotrackid: trackUuid,
-            audiotitle: track.title,
-            audioartist: track.artist,
-            audiourl: track.audioUrl || '',
-            coverurl: track.coverUrl || '',
-            duration: track.duration || '00:30',
-            category: track.category || 'Trending',
+        lastErr = insertRes.error;
+
+        // If table doesn't exist (42P01), try next candidate table
+        if (insertRes.error.code === '42P01' || insertRes.error.message?.includes('does not exist')) {
+          continue;
+        }
+
+        // If RLS blocked (42501)
+        if (insertRes.error.code === '42501' || insertRes.error.message?.includes('violates row-level security')) {
+          return {
+            success: false,
+            error: `Row-Level Security (RLS) on table "${table}" blocked insert. Please allow INSERT on table "${table}".`,
+            isRlsBlocked: true,
           };
-          const lowerRes = await client.from(table).insert(lowerPayload);
-          if (!lowerRes.error) {
+        }
+
+        // Attempt 2: Minimal columns (AudioTrackID, AudioTitle, AudioArtist)
+        // This succeeds immediately even if AudioURL/CoverURL/Duration/Category have not been added yet!
+        const minRes = await client.from(table).insert(minimalPayload);
+        if (!minRes.error) {
+          workingAudioTable = table as any;
+          return {
+            success: true,
+            isMissingColumns: true,
+            error: `Recorded with basic columns. Note: Column "AudioURL" is missing from "${table}" in Supabase. Add it to persist audio playback links.`,
+          };
+        }
+
+        if (minRes.error.code === '23505' || minRes.error.message?.includes('duplicate key')) {
+          const minUpRes = await client.from(table).update(minimalPayload).or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${track.id}`);
+          if (!minUpRes.error) {
             workingAudioTable = table as any;
             return { success: true };
           }
+        }
+
+        // Attempt 3: Lowercase columns (audiotrackid, audiotitle, audioartist)
+        const lowerMinPayload: Record<string, any> = {
+          audiotrackid: trackUuid,
+          audiotitle: track.title,
+          audioartist: track.artist,
+        };
+        const lowerRes = await client.from(table).insert(lowerMinPayload);
+        if (!lowerRes.error) {
+          workingAudioTable = table as any;
+          return { success: true };
         }
       }
 
       if (lastErr) {
         console.warn('[Supabase] insertAudioTrack issue:', lastErr.message);
-        return { success: false, error: lastErr.message };
+        return {
+          success: false,
+          error: lastErr.message,
+          isRlsBlocked: lastErr.code === '42501' || lastErr.message?.includes('violates row-level security'),
+        };
       }
 
       return { success: true };
@@ -2215,7 +2215,7 @@ export const supabaseDb = {
     }
   },
 
-  async uploadAudioFile(file: File): Promise<{ url: string | null; error?: string }> {
+  async uploadAudioFile(file: File): Promise<{ url: string | null; error?: string; isRlsBlocked?: boolean }> {
     const client = getSupabaseClient();
     if (!client) return { url: null, error: 'Supabase client is not connected' };
 
@@ -2237,9 +2237,9 @@ export const supabaseDb = {
         // ignore listBuckets failure
       }
 
-      let lastError: any = null;
+      let primaryAudioError: any = null;
+
       for (const bucket of candidateBuckets) {
-        // Try 1: upsert: false (standard INSERT policy only, avoids 403 where UPDATE is not granted)
         try {
           const { data, error } = await client.storage.from(bucket).upload(cleanFileName, file, {
             contentType: mimeType,
@@ -2254,7 +2254,11 @@ export const supabaseDb = {
           }
 
           if (error) {
-            lastError = error;
+            // Keep error from primary 'audio' bucket
+            if (bucket === 'audio' || !primaryAudioError) {
+              primaryAudioError = error;
+            }
+
             // If already exists, retry with upsert: true
             if (error.message?.includes('already exists') || error.message?.includes('duplicate')) {
               const { data: upData, error: upError } = await client.storage.from(bucket).upload(cleanFileName, file, {
@@ -2267,15 +2271,29 @@ export const supabaseDb = {
                 if (pubData?.publicUrl) return { url: pubData.publicUrl };
               }
             }
+
+            // If RLS blocked on 'audio', stop early and report accurate RLS message
+            if (bucket === 'audio' && (error.message?.includes('row-level security') || error.message?.includes('violates'))) {
+              return {
+                url: null,
+                error: `Supabase Storage RLS Policy Error: Bucket "audio" has no INSERT policy for storage.objects.`,
+                isRlsBlocked: true,
+              };
+            }
           }
         } catch (err: any) {
-          lastError = err;
+          if (bucket === 'audio' || !primaryAudioError) primaryAudioError = err;
         }
       }
 
+      const errMsg = primaryAudioError?.message || 'Bucket upload failed. Please verify storage RLS policies for bucket "audio".';
+      const isRls = errMsg.includes('row-level security') || errMsg.includes('violates');
       return {
         url: null,
-        error: lastError?.message || 'Bucket upload failed. Please verify storage RLS policies for bucket "audio".',
+        error: isRls
+          ? `Supabase Storage RLS Error: Bucket "audio" requires an INSERT policy on storage.objects.`
+          : errMsg,
+        isRlsBlocked: isRls,
       };
     } catch (e: any) {
       console.warn('Supabase uploadAudioFile exception:', e);
