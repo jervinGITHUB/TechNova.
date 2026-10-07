@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   User,
   Video,
@@ -295,6 +295,70 @@ export type AppTab =
   | 'live_viewer'
   | 'admin';
 
+export const VALID_APP_TABS: AppTab[] = [
+  'home',
+  'explore',
+  'live',
+  'messages',
+  'upload',
+  'notifications',
+  'report_history',
+  'profile',
+  'edit_profile',
+  'live_host_setup',
+  'live_host_active',
+  'live_viewer',
+  'admin',
+];
+
+export const parseInitialNavigation = (): { tab: AppTab; selectedUserId: string | null } => {
+  if (typeof window === 'undefined') return { tab: 'home', selectedUserId: null };
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = params.get('tab') as AppTab | null;
+    const userParam = params.get('user');
+
+    if (tabParam && VALID_APP_TABS.includes(tabParam)) {
+      return { tab: tabParam, selectedUserId: userParam || null };
+    }
+
+    const cleanPath = window.location.pathname.replace(/^\//, '').split('/')[0].toLowerCase();
+    if (cleanPath && VALID_APP_TABS.includes(cleanPath as AppTab)) {
+      return { tab: cleanPath as AppTab, selectedUserId: userParam || null };
+    }
+  } catch (e) {
+    // ignore
+  }
+  return { tab: 'home', selectedUserId: null };
+};
+
+export const buildNavigationUrl = (tab: AppTab, userId?: string | null): string => {
+  if (typeof window === 'undefined') return '/';
+  const pathname = window.location.pathname;
+  const searchParams = new URLSearchParams(window.location.search);
+
+  // Clean OAuth tokens if any
+  searchParams.delete('code');
+  searchParams.delete('state');
+  searchParams.delete('error');
+  searchParams.delete('error_description');
+
+  if (tab === 'home' && !userId) {
+    searchParams.delete('tab');
+    searchParams.delete('user');
+  } else {
+    searchParams.set('tab', tab);
+    if (tab === 'profile' && userId) {
+      searchParams.set('user', userId);
+    } else {
+      searchParams.delete('user');
+    }
+  }
+
+  const query = searchParams.toString();
+  return query ? `${pathname}?${query}` : pathname;
+};
+
 interface ReportModalConfig {
   isOpen: boolean;
   type: 'video' | 'user';
@@ -535,9 +599,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
 
-  // Navigation tab
-  const [activeTab, setActiveTab] = useState<AppTab>('home');
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  // Navigation tab with full browser Back / Forward arrow history support
+  const initialNav = useMemo(() => parseInitialNavigation(), []);
+  const [activeTab, setActiveTabRaw] = useState<AppTab>(initialNav.tab);
+  const [selectedUserId, setSelectedUserId] = useState<string | null>(initialNav.selectedUserId);
+  const isPopStateRef = useRef<boolean>(false);
+
+  // Synchronize browser history stack whenever user changes tabs
+  const setActiveTab = useCallback((nextTab: AppTab) => {
+    if (nextTab !== 'profile') {
+      setSelectedUserId(null);
+    }
+    setActiveTabRaw(prevTab => {
+      if (prevTab === nextTab && nextTab !== 'profile') return prevTab;
+
+      if (!isPopStateRef.current && typeof window !== 'undefined') {
+        try {
+          const url = buildNavigationUrl(nextTab, null);
+          window.history.pushState(
+            { tab: nextTab, selectedUserId: null },
+            '',
+            url
+          );
+        } catch (e) {
+          console.warn('Failed to push browser history state:', e);
+        }
+      }
+      return nextTab;
+    });
+  }, []);
 
   // Core Data
   const [users, setUsers] = useState<User[]>(() => {
@@ -878,6 +968,65 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
   const [supabaseModalOpen, setSupabaseModalOpen] = useState<boolean>(false);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(() => getSupabaseConfig().isConnected);
+
+  // Browser History Navigation (Back / Forward arrows on browser address bar)
+  // Handles: Home -> Explore -> Live -> Messages, and clicking browser Back ("←") goes Messages -> Live -> Explore -> Home
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // 1. Establish initial baseline entry in history stack on load
+    const isOAuthRedirect =
+      window.location.search.includes('code=') ||
+      window.location.hash.includes('access_token=');
+
+    if (!isOAuthRedirect) {
+      try {
+        const url = buildNavigationUrl(activeTab, selectedUserId);
+        window.history.replaceState(
+          { tab: activeTab, selectedUserId },
+          '',
+          url
+        );
+      } catch (e) {
+        // ignore
+      }
+    }
+
+    // 2. Listen to browser Back and Forward button clicks (popstate events)
+    const handlePopState = (event: PopStateEvent) => {
+      isPopStateRef.current = true;
+
+      // Close open modals / drawers when navigating backward
+      setCommentsVideoId(null);
+      setReportModal(null);
+      setAudioLibraryOpen(false);
+      setSupabaseModalOpen(false);
+      setSwitchAccountModalOpen(false);
+
+      const state = event.state;
+      let targetTab: AppTab = 'home';
+      let targetUserId: string | null = null;
+
+      if (state && state.tab && VALID_APP_TABS.includes(state.tab)) {
+        targetTab = state.tab;
+        targetUserId = state.selectedUserId || null;
+      } else {
+        const parsed = parseInitialNavigation();
+        targetTab = parsed.tab;
+        targetUserId = parsed.selectedUserId;
+      }
+
+      setSelectedUserId(targetUserId);
+      setActiveTabRaw(targetTab);
+
+      setTimeout(() => {
+        isPopStateRef.current = false;
+      }, 50);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Active floating notification popup for real-time interactions across devices
   const [activeNotificationPopup, setActiveNotificationPopup] = useState<NotificationItem | null>(null);
@@ -3029,12 +3178,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const navigateToUserProfile = (userId: string) => {
-    if (currentUser && userId === currentUser.id) {
-      setSelectedUserId(null);
-      setActiveTab('profile');
-    } else {
-      setSelectedUserId(userId);
-      setActiveTab('profile');
+    const targetUserId = currentUser && userId === currentUser.id ? null : userId;
+    setSelectedUserId(targetUserId);
+    setActiveTabRaw('profile');
+
+    if (!isPopStateRef.current && typeof window !== 'undefined') {
+      try {
+        const url = buildNavigationUrl('profile', targetUserId);
+        window.history.pushState(
+          { tab: 'profile', selectedUserId: targetUserId },
+          '',
+          url
+        );
+      } catch (e) {
+        console.warn('Failed to push browser history state for profile:', e);
+      }
     }
   };
 
