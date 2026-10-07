@@ -33,6 +33,8 @@ export interface AudioTrack {
   sourceUsername?: string;
   category?: string;
   useCount?: number;
+  trimStart?: number;
+  trimEnd?: number;
 }
 
 export interface CommentReplyEntry {
@@ -102,6 +104,8 @@ export interface Video {
   audioVolume?: number;
   originalAudioMuted?: boolean;
   originalAudioVolume?: number;
+  audioStartTime?: number;
+  audioEndTime?: number;
 }
 
 export interface MessageReplyInfo {

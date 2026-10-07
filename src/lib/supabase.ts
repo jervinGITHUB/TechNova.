@@ -1194,49 +1194,49 @@ export const supabaseDb = {
               await this.deleteVideoFileFromStorage(uv.VideoURL);
             }
             const uvUuid = uv.VideoID;
-            try { await client.from('ReportVideo').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
-            try { await client.from('VideoHashtag').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
-            try { await client.from('VideoStats').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
-            try { await client.from('Like').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
-            try { await client.from('likes').delete().or(`video_id.eq.${uvUuid},video_id.eq.${uv.VideoID}`); } catch {}
-            try { await client.from('Comment').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
-            try { await client.from('comments').delete().or(`video_id.eq.${uvUuid},video_id.eq.${uv.VideoID}`); } catch {}
-            try { await client.from('Share').delete().or(`VideoID.eq.${uvUuid},VideoID.eq.${uv.VideoID}`); } catch {}
+            try { await client.from('ReportVideo').delete().eq('VideoID', uvUuid); } catch {}
+            try { await client.from('VideoHashtag').delete().eq('VideoID', uvUuid); } catch {}
+            try { await client.from('VideoStats').delete().eq('VideoID', uvUuid); } catch {}
+            try { await client.from('Like').delete().eq('VideoID', uvUuid); } catch {}
+            try { await client.from('likes').delete().eq('video_id', uvUuid); } catch {}
+            try { await client.from('Comment').delete().eq('VideoID', uvUuid); } catch {}
+            try { await client.from('comments').delete().eq('video_id', uvUuid); } catch {}
+            try { await client.from('Share').delete().eq('VideoID', uvUuid); } catch {}
           }
-          await client.from('Video').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`);
-          await client.from('videos').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId}`);
+          await client.from('Video').delete().eq('UserID', targetUuid);
+          await client.from('videos').delete().eq('user_id', targetUuid);
         }
       } catch (err) {
         console.warn('Error clearing user videos during user delete:', err);
       }
 
       // 2. Cascade delete from child database tables to prevent foreign key errors
-      try { await client.from('Like').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
-      try { await client.from('likes').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId}`); } catch {}
-      try { await client.from('Comment').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
-      try { await client.from('comments').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId}`); } catch {}
-      try { await client.from('Share').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
+      try { await client.from('Like').delete().eq('UserID', targetUuid); } catch {}
+      try { await client.from('likes').delete().eq('user_id', targetUuid); } catch {}
+      try { await client.from('Comment').delete().eq('UserID', targetUuid); } catch {}
+      try { await client.from('comments').delete().eq('user_id', targetUuid); } catch {}
+      try { await client.from('Share').delete().eq('UserID', targetUuid); } catch {}
       try {
-        await client.from('Following').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId},FollowingUserID.eq.${targetUuid},FollowingUserID.eq.${userId}`);
+        await client.from('Following').delete().or(`UserID.eq.${targetUuid},FollowingUserID.eq.${targetUuid}`);
       } catch {}
       try {
-        await client.from('following').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId},following_user_id.eq.${targetUuid},following_user_id.eq.${userId}`);
+        await client.from('following').delete().or(`user_id.eq.${targetUuid},following_user_id.eq.${targetUuid}`);
       } catch {}
       try {
-        await client.from('Follower').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId},FollowerUserID.eq.${targetUuid},FollowerUserID.eq.${userId}`);
+        await client.from('Follower').delete().or(`UserID.eq.${targetUuid},FollowerUserID.eq.${targetUuid}`);
       } catch {}
       try {
-        await client.from('follower').delete().or(`user_id.eq.${targetUuid},user_id.eq.${userId},follower_user_id.eq.${targetUuid},follower_user_id.eq.${userId}`);
+        await client.from('follower').delete().or(`user_id.eq.${targetUuid},follower_user_id.eq.${targetUuid}`);
       } catch {}
-      try { await client.from('Notification').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
-      try { await client.from('ReportUser').delete().or(`ReportUserID.eq.${targetUuid},ReportedUserID.eq.${targetUuid},ReportUserID.eq.${userId},ReportedUserID.eq.${userId}`); } catch {}
-      try { await client.from('ReportVideo').delete().or(`ReporterUserID.eq.${targetUuid},ReporterUserID.eq.${userId}`); } catch {}
-      try { await client.from('Message').delete().or(`SenderUserID.eq.${targetUuid},SenderUserID.eq.${userId}`); } catch {}
-      try { await client.from('Admin').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`); } catch {}
+      try { await client.from('Notification').delete().eq('UserID', targetUuid); } catch {}
+      try { await client.from('ReportUser').delete().or(`ReportUserID.eq.${targetUuid},ReportedUserID.eq.${targetUuid}`); } catch {}
+      try { await client.from('ReportVideo').delete().eq('ReporterUserID', targetUuid); } catch {}
+      try { await client.from('Message').delete().eq('SenderUserID', targetUuid); } catch {}
+      try { await client.from('Admin').delete().eq('UserID', targetUuid); } catch {}
 
       // 3. Delete from User table (PascalCase and snake_case) by ID and Email
-      await client.from('User').delete().or(`UserID.eq.${targetUuid},UserID.eq.${userId}`);
-      await client.from('users').delete().or(`id.eq.${targetUuid},id.eq.${userId}`);
+      await client.from('User').delete().eq('UserID', targetUuid);
+      await client.from('users').delete().eq('id', targetUuid);
       if (cleanEmail) {
         try { await client.from('User').delete().ilike('Email', cleanEmail); } catch {}
         try { await client.from('users').delete().ilike('email', cleanEmail); } catch {}
@@ -2092,18 +2092,7 @@ export const supabaseDb = {
           category: r.Category || r.category || r.AudioCategory || r.audio_category || 'Trending',
         }));
 
-      // Background cleanup: if any of the deprecated demo tracks are present in Supabase table, gently remove them
-      const hasDeprecated = data.some((r: any) => {
-        const id = String(r.AudioTrackID || r.audio_track_id || r.id || '');
-        const title = String(r.AudioTitle || r.audio_title || r.Title || r.title || '');
-        return isDeprecatedDefault(id, title);
-      });
-      if (hasDeprecated && client) {
-        Promise.resolve(
-          client.from('AudioLibrary').delete().or('AudioTrackID.in.(track_synthwave_energy,track_lofi_sunset,track_deep_bass_groove),AudioTitle.ilike.%deep bass groove%,AudioTitle.ilike.%lo-fi chill sunset%,AudioTitle.ilike.%neon horizon%')
-        ).catch(() => {});
-      }
-
+      // Cache result for 60 seconds to save Supabase Disk IO and avoid continuous querying
       cachedAudioTracksResult = { data: mapped, timestamp: Date.now() };
       return mapped;
     } catch (e) {
@@ -2157,7 +2146,7 @@ export const supabaseDb = {
 
         // Duplicate key check: update instead
         if (insertRes.error.code === '23505' || insertRes.error.message?.includes('duplicate key')) {
-          const updateRes = await client.from(table).update(fullPayload).or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${track.id}`);
+          const updateRes = await client.from(table).update(fullPayload).eq('AudioTrackID', trackUuid);
           if (!updateRes.error) {
             workingAudioTable = table as any;
             return { success: true };
@@ -2193,7 +2182,7 @@ export const supabaseDb = {
         }
 
         if (minRes.error.code === '23505' || minRes.error.message?.includes('duplicate key')) {
-          const minUpRes = await client.from(table).update(minimalPayload).or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${track.id}`);
+          const minUpRes = await client.from(table).update(minimalPayload).eq('AudioTrackID', trackUuid);
           if (!minUpRes.error) {
             workingAudioTable = table as any;
             return { success: true };
@@ -2235,11 +2224,11 @@ export const supabaseDb = {
     if (!client || !trackId) return false;
 
     try {
-      const trackUuid = toUuid(trackId);
-      await client.from('AudioLibrary').delete().or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${trackId}`);
-      await client.from('AudioTrack').delete().or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${trackId}`);
+      const targetUuid = isUuid(trackId) ? trackId : toUuid(trackId);
+      await client.from('AudioLibrary').delete().eq('AudioTrackID', targetUuid);
+      await client.from('AudioTrack').delete().eq('AudioTrackID', targetUuid);
       try {
-        await client.from('audio_tracks').delete().or(`id.eq.${trackUuid},id.eq.${trackId}`);
+        await client.from('audio_tracks').delete().eq('id', targetUuid);
       } catch {}
       return true;
     } catch {
@@ -2613,7 +2602,7 @@ export const supabaseDb = {
         const { data: dbRow } = await client
           .from('Video')
           .select('VideoURL')
-          .or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`)
+          .eq('VideoID', vUuid)
           .maybeSingle();
         if (dbRow?.VideoURL) {
           await this.deleteVideoFileFromStorage(dbRow.VideoURL);
@@ -2621,20 +2610,20 @@ export const supabaseDb = {
       } catch {}
 
       // 2. Cascade delete from child database tables to prevent foreign key errors
-      try { await client.from('ReportVideo').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
-      try { await client.from('VideoHashtag').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
-      try { await client.from('VideoStats').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
-      try { await client.from('Like').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
-      try { await client.from('likes').delete().or(`video_id.eq.${vUuid},video_id.eq.${videoId}`); } catch {}
-      try { await client.from('Comment').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
-      try { await client.from('comments').delete().or(`video_id.eq.${vUuid},video_id.eq.${videoId}`); } catch {}
-      try { await client.from('Share').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
-      try { await client.from('Notification').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`); } catch {}
+      try { await client.from('ReportVideo').delete().eq('VideoID', vUuid); } catch {}
+      try { await client.from('VideoHashtag').delete().eq('VideoID', vUuid); } catch {}
+      try { await client.from('VideoStats').delete().eq('VideoID', vUuid); } catch {}
+      try { await client.from('Like').delete().eq('VideoID', vUuid); } catch {}
+      try { await client.from('likes').delete().eq('video_id', vUuid); } catch {}
+      try { await client.from('Comment').delete().eq('VideoID', vUuid); } catch {}
+      try { await client.from('comments').delete().eq('video_id', vUuid); } catch {}
+      try { await client.from('Share').delete().eq('VideoID', vUuid); } catch {}
+      try { await client.from('Notification').delete().eq('VideoID', vUuid); } catch {}
 
       // 3. Delete from Video table (PascalCase and snake_case)
-      const resPascal = await client.from('Video').delete().or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`);
+      const resPascal = await client.from('Video').delete().eq('VideoID', vUuid);
       if (resPascal.error) {
-        await client.from('videos').delete().or(`id.eq.${vUuid},id.eq.${videoId}`);
+        await client.from('videos').delete().eq('id', vUuid);
       }
       return true;
     } catch (e) {

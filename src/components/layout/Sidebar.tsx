@@ -6,6 +6,8 @@ import { isGoogleAccount, isAccountLoggedInOnDevice } from '../../lib/supabase';
 import {
   Home,
   Compass,
+  UserCheck,
+  Users,
   Radio,
   MessageSquare,
   User as UserIcon,
@@ -52,6 +54,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
       tab: 'explore',
       label: 'Explore',
       icon: <Compass className="w-5 h-5" />,
+    },
+    {
+      tab: 'following',
+      label: 'Following',
+      icon: <UserCheck className="w-5 h-5" />,
+    },
+    {
+      tab: 'friends',
+      label: 'Friends',
+      icon: <Users className="w-5 h-5" />,
     },
     {
       tab: 'live',

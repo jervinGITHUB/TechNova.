@@ -111,7 +111,8 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
       // Background audio track playback
       if (bgAudioEl && video.audioTrack?.audioUrl) {
-        bgAudioEl.currentTime = 0;
+        const startPos = video.audioStartTime ?? video.audioTrack.trimStart ?? 0;
+        bgAudioEl.currentTime = startPos;
         bgAudioEl.volume = Math.max(0, Math.min(1, (video.audioVolume ?? 100) / 100));
         bgAudioEl.play().catch(() => {});
       }
@@ -121,12 +122,12 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       videoEl.currentTime = 0;
       if (bgAudioEl) {
         bgAudioEl.pause();
-        bgAudioEl.currentTime = 0;
+        bgAudioEl.currentTime = video.audioStartTime ?? video.audioTrack?.trimStart ?? 0;
       }
       setIsPlaying(false);
       setCurrentTime(0);
     }
-  }, [isActive, videoSrc, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume]);
+  }, [isActive, videoSrc, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioStartTime, video.audioEndTime]);
 
   // Window-level interaction handler to ensure audio is unmuted on gesture
   useEffect(() => {
@@ -277,8 +278,15 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         <audio
           ref={bgAudioRef}
           src={video.audioTrack.audioUrl}
-          loop
+          loop={!video.audioEndTime && !video.audioTrack.trimEnd}
           preload="auto"
+          onTimeUpdate={() => {
+            const startPos = video.audioStartTime ?? video.audioTrack?.trimStart ?? 0;
+            const endPos = video.audioEndTime ?? video.audioTrack?.trimEnd;
+            if (endPos && bgAudioRef.current && bgAudioRef.current.currentTime >= endPos) {
+              bgAudioRef.current.currentTime = startPos;
+            }
+          }}
         />
       )}
 
@@ -602,6 +610,7 @@ export const HomeFeed: React.FC = () => {
     currentUser,
     users,
     videos,
+    activeTab,
     setActiveTab,
     setSearchQuery,
     openLiveStreamAsViewer,
@@ -614,7 +623,7 @@ export const HomeFeed: React.FC = () => {
   } = useApp();
 
   type FeedTab = 'friends' | 'following' | 'foryou';
-  const [feedTab, setFeedTab] = useState<FeedTab>('foryou');
+  const feedTab: FeedTab = activeTab === 'friends' ? 'friends' : activeTab === 'following' ? 'following' : 'foryou';
 
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
   const [activeVideoId, setActiveVideoId] = useState<string>('');
@@ -828,85 +837,9 @@ export const HomeFeed: React.FC = () => {
       />
 
       {/* ========================================================================= */}
-      {/* MIDDLE: VIDEOS FEED CONTAINER WITH FLOATING TOP BAR (SNAP-Y)             */}
+      {/* MIDDLE: VIDEOS FEED CONTAINER (SNAP-Y)                                    */}
       {/* ========================================================================= */}
       <div className="flex-1 max-w-[430px] h-full relative flex flex-col items-center">
-        {/* Floating Top Navigation: LIVE | Friends | Following | For You | Search */}
-        <div className="absolute top-2 inset-x-0 z-20 px-3 py-1 flex items-center justify-between pointer-events-none">
-          {/* LIVE Button on the left */}
-          <button
-            onClick={() => setActiveTab('live')}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/45 hover:bg-black/65 backdrop-blur-md border border-white/15 text-white text-xs font-bold transition-all pointer-events-auto cursor-pointer shadow-lg"
-            title="Browse Live Streams"
-          >
-            <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse" />
-            <span>LIVE</span>
-          </button>
-
-          {/* Center Navigation Tabs: Friends | Following | For You */}
-          <div className="flex items-center gap-4 sm:gap-5 pointer-events-auto drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
-            {/* Friends Tab */}
-            <button
-              onClick={() => setFeedTab('friends')}
-              className={`relative px-1 py-1 text-sm sm:text-base transition-all cursor-pointer ${
-                feedTab === 'friends'
-                  ? 'font-extrabold text-white scale-105'
-                  : 'font-semibold text-neutral-400 hover:text-white'
-              }`}
-            >
-              <span>Friends</span>
-              {hasFriendsVideos && (
-                <span className="absolute top-0.5 -right-1.5 w-2 h-2 rounded-full bg-[#ff007a] ring-2 ring-black animate-pulse" />
-              )}
-              {feedTab === 'friends' && (
-                <div className="w-5 h-0.5 bg-white rounded-full mx-auto mt-0.5" />
-              )}
-            </button>
-
-            {/* Following Tab */}
-            <button
-              onClick={() => setFeedTab('following')}
-              className={`relative px-1 py-1 text-sm sm:text-base transition-all cursor-pointer ${
-                feedTab === 'following'
-                  ? 'font-extrabold text-white scale-105'
-                  : 'font-semibold text-neutral-400 hover:text-white'
-              }`}
-            >
-              <span>Following</span>
-              {feedTab === 'following' && (
-                <div className="w-5 h-0.5 bg-white rounded-full mx-auto mt-0.5" />
-              )}
-            </button>
-
-            {/* For You Tab */}
-            <button
-              onClick={() => setFeedTab('foryou')}
-              className={`relative px-1 py-1 text-sm sm:text-base transition-all cursor-pointer ${
-                feedTab === 'foryou'
-                  ? 'font-extrabold text-white scale-105'
-                  : 'font-semibold text-neutral-400 hover:text-white'
-              }`}
-            >
-              <span>For You</span>
-              {feedTab === 'foryou' && (
-                <div className="w-5 h-0.5 bg-white rounded-full mx-auto mt-0.5" />
-              )}
-            </button>
-          </div>
-
-          {/* Search Button on the right */}
-          <button
-            onClick={() => {
-              setActiveTab('explore');
-              window.dispatchEvent(new CustomEvent('focus-search-input'));
-            }}
-            className="p-1.5 rounded-full bg-black/45 hover:bg-black/65 backdrop-blur-md border border-white/15 text-white/90 hover:text-white transition-all pointer-events-auto cursor-pointer shadow-lg"
-            title="Search & Explore"
-          >
-            <Search className="w-4 h-4" />
-          </button>
-        </div>
-
         {/* Scrollable Videos Feed Container */}
         <div
           ref={videoFeedRef}
@@ -914,9 +847,9 @@ export const HomeFeed: React.FC = () => {
         >
           {feedVideos.length === 0 ? (
             feedTab === 'friends' ? (
-              <EmptyFriendsFeedCard onDiscover={() => setFeedTab('foryou')} />
+              <EmptyFriendsFeedCard onDiscover={() => setActiveTab('explore')} />
             ) : feedTab === 'following' ? (
-              <EmptyFollowingFeedCard onDiscover={() => setFeedTab('foryou')} />
+              <EmptyFollowingFeedCard onDiscover={() => setActiveTab('explore')} />
             ) : (
               <EmptyFeedLayoutCard />
             )

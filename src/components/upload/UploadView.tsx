@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { AudioTrack } from '../../types';
 import { supabaseDb, getSupabaseConfig } from '../../lib/supabase';
 import { getCuratedCoverForTrack, resolveTrackCover } from '../../utils/audio';
+import { AudioWaveformTrimmer, parseTrackDuration } from './AudioWaveformTrimmer';
 import {
   Film,
   Music,
@@ -31,6 +32,10 @@ export const UploadView: React.FC = () => {
   const [hashtags, setHashtags] = useState('');
   const [selectedAudio, setSelectedAudio] = useState<AudioTrack | null>(null);
 
+  // Audio trim / gap selection state
+  const [audioTrimStart, setAudioTrimStart] = useState<number>(0);
+  const [audioTrimEnd, setAudioTrimEnd] = useState<number>(30);
+
   // Audio mix controls
   const [isRawAudioMuted, setIsRawAudioMuted] = useState(false);
   const [rawAudioVolume, setRawAudioVolume] = useState<number>(100);
@@ -42,6 +47,13 @@ export const UploadView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgAudioRef = useRef<HTMLAudioElement>(null);
+
+  const handleSelectAudioTrack = (track: AudioTrack) => {
+    setSelectedAudio(track);
+    const parsedDur = parseTrackDuration(track.duration);
+    setAudioTrimStart(0);
+    setAudioTrimEnd(Math.min(30, parsedDur));
+  };
 
   // Update raw audio volume on video element whenever slider/mute changes
   useEffect(() => {
@@ -58,9 +70,10 @@ export const UploadView: React.FC = () => {
     }
   }, [bgAudioVolume]);
 
-  // Sync background audio with video playback
+  // Sync background audio with video playback using trimmed audio gap
   const handleVideoPlay = () => {
     if (bgAudioRef.current && selectedAudio?.audioUrl) {
+      bgAudioRef.current.currentTime = audioTrimStart;
       bgAudioRef.current.play().catch(() => {});
     }
   };
@@ -72,19 +85,20 @@ export const UploadView: React.FC = () => {
   };
 
   const handleVideoTimeUpdate = () => {
-    if (bgAudioRef.current && videoRef.current && bgAudioRef.current.duration) {
-      const diff = Math.abs(
-        bgAudioRef.current.currentTime - (videoRef.current.currentTime % bgAudioRef.current.duration)
-      );
+    if (bgAudioRef.current && videoRef.current && selectedAudio?.audioUrl) {
+      const trimLen = Math.max(1, audioTrimEnd - audioTrimStart);
+      const targetPos = audioTrimStart + (videoRef.current.currentTime % trimLen);
+      const diff = Math.abs(bgAudioRef.current.currentTime - targetPos);
       if (diff > 0.5) {
-        bgAudioRef.current.currentTime = videoRef.current.currentTime % bgAudioRef.current.duration;
+        bgAudioRef.current.currentTime = targetPos;
       }
     }
   };
 
   const handleVideoSeeking = () => {
-    if (bgAudioRef.current && videoRef.current && bgAudioRef.current.duration) {
-      bgAudioRef.current.currentTime = videoRef.current.currentTime % bgAudioRef.current.duration;
+    if (bgAudioRef.current && videoRef.current && selectedAudio?.audioUrl) {
+      const trimLen = Math.max(1, audioTrimEnd - audioTrimStart);
+      bgAudioRef.current.currentTime = audioTrimStart + (videoRef.current.currentTime % trimLen);
     }
   };
 
@@ -272,12 +286,20 @@ export const UploadView: React.FC = () => {
     await uploadVideo({
       caption: caption.trim() || 'New viral moment! 🔥',
       hashtags: extractedTags.length > 0 ? extractedTags : ['#viral', '#fyp'],
-      audioTrack: selectedAudio || undefined,
+      audioTrack: selectedAudio
+        ? {
+            ...selectedAudio,
+            trimStart: audioTrimStart,
+            trimEnd: audioTrimEnd,
+          }
+        : undefined,
       mediaUrl: finalMediaUrl,
       thumbnailUrl: generatedThumbnail || finalMediaUrl,
       audioVolume: bgAudioVolume,
       originalAudioMuted: isRawAudioMuted,
       originalAudioVolume: isRawAudioMuted ? 0 : rawAudioVolume,
+      audioStartTime: selectedAudio ? audioTrimStart : undefined,
+      audioEndTime: selectedAudio ? audioTrimEnd : undefined,
     });
 
     if (bgAudioRef.current) {
@@ -293,6 +315,8 @@ export const UploadView: React.FC = () => {
     setCaption('');
     setHashtags('');
     setSelectedAudio(null);
+    setAudioTrimStart(0);
+    setAudioTrimEnd(30);
     setIsRawAudioMuted(false);
     setRawAudioVolume(100);
     setBgAudioVolume(100);
@@ -308,8 +332,14 @@ export const UploadView: React.FC = () => {
         <audio
           ref={bgAudioRef}
           src={selectedAudio.audioUrl}
-          loop
           preload="auto"
+          onTimeUpdate={() => {
+            if (bgAudioRef.current && audioTrimEnd > audioTrimStart) {
+              if (bgAudioRef.current.currentTime >= audioTrimEnd) {
+                bgAudioRef.current.currentTime = audioTrimStart;
+              }
+            }
+          }}
         />
       )}
 
@@ -545,7 +575,7 @@ export const UploadView: React.FC = () => {
                     {selectedAudio && (
                       <button
                         type="button"
-                        onClick={() => openAudioLibrary(track => setSelectedAudio(track))}
+                        onClick={() => openAudioLibrary(track => handleSelectAudioTrack(track))}
                         className="text-[11px] text-[#ff007a] hover:underline font-semibold cursor-pointer"
                       >
                         Change Sound
@@ -626,7 +656,7 @@ export const UploadView: React.FC = () => {
                         </button>
                       </div>
 
-                      {/* Added Sound Volume Slider */}
+                      {/* Sound Volume Slider */}
                       <div className="flex items-center gap-3 px-1 pt-1">
                         <span className="text-[11px] text-neutral-400 shrink-0 w-20">Sound Volume:</span>
                         <input
@@ -641,12 +671,27 @@ export const UploadView: React.FC = () => {
                           {bgAudioVolume}%
                         </span>
                       </div>
+
+                      {/* Interactive Soundwave Trimmer & Gap Adjuster */}
+                      <AudioWaveformTrimmer
+                        track={selectedAudio}
+                        startTime={audioTrimStart}
+                        endTime={audioTrimEnd}
+                        onChangeRange={(newStart, newEnd) => {
+                          setAudioTrimStart(newStart);
+                          setAudioTrimEnd(newEnd);
+                          if (bgAudioRef.current) {
+                            bgAudioRef.current.currentTime = newStart;
+                          }
+                        }}
+                        audioVolume={bgAudioVolume}
+                      />
                     </div>
                   ) : (
                     <div>
                       <button
                         type="button"
-                        onClick={() => openAudioLibrary(track => setSelectedAudio(track))}
+                        onClick={() => openAudioLibrary(track => handleSelectAudioTrack(track))}
                         className="py-2.5 px-4 rounded-2xl bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-2 shadow-sm"
                       >
                         <Music className="w-4 h-4 text-[#ff007a]" />

@@ -100,6 +100,8 @@ const AppContent: React.FC = () => {
   const renderActiveTabContent = () => {
     switch (activeTab) {
       case 'home':
+      case 'following':
+      case 'friends':
         return <HomeFeed />;
       case 'explore':
         return (

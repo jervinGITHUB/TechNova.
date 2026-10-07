@@ -311,6 +311,8 @@ if (!storage.get<boolean>(EMPTY_RESET_KEY, false)) {
 export type AppTab =
   | 'home'
   | 'explore'
+  | 'following'
+  | 'friends'
   | 'live'
   | 'messages'
   | 'upload'
@@ -326,6 +328,8 @@ export type AppTab =
 export const VALID_APP_TABS: AppTab[] = [
   'home',
   'explore',
+  'following',
+  'friends',
   'live',
   'messages',
   'upload',
@@ -470,6 +474,8 @@ interface AppContextType {
     audioVolume?: number;
     originalAudioMuted?: boolean;
     originalAudioVolume?: number;
+    audioStartTime?: number;
+    audioEndTime?: number;
   }) => Promise<boolean>;
   submitReport: (report: Omit<ReportItem, 'id' | 'timestamp' | 'status'>) => void;
   
@@ -4270,6 +4276,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     audioVolume?: number;
     originalAudioMuted?: boolean;
     originalAudioVolume?: number;
+    audioStartTime?: number;
+    audioEndTime?: number;
   }): Promise<boolean> => {
     if (!currentUser) return false;
     const videoId = crypto.randomUUID();
@@ -4315,6 +4323,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       audioVolume: newVideo.audioVolume ?? 100,
       originalAudioMuted: Boolean(newVideo.originalAudioMuted),
       originalAudioVolume: newVideo.originalAudioVolume ?? 100,
+      audioStartTime: newVideo.audioStartTime,
+      audioEndTime: newVideo.audioEndTime,
     };
 
     setVideos(prev => {
