@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
 import { isSameUser, checkIsUserBanned } from '../../lib/supabase';
+import { formatRealtimeAgo } from '../../utils/time';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { Avatar } from '../common/Avatar';
 import {
@@ -46,11 +47,12 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     toggleFollowUser,
   } = useApp();
 
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [showFeedbackIcon, setShowFeedbackIcon] = useState(false);
   const [videoSrc, setVideoSrc] = useState(video.mediaUrl);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isCaptionExpanded, setIsCaptionExpanded] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgAudioRef = useRef<HTMLAudioElement>(null);
@@ -88,7 +90,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
     if (isActive) {
       videoEl.currentTime = 0;
-      setIsPlaying(true);
+      setIsPlaying(prev => (prev ? prev : true));
 
       // Raw audio volume & mute controls from video author
       const isMuted = Boolean(video.originalAudioMuted);
@@ -104,7 +106,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           // and unmute on first window click/touch
           videoEl.muted = true;
           videoEl.play().catch(() => {
-            setIsPlaying(false);
+            setIsPlaying(prev => (!prev ? prev : false));
           });
         });
       }
@@ -124,8 +126,8 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         bgAudioEl.pause();
         bgAudioEl.currentTime = video.audioStartTime ?? video.audioTrack?.trimStart ?? 0;
       }
-      setIsPlaying(false);
-      setCurrentTime(0);
+      setIsPlaying(prev => (!prev ? prev : false));
+      setCurrentTime(prev => (prev === 0 ? prev : 0));
     }
   }, [isActive, videoSrc, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioStartTime, video.audioEndTime]);
 
@@ -147,7 +149,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       window.removeEventListener('click', handleGesture);
       window.removeEventListener('touchstart', handleGesture);
     };
-  }, [isActive, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioTrack]);
+  }, [isActive, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioTrack?.audioUrl]);
 
   const togglePlayPause = (e?: React.MouseEvent) => {
     if (e) {
@@ -428,11 +430,43 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           )}
         </button>
 
-        {/* Caption */}
+        {/* Caption with "see more.." for expanded 250 characters */}
         {video.caption && (
-          <p className="text-xs sm:text-sm text-neutral-100 mt-1 line-clamp-2 leading-snug drop-shadow-md">
-            {video.caption}
-          </p>
+          <div className="mt-1">
+            <p className="text-xs sm:text-sm text-neutral-100 leading-snug drop-shadow-md">
+              {video.caption.length > 75 && !isCaptionExpanded ? (
+                <>
+                  <span>{video.caption.slice(0, 75)}...</span>
+                  <button
+                    type="button"
+                    onClick={e => {
+                      e.stopPropagation();
+                      setIsCaptionExpanded(true);
+                    }}
+                    className="text-neutral-300 hover:text-white font-bold ml-1 cursor-pointer underline text-xs"
+                  >
+                    see more..
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span>{video.caption}</span>
+                  {video.caption.length > 75 && (
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setIsCaptionExpanded(false);
+                      }}
+                      className="text-neutral-400 hover:text-white font-semibold ml-1 cursor-pointer text-xs"
+                    >
+                      see less
+                    </button>
+                  )}
+                </>
+              )}
+            </p>
+          </div>
         )}
 
         {/* Hashtags */}
@@ -445,7 +479,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
                   setSearchQuery(tag);
                   setActiveTab('explore');
                 }}
-                className="text-xs font-semibold text-[#ff007a] hover:underline cursor-pointer"
+                className="text-xs font-semibold text-[#ff007a] hover:underline cursor-pointer drop-shadow"
               >
                 {tag}
               </button>
@@ -453,10 +487,18 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           </div>
         )}
 
+        {/* Timestamp: how long ago video was posted (placed below hashtags) */}
+        {video.createdAt && (
+          <div className="flex items-center gap-1.5 text-[11px] text-neutral-300 font-medium mt-1 drop-shadow">
+            <Clock className="w-3 h-3 text-neutral-400 shrink-0" />
+            <span>{formatRealtimeAgo(video.createdAt)}</span>
+          </div>
+        )}
+
         {/* Audio Track Ticker */}
         {video.audioTrack && (
-          <div className="flex items-center gap-2 text-[11px] text-neutral-300 mt-2">
-            <Music className="w-3.5 h-3.5 text-[#ff007a] animate-spin" />
+          <div className="flex items-center gap-2 text-[11px] text-neutral-300 mt-1.5">
+            <Music className="w-3.5 h-3.5 text-[#ff007a] animate-spin shrink-0" />
             <span className="truncate">
               {video.audioTrack.title} — {video.audioTrack.artist}
             </span>
@@ -697,8 +739,12 @@ export const HomeFeed: React.FC = () => {
     const newestVideo = sortedByRecent[0];
     const otherVideos = sortedByRecent.slice(1);
 
-    // 2. Shuffle remaining videos randomly based on shuffleSeed
-    const shuffledOthers = [...otherVideos].sort(() => Math.random() - 0.5);
+    // 2. Deterministic pseudo-random shuffle based on shuffleSeed so re-renders don't cause random reordering
+    let s = (shuffleSeed + 1) * 9301;
+    const shuffledOthers = [...otherVideos].sort(() => {
+      s = (s * 9301 + 49297) % 233280;
+      return (s / 233280) - 0.5;
+    });
 
     // 3. Newest is strictly first, rest are shuffled
     return [newestVideo, ...shuffledOthers];
@@ -722,7 +768,7 @@ export const HomeFeed: React.FC = () => {
   // Set initial active video and reset scroll position when changing tabs
   useEffect(() => {
     if (feedVideos.length > 0) {
-      setActiveVideoId(feedVideos[0].id);
+      setActiveVideoId(prev => (feedVideos.some(v => v.id === prev) ? prev : feedVideos[0].id));
     } else {
       setActiveVideoId('');
     }
@@ -735,6 +781,9 @@ export const HomeFeed: React.FC = () => {
   const videoFeedRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Map<string, HTMLDivElement>>(new Map());
 
+  // Stringified video IDs to avoid re-running observer when individual video properties (views, likes) update
+  const feedVideoIdsKey = feedVideos.map(v => v.id).join(',');
+
   // IntersectionObserver to detect which video is currently visible in feed
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -743,7 +792,7 @@ export const HomeFeed: React.FC = () => {
           if (entry.isIntersecting && entry.intersectionRatio >= 0.5) {
             const vidId = entry.target.getAttribute('data-video-id');
             if (vidId) {
-              setActiveVideoId(vidId);
+              setActiveVideoId(prev => (prev === vidId ? prev : vidId));
             }
           }
         });
@@ -761,7 +810,7 @@ export const HomeFeed: React.FC = () => {
     return () => {
       observer.disconnect();
     };
-  }, [feedVideos]);
+  }, [feedVideoIdsKey]);
 
   // Dynamic trending hashtags calculation based on all videos currently in state
   const trendingHashtags = useMemo(() => {

@@ -1099,7 +1099,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Active floating notification popup for real-time interactions across devices
   const [activeNotificationPopup, setActiveNotificationPopup] = useState<NotificationItem | null>(null);
-  const dismissNotificationPopup = () => setActiveNotificationPopup(null);
+  const dismissNotificationPopup = useCallback(() => setActiveNotificationPopup(null), []);
   const knownNotificationIdsRef = React.useRef<Set<string>>(new Set());
   const initialNotifSyncDoneRef = React.useRef<boolean>(false);
   const chatBroadcastChannelRef = React.useRef<any>(null);
@@ -3317,7 +3317,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
   };
 
-  const getFollowStatus = (targetUserId: string): FollowStatus => {
+  const getFollowStatus = useCallback((targetUserId: string): FollowStatus => {
     if (!currentUser || isSameUser(currentUser.id, targetUserId)) return 'none';
     const currFollowsTarget = followRelations.some(
       f => isSameUser(f.followerId, currentUser.id) && isSameUser(f.followingId, targetUserId)
@@ -3339,7 +3339,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return 'requested';
     }
     return 'none';
-  };
+  }, [currentUser?.id, followRelations, followRequests]);
 
   const toggleFollowUser = (userId: string) => {
     if (!currentUser || isSameUser(currentUser.id, userId)) return;
@@ -3490,23 +3490,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Sync counts whenever followRelations change
   useEffect(() => {
-    setUsers(prev =>
-      prev.map(u => ({
-        ...u,
-        followersCount: followRelations.filter(f => f.followingId === u.id).length,
-        followingCount: followRelations.filter(f => f.followerId === u.id).length,
-      }))
-    );
+    setUsers(prev => {
+      let changed = false;
+      const updated = prev.map(u => {
+        const newFollowers = followRelations.filter(f => f.followingId === u.id).length;
+        const newFollowing = followRelations.filter(f => f.followerId === u.id).length;
+        if (u.followersCount === newFollowers && u.followingCount === newFollowing) {
+          return u;
+        }
+        changed = true;
+        return {
+          ...u,
+          followersCount: newFollowers,
+          followingCount: newFollowing,
+        };
+      });
+      return changed ? updated : prev;
+    });
+
     if (currentUser) {
-      setCurrentUser(prev =>
-        prev
-          ? {
-              ...prev,
-              followersCount: followRelations.filter(f => f.followingId === prev.id).length,
-              followingCount: followRelations.filter(f => f.followerId === prev.id).length,
-            }
-          : prev
-      );
+      setCurrentUser(prev => {
+        if (!prev) return prev;
+        const newFollowers = followRelations.filter(f => f.followingId === prev.id).length;
+        const newFollowing = followRelations.filter(f => f.followerId === prev.id).length;
+        if (prev.followersCount === newFollowers && prev.followingCount === newFollowing) {
+          return prev;
+        }
+        return {
+          ...prev,
+          followersCount: newFollowers,
+          followingCount: newFollowing,
+        };
+      });
     }
   }, [followRelations]);
 
@@ -4194,7 +4209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const viewedVideosSessionRef = React.useRef<Set<string>>(new Set());
 
   // Record Video View (increments view count on video and profile)
-  const recordVideoView = (videoId: string) => {
+  const recordVideoView = useCallback((videoId: string) => {
     if (!videoId) return;
     if (viewedVideosSessionRef.current.has(videoId)) {
       return;
@@ -4219,7 +4234,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       })
     );
     supabaseDb.incrementVideoView(videoId);
-  };
+  }, []);
 
   // Share video directly to a user in messages
   const shareVideoToUser = (video: Video, targetUserId: string, note?: string): boolean => {
@@ -5360,7 +5375,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
-  const refreshAudioTracks = async (force = false): Promise<void> => {
+  const refreshAudioTracks = useCallback(async (force = false): Promise<void> => {
     try {
       const remote = await supabaseDb.fetchAudioTracks(force);
       if (remote && remote.length > 0) {
@@ -5377,7 +5392,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {
       // ignore
     }
-  };
+  }, []);
 
   // Admin Operations
   const addAdmin = async (adminData: Partial<AdminRecord>): Promise<boolean> => {

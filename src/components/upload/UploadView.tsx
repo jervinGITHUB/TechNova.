@@ -229,23 +229,14 @@ export const UploadView: React.FC = () => {
     setIsPublishing(true);
     setStorageStatusMessage('Uploading video, please wait...');
 
-    // Extract hashtags from hashtags input and caption
-    const combined = `${caption} ${hashtags}`;
-    const extractedTags = Array.from(
-      new Set(
-        combined
-          .split(/[\s,]+/)
-          .filter(w => w.startsWith('#') && w.length > 1)
-          .map(w => w.trim())
-      )
-    );
+    // Extract hashtags from hashtags input and caption (strictly limited to 5 hashtags)
+    const rawTagList = hashtags
+      .split(/[\s,]+/)
+      .filter(Boolean)
+      .map(t => (t.startsWith('#') ? t : `#${t}`).trim());
 
-    if (hashtags.trim()) {
-      hashtags
-        .split(/[\s,]+/)
-        .filter(w => w.length > 0 && !w.startsWith('#'))
-        .forEach(tag => extractedTags.push(`#${tag.trim()}`));
-    }
+    const captionTags = (caption.match(/#[a-zA-Z0-9_]+/g) || []).map(t => t.trim());
+    const extractedTags = Array.from(new Set([...rawTagList, ...captionTags])).slice(0, 5);
 
     let finalMediaUrl = videoPreviewUrl;
 
@@ -707,32 +698,55 @@ export const UploadView: React.FC = () => {
 
               {/* Caption */}
               <div>
-                <label className="text-xs font-semibold text-neutral-300 block mb-1.5">
-                  Caption
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-neutral-300">
+                    Caption
+                  </label>
+                  <span className={`text-[10px] ${caption.length >= 250 ? 'text-pink-400 font-bold' : 'text-neutral-500'}`}>
+                    {caption.length}/250
+                  </span>
+                </div>
                 <textarea
                   value={caption}
-                  onChange={e => setCaption(e.target.value)}
+                  onChange={e => setCaption(e.target.value.slice(0, 250))}
                   placeholder="Describe your video, ask a question, or drop viral thoughts..."
                   rows={3}
-                  maxLength={300}
+                  maxLength={250}
                   className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 p-3.5 rounded-2xl border border-neutral-700/80 focus:border-[#ff007a] outline-none resize-none transition-colors"
                 />
-                <div className="flex justify-end text-[10px] text-neutral-500 mt-1">
-                  {caption.length}/300
-                </div>
               </div>
 
               {/* Hashtags */}
               <div>
-                <label className="text-xs font-semibold text-neutral-300 block mb-1.5">
-                  Hashtags (Space or comma separated)
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-neutral-300">
+                    Hashtags <span className="text-[10px] text-neutral-400 font-normal">(Max 5 hashtags, 50 chars)</span>
+                  </label>
+                  <div className="flex items-center gap-2 text-[10px]">
+                    <span className={
+                      (hashtags.split(/[\s,]+/).filter(Boolean).length >= 5) ? 'text-pink-400 font-bold' : 'text-neutral-400'
+                    }>
+                      {Math.min(5, hashtags.split(/[\s,]+/).filter(Boolean).length)}/5 tags
+                    </span>
+                    <span className={hashtags.length >= 50 ? 'text-pink-400 font-bold' : 'text-neutral-500'}>
+                      {hashtags.length}/50
+                    </span>
+                  </div>
+                </div>
                 <input
                   type="text"
+                  maxLength={50}
                   value={hashtags}
-                  onChange={e => setHashtags(e.target.value)}
-                  placeholder="#viral, #fyp, #trending, #dance"
+                  onChange={e => {
+                    const val = e.target.value.slice(0, 50);
+                    const tags = val.split(/[\s,]+/).filter(Boolean);
+                    if (tags.length > 5) {
+                      setHashtags(tags.slice(0, 5).join(' '));
+                    } else {
+                      setHashtags(val);
+                    }
+                  }}
+                  placeholder="#viral #fyp #trending #dance #music"
                   className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 px-3.5 py-2.5 rounded-2xl border border-neutral-700/80 focus:border-[#ff007a] outline-none transition-colors"
                 />
               </div>

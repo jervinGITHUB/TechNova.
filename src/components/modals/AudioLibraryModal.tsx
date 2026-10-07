@@ -30,7 +30,7 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
     if (audioLibraryOpen && refreshAudioTracks) {
       refreshAudioTracks(false);
     }
-  }, [audioLibraryOpen, refreshAudioTracks]);
+  }, [audioLibraryOpen]);
 
   // Stop audio preview when modal is closed
   useEffect(() => {

@@ -53,7 +53,7 @@ export const InAppNotificationToast: React.FC = () => {
     }, intervalTime);
 
     return () => clearInterval(timer);
-  }, [activeNotificationPopup, dismissNotificationPopup]);
+  }, [activeNotificationPopup]);
 
   if (!activeNotificationPopup) return null;
 
