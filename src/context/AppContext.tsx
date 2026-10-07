@@ -29,6 +29,7 @@ import {
   DEFAULT_USER,
   storage,
 } from '../services/storage';
+import { isDeprecatedDefaultTrack } from '../utils/audio';
 import {
   supabaseDb,
   getSupabaseConfig,
@@ -687,9 +688,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return deduplicateVideos(stored);
   });
 
-  const [audioTracksList, setAudioTracksList] = useState<AudioTrack[]>(() =>
-    storage.get('audioTracks', INITIAL_AUDIO_TRACKS)
-  );
+  const [audioTracksList, setAudioTracksList] = useState<AudioTrack[]>(() => {
+    const raw = storage.get<AudioTrack[]>('audioTracks', INITIAL_AUDIO_TRACKS);
+    const cleaned = (raw || []).filter(t => !isDeprecatedDefaultTrack(t));
+    if (cleaned.length !== (raw || []).length) {
+      storage.set('audioTracks', cleaned);
+    }
+    return cleaned;
+  });
 
   // Helper to check if a URL points to a video file (.mp4, .webm, etc.)
   const isVideoUrl = (url?: string | null): boolean => {
@@ -703,7 +709,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const map = new Map<string, AudioTrack>();
     // 1. Curated / stored tracks
     (audioTracksList || []).forEach(t => {
-      if (t && t.id) map.set(t.id, t);
+      if (t && t.id && !isDeprecatedDefaultTrack(t)) map.set(t.id, t);
     });
     // 2. Original sounds from videos (other users' videos audio)
     (videos || []).forEach(v => {
@@ -712,18 +718,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const creatorName = v.creator?.displayName || v.creator?.username || 'Creator';
       const cleanCaption = (v.caption || '').replace(/#\w+/g, '').trim();
 
-      // Resolve valid image cover: never treat video URL (.mp4, .webm, blob:) as an image!
-      const validCover =
-        v.thumbnailUrl && !isVideoUrl(v.thumbnailUrl) && !v.thumbnailUrl.includes('avatar_')
-          ? v.thumbnailUrl
-          : '';
+      // Resolve the profile picture (avatar) of the video owner
+      const ownerUser = users.find(
+        u => (v.creatorId && u.id === v.creatorId) ||
+             (v.creator?.id && u.id === v.creator.id) ||
+             (v.creator?.username && u.username.toLowerCase() === v.creator.username.toLowerCase())
+      );
+      const ownerProfilePic =
+        (ownerUser?.avatar && !isVideoUrl(ownerUser.avatar))
+          ? ownerUser.avatar
+          : (v.creator?.avatar && !isVideoUrl(v.creator.avatar))
+            ? v.creator.avatar
+            : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(v.creator?.username || v.creatorId || 'creator')}`;
 
       if (v.audioTrack && v.audioTrack.id) {
+        if (isDeprecatedDefaultTrack(v.audioTrack)) return;
+
+        const isOriginalSound =
+          v.audioTrack.title.toLowerCase().startsWith('original sound') ||
+          v.audioTrack.id.startsWith('sound_vid_') ||
+          Boolean(v.audioTrack.sourceVideoId);
+
         const existingTrack = map.get(v.audioTrack.id);
-        const resolvedCover =
-          v.audioTrack.coverUrl && !isVideoUrl(v.audioTrack.coverUrl)
-            ? v.audioTrack.coverUrl
-            : (existingTrack?.coverUrl || validCover);
+        const resolvedCover = isOriginalSound
+          ? ownerProfilePic
+          : (v.audioTrack.coverUrl && !isVideoUrl(v.audioTrack.coverUrl)
+              ? v.audioTrack.coverUrl
+              : (existingTrack?.coverUrl || ownerProfilePic));
 
         const cleanedTrack: AudioTrack = {
           ...v.audioTrack,
@@ -738,18 +759,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!map.has(soundId)) {
         map.set(soundId, {
           id: soundId,
-          title: v.audioTrack?.title || `Original Sound - @${v.creator?.username || 'creator'}`,
+          title: v.audioTrack && !v.audioTrack.title.toLowerCase().startsWith('original sound')
+            ? v.audioTrack.title
+            : `Original Sound - @${v.creator?.username || 'creator'}`,
           artist: `${creatorName}${cleanCaption ? ` · "${cleanCaption.slice(0, 24)}"` : ''}`,
           duration: v.audioTrack?.duration || '00:30',
-          coverUrl: validCover,
+          coverUrl: ownerProfilePic, // Thumbnail for original sound is the video owner's profile picture!
           audioUrl: v.audioTrack?.audioUrl || v.mediaUrl,
           sourceVideoId: v.id,
           sourceUsername: v.creator?.username || '',
+          category: 'Trending',
         });
       }
     });
-    return Array.from(map.values());
-  }, [audioTracksList, videos]);
+    return Array.from(map.values()).filter(t => !isDeprecatedDefaultTrack(t));
+  }, [audioTracksList, videos, users]);
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     const resetDone = storage.get<boolean>('conversations_reset_zero_v6', false);
     if (!resetDone) {
@@ -1607,10 +1631,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         const remoteAudio = await supabaseDb.fetchAudioTracks();
         if (remoteAudio && remoteAudio.length > 0) {
+          const validRemote = remoteAudio.filter(t => !isDeprecatedDefaultTrack(t));
           setAudioTracksList(prev => {
             const map = new Map<string, AudioTrack>();
-            prev.forEach(t => map.set(t.id, t));
-            remoteAudio.forEach(t => map.set(t.id, t));
+            prev.filter(t => !isDeprecatedDefaultTrack(t)).forEach(t => map.set(t.id, t));
+            validRemote.forEach(t => map.set(t.id, t));
             const merged = Array.from(map.values());
             storage.set('audioTracks', merged);
             return merged;
@@ -4254,13 +4279,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ? newVideo.thumbnailUrl
         : '';
 
+    let attachedAudio = newVideo.audioTrack;
+    if (attachedAudio) {
+      const isOriginalSound =
+        attachedAudio.title.toLowerCase().startsWith('original sound') ||
+        attachedAudio.id.startsWith('sound_vid_') ||
+        Boolean(attachedAudio.sourceVideoId);
+      if (isOriginalSound) {
+        attachedAudio = {
+          ...attachedAudio,
+          coverUrl: currentUser.avatar || attachedAudio.coverUrl,
+          sourceUsername: attachedAudio.sourceUsername || currentUser.username,
+        };
+      }
+    }
+
     const created: Video = {
       id: videoId,
       creatorId: currentUser.id,
       creator: currentUser,
       caption: newVideo.caption || 'New viral moment! 🔥',
       hashtags: newVideo.hashtags.length > 0 ? newVideo.hashtags : ['#viral', '#fyp'],
-      audioTrack: newVideo.audioTrack,
+      audioTrack: attachedAudio,
       mediaUrl: newVideo.mediaUrl,
       thumbnailUrl: validThumb,
       likesCount: 0,
@@ -5314,10 +5354,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const remote = await supabaseDb.fetchAudioTracks(force);
       if (remote && remote.length > 0) {
+        const validRemote = remote.filter(t => !isDeprecatedDefaultTrack(t));
         setAudioTracksList(prev => {
           const map = new Map<string, AudioTrack>();
-          prev.forEach(t => map.set(t.id, t));
-          remote.forEach(t => map.set(t.id, t));
+          prev.filter(t => !isDeprecatedDefaultTrack(t)).forEach(t => map.set(t.id, t));
+          validRemote.forEach(t => map.set(t.id, t));
           const merged = Array.from(map.values());
           storage.set('audioTracks', merged);
           return merged;

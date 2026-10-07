@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 
 export const UploadView: React.FC = () => {
-  const { uploadVideo, openAudioLibrary, setActiveTab, videos } = useApp();
+  const { uploadVideo, openAudioLibrary, setActiveTab, videos, users } = useApp();
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
@@ -558,29 +558,30 @@ export const UploadView: React.FC = () => {
                       <div className="flex items-center justify-between p-3 rounded-2xl bg-[#12121a] border border-[#ff007a]/40 shadow-sm">
                         <div className="flex items-center gap-2.5 min-w-0">
                           {(() => {
+                            const isVideoSound = Boolean(
+                              selectedAudio.sourceVideoId || selectedAudio.title.toLowerCase().startsWith('original sound')
+                            );
+
                             const sourceVid = selectedAudio.sourceVideoId
                               ? videos.find(v => v.id === selectedAudio.sourceVideoId)
                               : null;
-
-                            const isVidUrl = Boolean(
-                              selectedAudio.coverUrl &&
-                              /\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(selectedAudio.coverUrl)
+                            const ownerUser = sourceVid?.creator || users.find(u =>
+                              (selectedAudio.sourceUsername && u.username.toLowerCase() === selectedAudio.sourceUsername.toLowerCase()) ||
+                              (sourceVid?.creatorId && u.id === sourceVid.creatorId)
                             );
+                            const ownerAvatar = (ownerUser?.avatar && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(ownerUser.avatar))
+                              ? ownerUser.avatar
+                              : (sourceVid?.creator?.avatar && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(sourceVid.creator.avatar))
+                                ? sourceVid.creator.avatar
+                                : (selectedAudio.coverUrl && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(selectedAudio.coverUrl))
+                                  ? selectedAudio.coverUrl
+                                  : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(selectedAudio.sourceUsername || ownerUser?.username || 'creator')}`;
 
-                            let resolvedCover = (!isVidUrl && selectedAudio.coverUrl) ? selectedAudio.coverUrl : '';
-                            if (!resolvedCover && sourceVid) {
-                              const sThumb = sourceVid.thumbnailUrl;
-                              const sAvatar = sourceVid.creator?.avatar;
-                              if (sThumb && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(sThumb)) {
-                                resolvedCover = sThumb;
-                              } else if (sAvatar && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(sAvatar)) {
-                                resolvedCover = sAvatar;
-                              }
-                            }
-
-                            if (!resolvedCover) {
-                              resolvedCover = resolveTrackCover(selectedAudio);
-                            }
+                            const resolvedCover = isVideoSound
+                              ? ownerAvatar
+                              : (selectedAudio.coverUrl && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(selectedAudio.coverUrl)
+                                  ? selectedAudio.coverUrl
+                                  : resolveTrackCover(selectedAudio));
 
                             return (
                               <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-gradient-to-br from-[#ff007a]/30 to-[#7928ca]/30 flex items-center justify-center shrink-0 border border-neutral-700/60 shadow-sm">
@@ -589,9 +590,13 @@ export const UploadView: React.FC = () => {
                                   alt={selectedAudio.title}
                                   className="w-full h-full object-cover"
                                   onError={e => {
-                                    const fb = getCuratedCoverForTrack(selectedAudio.title, selectedAudio.artist, selectedAudio.category);
-                                    if ((e.currentTarget as HTMLImageElement).src !== fb) {
-                                      (e.currentTarget as HTMLImageElement).src = fb;
+                                    if (isVideoSound) {
+                                      (e.currentTarget as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(selectedAudio.sourceUsername || 'creator')}`;
+                                    } else {
+                                      const fb = getCuratedCoverForTrack(selectedAudio.title, selectedAudio.artist, selectedAudio.category);
+                                      if ((e.currentTarget as HTMLImageElement).src !== fb) {
+                                        (e.currentTarget as HTMLImageElement).src = fb;
+                                      }
                                     }
                                   }}
                                 />

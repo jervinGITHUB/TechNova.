@@ -6,7 +6,7 @@ import {
   isSameUser,
   toUuid,
 } from '../../lib/supabase';
-import { getCuratedCoverForTrack, resolveTrackCover } from '../../utils/audio';
+import { getCuratedCoverForTrack, resolveTrackCover, isDeprecatedDefaultTrack } from '../../utils/audio';
 import { AudioTrack, SystemStats } from '../../types';
 import {
   Shield,
@@ -255,6 +255,7 @@ export const AdminDashboardView: React.FC = () => {
 
   // Filtered audio tracks
   const filteredAudioTracks = audioTracks.filter(track => {
+    if (isDeprecatedDefaultTrack(track)) return false;
     const isVideoSound = Boolean(track.sourceVideoId || track.title.toLowerCase().startsWith('original sound'));
     if (audioSourceFilter === 'curated' && isVideoSound) return false;
     if (audioSourceFilter === 'video' && !isVideoSound) return false;
@@ -301,6 +302,7 @@ export const AdminDashboardView: React.FC = () => {
     const syncExistingCuratedTracks = async () => {
       for (const track of audioTracksList) {
         if (track.sourceVideoId || track.title.toLowerCase().startsWith('original sound')) continue;
+        if (isDeprecatedDefaultTrack(track)) continue;
         try {
           await supabaseDb.insertAudioTrack(track);
         } catch {
@@ -1037,6 +1039,23 @@ export const AdminDashboardView: React.FC = () => {
                     filteredAudioTracks.map(track => {
                       const isPlaying = playingTrackId === track.id;
                       const isCurated = audioTracksList.some(t => t.id === track.id);
+                      const isVideoSound = Boolean(track.sourceVideoId || track.title.toLowerCase().startsWith('original sound'));
+
+                      // Look up video owner to guarantee the profile picture of the video owner
+                      const sourceVid = track.sourceVideoId ? videos.find(v => v.id === track.sourceVideoId) : null;
+                      const ownerUser = sourceVid?.creator || users.find(u =>
+                        (track.sourceUsername && u.username.toLowerCase() === track.sourceUsername.toLowerCase()) ||
+                        (sourceVid?.creatorId && u.id === sourceVid.creatorId)
+                      );
+                      const ownerAvatar = (ownerUser?.avatar && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(ownerUser.avatar))
+                        ? ownerUser.avatar
+                        : (sourceVid?.creator?.avatar && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(sourceVid.creator.avatar))
+                          ? sourceVid.creator.avatar
+                          : (track.coverUrl && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(track.coverUrl))
+                            ? track.coverUrl
+                            : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(track.sourceUsername || ownerUser?.username || 'user')}`;
+
+                      const displayCover = isVideoSound ? ownerAvatar : resolveTrackCover(track);
 
                       return (
                         <tr key={track.id} className="hover:bg-neutral-800/40 transition-colors">
@@ -1045,11 +1064,15 @@ export const AdminDashboardView: React.FC = () => {
                             <div className="flex items-center gap-3">
                               <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-[#1e1b2e] shrink-0 border border-neutral-700/80 group shadow-sm">
                                 <img
-                                  src={resolveTrackCover(track)}
+                                  src={displayCover}
                                   alt={track.title}
                                   className="w-full h-full object-cover transition-transform group-hover:scale-105"
                                   onError={e => {
-                                    (e.currentTarget as HTMLImageElement).src = getCuratedCoverForTrack(track.title, track.artist, track.category);
+                                    if (isVideoSound) {
+                                      (e.currentTarget as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(track.sourceUsername || 'user')}`;
+                                    } else {
+                                      (e.currentTarget as HTMLImageElement).src = getCuratedCoverForTrack(track.title, track.artist, track.category);
+                                    }
                                   }}
                                 />
                                 <button

@@ -2062,15 +2062,47 @@ export const supabaseDb = {
 
       if (!data) return cachedAudioTracksResult?.data || null;
 
-      const mapped: AudioTrack[] = data.map((r: any) => ({
-        id: r.AudioTrackID || r.audio_track_id || r.id,
-        title: r.AudioTitle || r.audio_title || r.Title || r.title || 'Sound',
-        artist: r.AudioArtist || r.audio_artist || r.Artist || r.artist || 'Creator',
-        duration: r.Duration || r.duration || r.AudioDuration || r.audio_duration || '00:30',
-        coverUrl: r.CoverURL || r.CoverUrl || r.cover_url || r.ThumbnailURL || r.thumbnail_url || r.ThumbnailUrl || '',
-        audioUrl: r.AudioURL || r.AudioUrl || r.audio_url || r.AudioPath || '',
-        category: r.Category || r.category || r.AudioCategory || r.audio_category || 'Trending',
-      }));
+      const isDeprecatedDefault = (id = '', title = '') => {
+        const i = id.toLowerCase();
+        const t = title.toLowerCase();
+        return (
+          i === 'track_synthwave_energy' ||
+          i === 'track_lofi_sunset' ||
+          i === 'track_deep_bass_groove' ||
+          t.includes('deep bass groove') ||
+          t.includes('lo-fi chill sunset') ||
+          t.includes('lofi chill sunset') ||
+          t.includes('neon horizon')
+        );
+      };
+
+      const mapped: AudioTrack[] = data
+        .filter((r: any) => {
+          const id = String(r.AudioTrackID || r.audio_track_id || r.id || '');
+          const title = String(r.AudioTitle || r.audio_title || r.Title || r.title || '');
+          return !isDeprecatedDefault(id, title);
+        })
+        .map((r: any) => ({
+          id: r.AudioTrackID || r.audio_track_id || r.id,
+          title: r.AudioTitle || r.audio_title || r.Title || r.title || 'Sound',
+          artist: r.AudioArtist || r.audio_artist || r.Artist || r.artist || 'Creator',
+          duration: r.Duration || r.duration || r.AudioDuration || r.audio_duration || '00:30',
+          coverUrl: r.CoverURL || r.CoverUrl || r.cover_url || r.ThumbnailURL || r.thumbnail_url || r.ThumbnailUrl || '',
+          audioUrl: r.AudioURL || r.AudioUrl || r.audio_url || r.AudioPath || '',
+          category: r.Category || r.category || r.AudioCategory || r.audio_category || 'Trending',
+        }));
+
+      // Background cleanup: if any of the deprecated demo tracks are present in Supabase table, gently remove them
+      const hasDeprecated = data.some((r: any) => {
+        const id = String(r.AudioTrackID || r.audio_track_id || r.id || '');
+        const title = String(r.AudioTitle || r.audio_title || r.Title || r.title || '');
+        return isDeprecatedDefault(id, title);
+      });
+      if (hasDeprecated && client) {
+        Promise.resolve(
+          client.from('AudioLibrary').delete().or('AudioTrackID.in.(track_synthwave_energy,track_lofi_sunset,track_deep_bass_groove),AudioTitle.ilike.%deep bass groove%,AudioTitle.ilike.%lo-fi chill sunset%,AudioTitle.ilike.%neon horizon%')
+        ).catch(() => {});
+      }
 
       cachedAudioTracksResult = { data: mapped, timestamp: Date.now() };
       return mapped;

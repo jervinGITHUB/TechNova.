@@ -77,6 +77,28 @@ export const getCuratedCoverForTrack = (
   return FALLBACK_PALETTE[sum % FALLBACK_PALETTE.length];
 };
 
+export const isDeprecatedDefaultTrack = (track?: Partial<AudioTrack> | null): boolean => {
+  if (!track) return false;
+  const id = (track.id || '').toLowerCase();
+  const title = (track.title || '').toLowerCase();
+  if (
+    id === 'track_synthwave_energy' ||
+    id === 'track_lofi_sunset' ||
+    id === 'track_deep_bass_groove'
+  ) {
+    return true;
+  }
+  if (
+    title.includes('deep bass groove') ||
+    title.includes('lo-fi chill sunset') ||
+    title.includes('lofi chill sunset') ||
+    title.includes('neon horizon')
+  ) {
+    return true;
+  }
+  return false;
+};
+
 export const resolveTrackCover = (
   track?: Partial<AudioTrack> | null,
   fallbackCategory = 'Trending'
@@ -89,6 +111,18 @@ export const resolveTrackCover = (
   // Ensure the coverUrl is not a video file
   if (raw && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(raw)) {
     return raw;
+  }
+
+  // If this is an original sound from a user video, default to a personalized user avatar, never a generic music stock photo!
+  const isOriginalSound = Boolean(
+    track.sourceVideoId ||
+    track.sourceUsername ||
+    track.title?.toLowerCase().startsWith('original sound')
+  );
+
+  if (isOriginalSound) {
+    const seed = track.sourceUsername || track.artist?.split('·')[0]?.trim() || 'user';
+    return `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(seed)}`;
   }
 
   return getCuratedCoverForTrack(track.title || '', track.artist || '', track.category || fallbackCategory);

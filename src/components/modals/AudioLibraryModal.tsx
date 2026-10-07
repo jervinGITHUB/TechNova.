@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { AudioTrack } from '../../types';
-import { getCuratedCoverForTrack, resolveTrackCover } from '../../utils/audio';
+import { getCuratedCoverForTrack, resolveTrackCover, isDeprecatedDefaultTrack } from '../../utils/audio';
 import { Search, Plus, Play, Pause, X, Music, Film, Sparkles, Volume2 } from 'lucide-react';
 
 interface AudioLibraryModalProps {
@@ -12,6 +12,7 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
   const {
     audioTracks,
     videos,
+    users,
     audioLibraryOpen,
     setAudioLibraryOpen,
     onSelectAudioCallback,
@@ -42,7 +43,9 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
   if (!audioLibraryOpen) return null;
 
   // Filter tracks by search query and category
-  const filteredTracks = audioTracks.filter(track => {
+  const activeTracksList = audioTracks.filter(track => !isDeprecatedDefaultTrack(track));
+
+  const filteredTracks = activeTracksList.filter(track => {
     const isVideoSound = Boolean(track.sourceVideoId || track.title.toLowerCase().startsWith('original sound'));
 
     if (activeFilter === 'videos' && !isVideoSound) return false;
@@ -105,10 +108,10 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
     setAudioLibraryOpen(false);
   };
 
-  const videoSoundsCount = audioTracks.filter(
+  const videoSoundsCount = activeTracksList.filter(
     t => t.sourceVideoId || t.title.toLowerCase().startsWith('original sound')
   ).length;
-  const musicTracksCount = audioTracks.length - videoSoundsCount;
+  const musicTracksCount = activeTracksList.length - videoSoundsCount;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fadeIn select-none">
@@ -214,38 +217,27 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
               track.sourceVideoId || track.title.toLowerCase().startsWith('original sound')
             );
 
-            // Lookup source video if present to guarantee high fidelity thumbnail
+            // Lookup source video and creator to guarantee the profile picture of the video owner
             const sourceVid = track.sourceVideoId
               ? videos.find(v => v.id === track.sourceVideoId)
               : null;
-
-            // Only actual video files (.mp4, .webm) are video - never disqualify blob: or data:image URLs
-            const isCoverVid = Boolean(
-              track.coverUrl &&
-                /\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(track.coverUrl)
+            const ownerUser = sourceVid?.creator || users.find(u =>
+              (track.sourceUsername && u.username.toLowerCase() === track.sourceUsername.toLowerCase()) ||
+              (sourceVid?.creatorId && u.id === sourceVid.creatorId)
             );
+            const ownerAvatar = (ownerUser?.avatar && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(ownerUser.avatar))
+              ? ownerUser.avatar
+              : (sourceVid?.creator?.avatar && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(sourceVid.creator.avatar))
+                ? sourceVid.creator.avatar
+                : (track.coverUrl && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(track.coverUrl))
+                  ? track.coverUrl
+                  : `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(track.sourceUsername || ownerUser?.username || 'creator')}`;
 
-            let resolvedCover = (!isCoverVid && track.coverUrl) ? track.coverUrl : '';
-            if (!resolvedCover && sourceVid) {
-              const srcThumb = sourceVid.thumbnailUrl;
-              const srcAvatar = sourceVid.creator?.avatar;
-              if (
-                srcThumb &&
-                !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(srcThumb)
-              ) {
-                resolvedCover = srcThumb;
-              } else if (
-                srcAvatar &&
-                !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(srcAvatar)
-              ) {
-                resolvedCover = srcAvatar;
-              }
-            }
-
-            // If still no cover, automatically resolve stunning curated album art
-            if (!resolvedCover) {
-              resolvedCover = resolveTrackCover(track);
-            }
+            const resolvedCover = isVideoSource
+              ? ownerAvatar
+              : (track.coverUrl && !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(track.coverUrl)
+                  ? track.coverUrl
+                  : resolveTrackCover(track));
 
             // Deterministic vibrant gradient for tracks without a custom cover image
             const gradients = [
@@ -277,9 +269,13 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
                       alt={track.title}
                       className="w-full h-full object-cover transition-transform duration-300 group-hover/cover:scale-105"
                       onError={e => {
-                        const fallback = getCuratedCoverForTrack(track.title, track.artist, track.category);
-                        if ((e.currentTarget as HTMLImageElement).src !== fallback) {
-                          (e.currentTarget as HTMLImageElement).src = fallback;
+                        if (isVideoSource) {
+                          (e.currentTarget as HTMLImageElement).src = `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(track.sourceUsername || 'creator')}`;
+                        } else {
+                          const fallback = getCuratedCoverForTrack(track.title, track.artist, track.category);
+                          if ((e.currentTarget as HTMLImageElement).src !== fallback) {
+                            (e.currentTarget as HTMLImageElement).src = fallback;
+                          }
                         }
                       }}
                     />
