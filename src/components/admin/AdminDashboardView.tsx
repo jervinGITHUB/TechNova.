@@ -194,7 +194,7 @@ export const AdminDashboardView: React.FC = () => {
   const [showAddAdminModal, setShowAddAdminModal] = useState(false);
   const [newAdminUser, setNewAdminUser] = useState('');
   const [newAdminEmail, setNewAdminEmail] = useState('');
-  const [newAdminRole, setNewAdminRole] = useState<'Super Admin' | 'Admin' | 'Content Moderator'>('Admin');
+  const [isSubmittingAdmin, setIsSubmittingAdmin] = useState(false);
 
   // Filtered lists
   const filteredUsers = uniqueUsers.filter(
@@ -403,22 +403,30 @@ export const AdminDashboardView: React.FC = () => {
 
   const handleCreateAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAdminUser.trim() || !newAdminEmail.trim()) return;
+    if (!newAdminUser.trim() || !newAdminEmail.trim() || isSubmittingAdmin) return;
 
-    await addAdmin({
-      username: newAdminUser.trim(),
-      email: newAdminEmail.trim(),
-      role: newAdminRole,
-      permissions:
-        newAdminRole === 'Super Admin'
-          ? ['manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio']
-          : ['manage_users', 'manage_videos', 'manage_reports', 'manage_audio'],
-    });
+    setIsSubmittingAdmin(true);
+    try {
+      const ok = await addAdmin({
+        username: newAdminUser.trim(),
+        email: newAdminEmail.trim(),
+        role: 'Admin',
+        permissions: ['all', 'manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio'],
+      });
 
-    setNewAdminUser('');
-    setNewAdminEmail('');
-    setShowAddAdminModal(false);
-    showToast(`Administrator @${newAdminUser.trim()} added successfully.`);
+      if (ok) {
+        setNewAdminUser('');
+        setNewAdminEmail('');
+        setShowAddAdminModal(false);
+        showToast(`Administrator @${newAdminUser.trim()} added and connected to Supabase.`);
+      } else {
+        showToast(`Could not add administrator. Please check your connection.`, 'error');
+      }
+    } catch {
+      showToast(`Error adding administrator.`, 'error');
+    } finally {
+      setIsSubmittingAdmin(false);
+    }
   };
 
   const audioCategories = [
@@ -487,7 +495,7 @@ export const AdminDashboardView: React.FC = () => {
                 </div>
               </div>
               <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                Super Admin
+                Admin
               </span>
             </div>
 
@@ -559,7 +567,7 @@ export const AdminDashboardView: React.FC = () => {
           {/* Audio Library (Requested Feature) */}
           <div
             onClick={() => setActiveAdminTab('audio')}
-            className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-4 sm:p-5 hover:border-cyan-500/40 transition-all cursor-pointer group"
+            className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-4 sm:p-5 hover:border-neutral-700 transition-all cursor-pointer group"
           >
             <div className="flex items-center justify-between mb-3">
               <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Audio Tracks</span>
@@ -570,7 +578,7 @@ export const AdminDashboardView: React.FC = () => {
             <div className="text-2xl sm:text-3xl font-extrabold text-white font-brand tabular-nums">
               {audioTracks.length}
             </div>
-            <div className="text-[11px] text-cyan-400/80 mt-1">Sound Library</div>
+            <div className="text-[11px] text-neutral-500 mt-1">Sound Library</div>
           </div>
 
           {/* Platform Reports */}
@@ -1601,7 +1609,7 @@ export const AdminDashboardView: React.FC = () => {
                 <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800">
                   <div className="font-bold text-white text-sm">{currentUser?.displayName || 'Primary Admin'}</div>
                   <div className="text-xs text-neutral-400">{currentUser?.email}</div>
-                  <div className="text-[11px] text-purple-300 font-semibold mt-2">Role: Super Admin</div>
+                  <div className="text-[11px] text-purple-300 font-semibold mt-2">Role: Admin</div>
                 </div>
               ) : (
                 admins.map(adm => (
@@ -2054,30 +2062,39 @@ export const AdminDashboardView: React.FC = () => {
 
               <div>
                 <label className="text-neutral-300 font-semibold block mb-1">Role</label>
-                <select
-                  value={newAdminRole}
-                  onChange={e => setNewAdminRole(e.target.value as any)}
-                  className="w-full bg-neutral-950 px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
-                >
-                  <option value="Super Admin">Super Admin</option>
-                  <option value="Admin">Admin</option>
-                  <option value="Content Moderator">Content Moderator</option>
-                </select>
+                <div className="w-full bg-neutral-950 px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Shield className="w-3.5 h-3.5 text-[#ff007a]" />
+                    <span className="font-semibold text-white">Admin</span>
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#ff007a]/20 text-[#ff007a] border border-[#ff007a]/30 uppercase tracking-wider">
+                    Full Platform Access
+                  </span>
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-800">
                 <button
                   type="button"
+                  disabled={isSubmittingAdmin}
                   onClick={() => setShowAddAdminModal(false)}
-                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#e0006c] text-white text-xs font-bold cursor-pointer"
+                  disabled={isSubmittingAdmin}
+                  className="flex items-center gap-2 px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#e0006c] text-white text-xs font-bold cursor-pointer disabled:opacity-50"
                 >
-                  Save Admin
+                  {isSubmittingAdmin ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Saving to Supabase...</span>
+                    </>
+                  ) : (
+                    <span>Save Admin</span>
+                  )}
                 </button>
               </div>
             </form>

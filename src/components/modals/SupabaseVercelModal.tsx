@@ -65,8 +65,8 @@ SELECT
   "UserID",
   "Username",
   "Email",
-  'Super Admin',
-  ARRAY['all', 'manage_users', 'manage_videos', 'manage_reports'],
+  'Admin',
+  ARRAY['all', 'manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio'],
   NOW(),
   NOW()
 FROM public."User"

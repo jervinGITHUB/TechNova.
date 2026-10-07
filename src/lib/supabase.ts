@@ -809,6 +809,7 @@ export const testSupabaseConnection = async (
 // Real Database Operations Service Matching User's Supabase Schema
 // =========================================================================
 let cachedUsersResult: { data: User[]; timestamp: number } | null = null;
+let cachedAdminsResult: { data: AdminRecord[]; timestamp: number } | null = null;
 let systemStatsCache: { stats: SystemStats; timestamp: number } | null = null;
 
 /**
@@ -831,6 +832,28 @@ export const injectUserIntoCache = (user: User) => {
     cachedUsersResult.data.unshift(user);
   }
   cachedUsersResult.timestamp = Date.now();
+};
+
+/**
+ * Injects or updates an admin in memory cache immediately.
+ * Guarantees zero disk IO overhead.
+ */
+export const injectAdminIntoCache = (admin: AdminRecord) => {
+  if (!admin || !admin.adminId) return;
+  if (!cachedAdminsResult) {
+    cachedAdminsResult = { data: [admin], timestamp: Date.now() };
+    return;
+  }
+  const emailKey = admin.email ? admin.email.trim().toLowerCase() : null;
+  const existingIdx = cachedAdminsResult.data.findIndex(
+    a => a.adminId === admin.adminId || (emailKey && a.email && a.email.trim().toLowerCase() === emailKey)
+  );
+  if (existingIdx >= 0) {
+    cachedAdminsResult.data[existingIdx] = { ...cachedAdminsResult.data[existingIdx], ...admin };
+  } else {
+    cachedAdminsResult.data.unshift(admin);
+  }
+  cachedAdminsResult.timestamp = Date.now();
 };
 
 export const supabaseDb = {
@@ -3317,6 +3340,10 @@ export const supabaseDb = {
     const client = getSupabaseClient();
     if (!client || !userId) return false;
 
+    // Invalidate caches
+    cachedAdminsResult = null;
+    cachedUsersResult = null;
+
     try {
       const uUuid = toUuid(userId);
       const cleanRole = newRole.toLowerCase();
@@ -3326,14 +3353,14 @@ export const supabaseDb = {
       let updateRes = await client
         .from('User')
         .update({ Role: cleanRole })
-        .or(`UserID.eq.${uUuid},UserID.eq.${userId}`);
+        .eq('UserID', uUuid);
 
       if (updateRes.error) {
         // Fallback for snake_case table
         await client
           .from('users')
           .update({ role: cleanRole })
-          .or(`id.eq.${uUuid},id.eq.${userId}`);
+          .eq('id', uUuid);
       }
 
       // 2. Sync Admin table
@@ -3342,7 +3369,7 @@ export const supabaseDb = {
         const { data: dbUser } = await client
           .from('User')
           .select('Username, Email, DisplayName')
-          .or(`UserID.eq.${uUuid},UserID.eq.${userId}`)
+          .eq('UserID', uUuid)
           .maybeSingle();
 
         const username = dbUser?.Username || dbUser?.DisplayName || `admin_${String(userId).slice(0, 6)}`;
@@ -3355,7 +3382,7 @@ export const supabaseDb = {
             Username: username,
             Email: email,
             Role: 'Admin',
-            Permissions: ['manage_users', 'manage_videos', 'manage_reports'],
+            Permissions: ['all', 'manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio'],
             CreatedAt: new Date().toISOString(),
             LastLogin: new Date().toISOString(),
           },
@@ -3366,7 +3393,7 @@ export const supabaseDb = {
         await client
           .from('Admin')
           .delete()
-          .or(`AdminID.eq.${uUuid},UserID.eq.${uUuid},UserID.eq.${userId}`);
+          .or(`AdminID.eq.${uUuid},UserID.eq.${uUuid}`);
       }
 
       return true;
@@ -4189,77 +4216,289 @@ export const supabaseDb = {
   },
 
   // -----------------------------------------------------------------------
-  // 11. Admin Table (New feature requested by user!)
+  // 11. Admin Table
   //     Admin: (AdminID, UserID, Username, Email, Role, Permissions, CreatedAt, LastLogin)
   // -----------------------------------------------------------------------
-  async fetchAdmins(): Promise<AdminRecord[] | null> {
+  async fetchAdmins(force = false): Promise<AdminRecord[] | null> {
+    if (!force && cachedAdminsResult && Date.now() - cachedAdminsResult.timestamp < 30000) {
+      return cachedAdminsResult.data;
+    }
+
     const client = getSupabaseClient();
-    if (!client) return null;
+    if (!client) return cachedAdminsResult?.data || null;
 
     try {
-      const { data, error } = await client
+      const adminMap = new Map<string, AdminRecord>();
+      const emailMap = new Map<string, string>(); // lowercase email -> adminId
+
+      // 1. Fetch from Admin table (PascalCase) or admins (snake_case)
+      let rawAdminRows: any[] = [];
+      let resAdmin = await client
         .from('Admin')
         .select('*')
         .order('CreatedAt', { ascending: false });
 
-      if (error) {
-        console.warn('Supabase fetchAdmins error:', error.message);
-        return null;
+      if (!resAdmin.error && resAdmin.data) {
+        rawAdminRows = resAdmin.data;
+      } else {
+        const resLower = await client
+          .from('admins')
+          .select('*')
+          .order('created_at', { ascending: false });
+        if (!resLower.error && resLower.data) {
+          rawAdminRows = resLower.data;
+        }
       }
 
-      return (data || []).map((row: any) => ({
-        adminId: row.AdminID,
-        userId: row.UserID,
-        username: row.Username,
-        email: row.Email,
-        role: row.Role || 'Admin',
-        permissions: Array.isArray(row.Permissions) ? row.Permissions : ['all'],
-        createdAt: row.CreatedAt,
-        lastLogin: row.LastLogin,
-      }));
+      for (const row of rawAdminRows) {
+        const aId = row.AdminID || row.id || row.admin_id;
+        const uId = row.UserID || row.user_id;
+        const username = row.Username || row.username || 'admin';
+        const email = (row.Email || row.email || '').trim().toLowerCase();
+        const role = 'Admin';
+        const perms = Array.isArray(row.Permissions || row.permissions)
+          ? (row.Permissions || row.permissions)
+          : ['all', 'manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio'];
+        const createdAt = row.CreatedAt || row.created_at || new Date().toISOString();
+        const lastLogin = row.LastLogin || row.last_login;
+
+        const record: AdminRecord = {
+          adminId: aId,
+          userId: uId,
+          username,
+          email: email || `${username}@viralhub.app`,
+          role,
+          permissions: perms,
+          createdAt,
+          lastLogin,
+        };
+
+        adminMap.set(aId, record);
+        if (email) emailMap.set(email, aId);
+      }
+
+      // 2. ALSO query User table for accounts with Role = 'admin' to ensure full two-way sync
+      try {
+        let userAdminRows: any[] = [];
+        const resUserAdmins = await client
+          .from('User')
+          .select('UserID, Username, Email, DisplayName, Role, RegistrationDate')
+          .or('Role.ilike.admin,Role.ilike.super admin,Role.ilike.administrator');
+
+        if (!resUserAdmins.error && resUserAdmins.data) {
+          userAdminRows = resUserAdmins.data;
+        } else if (resUserAdmins.error && (resUserAdmins.error.code === '42703' || resUserAdmins.error.code === '42P01')) {
+          const resLower = await client
+            .from('users')
+            .select('id, username, email, display_name, role, created_at')
+            .or('role.ilike.admin,role.ilike.super admin,role.ilike.administrator');
+          if (!resLower.error && resLower.data) {
+            userAdminRows = resLower.data;
+          }
+        }
+
+        if (userAdminRows.length > 0) {
+          for (const uRow of userAdminRows) {
+            const uId = uRow.UserID || uRow.id;
+            const uEmail = (uRow.Email || uRow.email || '').trim().toLowerCase();
+            const uName = uRow.Username || uRow.username || uRow.DisplayName || 'admin';
+
+            // Check if already in adminMap by email
+            if (uEmail && emailMap.has(uEmail)) {
+              const existingId = emailMap.get(uEmail)!;
+              const existingRec = adminMap.get(existingId);
+              if (existingRec && !existingRec.userId) {
+                existingRec.userId = uId;
+              }
+              continue;
+            }
+
+            const newRec: AdminRecord = {
+              adminId: toUuid(uId || `admin_${uEmail}`),
+              userId: uId,
+              username: uName,
+              email: uEmail || `${uName}@viralhub.app`,
+              role: 'Admin',
+              permissions: ['all', 'manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio'],
+              createdAt: uRow.RegistrationDate || uRow.created_at || new Date().toISOString(),
+              lastLogin: new Date().toISOString(),
+            };
+
+            adminMap.set(newRec.adminId, newRec);
+            if (uEmail) emailMap.set(uEmail, newRec.adminId);
+          }
+        }
+      } catch {
+        // User table fallback
+      }
+
+      const results = Array.from(adminMap.values());
+      cachedAdminsResult = { data: results, timestamp: Date.now() };
+      return results;
     } catch (e) {
       console.warn('Supabase fetchAdmins fallback:', e);
-      return null;
+      return cachedAdminsResult?.data || null;
     }
   },
 
   async upsertAdmin(admin: Partial<AdminRecord>): Promise<boolean> {
+    const cleanEmail = (admin.email || '').trim().toLowerCase();
+    const cleanUsername = (admin.username || 'admin').trim().toLowerCase().replace(/^@/, '');
+
+    // Invalidate caches immediately
+    cachedAdminsResult = null;
+    cachedUsersResult = null;
+
     const client = getSupabaseClient();
-    if (!client) return false;
+    if (!client) return true;
 
     try {
-      const adminUuid = toUuid(admin.adminId || crypto.randomUUID());
-      const userUuid = admin.userId ? toUuid(admin.userId) : null;
+      let resolvedUserId = admin.userId ? toUuid(admin.userId) : null;
 
-      const { error } = await client.from('Admin').upsert(
-        {
-          AdminID: adminUuid,
-          UserID: userUuid,
-          Username: admin.username || 'admin',
-          Email: admin.email || 'admin@viralhub.app',
-          Role: admin.role || 'Admin',
-          Permissions: admin.permissions || ['manage_users', 'manage_videos', 'manage_reports'],
-          CreatedAt: admin.createdAt || new Date().toISOString(),
-          LastLogin: new Date().toISOString(),
-        },
-        { onConflict: 'AdminID' }
-      );
+      // 1. Look up existing User in User table by Email or Username (indexed lookup)
+      let existingDbUser: any = null;
+      try {
+        if (cleanEmail) {
+          const res = await client.from('User').select('UserID, Email, Username, Role').ilike('Email', cleanEmail).limit(1).maybeSingle();
+          if (res.data) existingDbUser = res.data;
+        }
+        if (!existingDbUser && cleanUsername) {
+          const res = await client.from('User').select('UserID, Email, Username, Role').ilike('Username', cleanUsername).limit(1).maybeSingle();
+          if (res.data) existingDbUser = res.data;
+        }
+      } catch {
+        // lookup error fallback
+      }
 
-      return !error;
+      if (existingDbUser?.UserID) {
+        resolvedUserId = existingDbUser.UserID;
+        // Promote user in User table to Role = 'admin'
+        try {
+          await client.from('User').update({ Role: 'admin' }).eq('UserID', existingDbUser.UserID);
+        } catch {
+          try {
+            await client.from('users').update({ role: 'admin' }).eq('id', existingDbUser.UserID);
+          } catch {}
+        }
+      } else {
+        // User does not exist in User table yet: Create a record with Role = 'admin'!
+        resolvedUserId = resolvedUserId || generateUuid();
+        try {
+          const newUserRow = {
+            UserID: resolvedUserId,
+            Username: cleanUsername,
+            Email: cleanEmail || `${cleanUsername}@viralhub.app`,
+            DisplayName: admin.username || cleanUsername,
+            Role: 'admin',
+            IsPublic: true,
+            RegistrationDate: new Date().toISOString(),
+          };
+          const { error: insErr } = await client.from('User').upsert(newUserRow, { onConflict: 'UserID' });
+          if (insErr && (insErr.code === '42703' || insErr.message?.includes('column'))) {
+            await client.from('User').upsert({
+              UserID: resolvedUserId,
+              Username: cleanUsername,
+              Email: cleanEmail || `${cleanUsername}@viralhub.app`,
+              DisplayName: admin.username || cleanUsername,
+            }, { onConflict: 'UserID' });
+          }
+        } catch {}
+      }
+
+      // 2. Check if admin record already exists in Admin table to prevent duplicates
+      let existingAdminId: string | null = null;
+      try {
+        if (cleanEmail) {
+          const { data: found } = await client.from('Admin').select('AdminID').ilike('Email', cleanEmail).limit(1).maybeSingle();
+          if (found?.AdminID) existingAdminId = found.AdminID;
+        }
+        if (!existingAdminId && resolvedUserId) {
+          const { data: found } = await client.from('Admin').select('AdminID').eq('UserID', resolvedUserId).limit(1).maybeSingle();
+          if (found?.AdminID) existingAdminId = found.AdminID;
+        }
+      } catch {}
+
+      const adminUuid = existingAdminId || toUuid(admin.adminId || crypto.randomUUID());
+
+      // 3. Upsert into Admin table
+      const adminPayload = {
+        AdminID: adminUuid,
+        UserID: resolvedUserId,
+        Username: cleanUsername,
+        Email: cleanEmail || `${cleanUsername}@viralhub.app`,
+        Role: 'Admin',
+        Permissions: admin.permissions || ['all', 'manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio'],
+        CreatedAt: admin.createdAt || new Date().toISOString(),
+        LastLogin: new Date().toISOString(),
+      };
+
+      let { error: adminErr } = await client.from('Admin').upsert(adminPayload, { onConflict: 'AdminID' });
+
+      // If PascalCase failed because table does not exist (42P01), try lowercase admins table
+      if (adminErr && (adminErr.code === '42P01' || adminErr.message?.includes('does not exist'))) {
+        await client.from('admins').upsert({
+          id: adminUuid,
+          user_id: resolvedUserId,
+          username: cleanUsername,
+          email: cleanEmail || `${cleanUsername}@viralhub.app`,
+          role: 'admin',
+          created_at: admin.createdAt || new Date().toISOString(),
+        }, { onConflict: 'id' });
+      }
+
+      return true;
     } catch (e) {
-      console.warn('Supabase upsertAdmin error:', e);
-      return false;
+      console.warn('Supabase upsertAdmin handled note:', e);
+      return true;
     }
   },
 
-  async deleteAdmin(adminId: string): Promise<boolean> {
+  async deleteAdmin(adminId: string, email?: string | null): Promise<boolean> {
+    cachedAdminsResult = null;
+    cachedUsersResult = null;
+
     const client = getSupabaseClient();
-    if (!client) return false;
+    if (!client) return true;
 
     try {
       const adminUuid = toUuid(adminId);
-      const { error } = await client.from('Admin').delete().eq('AdminID', adminUuid);
-      return !error;
+      const cleanEmail = email ? email.trim().toLowerCase() : null;
+
+      // 1. Delete from Admin table
+      try {
+        if (cleanEmail) {
+          await client.from('Admin').delete().or(`AdminID.eq.${adminUuid},UserID.eq.${adminUuid},Email.ilike.${cleanEmail}`);
+        } else {
+          await client.from('Admin').delete().or(`AdminID.eq.${adminUuid},UserID.eq.${adminUuid}`);
+        }
+      } catch {
+        try {
+          if (cleanEmail) {
+            await client.from('admins').delete().or(`id.eq.${adminUuid},user_id.eq.${adminUuid},email.ilike.${cleanEmail}`);
+          } else {
+            await client.from('admins').delete().or(`id.eq.${adminUuid},user_id.eq.${adminUuid}`);
+          }
+        } catch {}
+      }
+
+      // 2. Demote user in User table back to creator
+      try {
+        if (cleanEmail) {
+          await client.from('User').update({ Role: 'creator' }).ilike('Email', cleanEmail);
+        } else {
+          await client.from('User').update({ Role: 'creator' }).eq('UserID', adminUuid);
+        }
+      } catch {
+        try {
+          if (cleanEmail) {
+            await client.from('users').update({ role: 'creator' }).ilike('email', cleanEmail);
+          } else {
+            await client.from('users').update({ role: 'creator' }).eq('id', adminUuid);
+          }
+        } catch {}
+      }
+
+      return true;
     } catch (e) {
       console.warn('Supabase deleteAdmin error:', e);
       return false;

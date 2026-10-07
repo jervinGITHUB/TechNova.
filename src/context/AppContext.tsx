@@ -5317,21 +5317,80 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Admin Operations
   const addAdmin = async (adminData: Partial<AdminRecord>): Promise<boolean> => {
+    const cleanUsername = (adminData.username || 'admin').trim().toLowerCase().replace(/^@/, '');
+    const cleanEmail = (adminData.email || `${cleanUsername}@viralhub.app`).trim().toLowerCase();
+
+    // Check if user already exists in users list
+    const existingUser = users.find(
+      u => (u.email && u.email.trim().toLowerCase() === cleanEmail) ||
+           (u.username && u.username.trim().toLowerCase().replace(/^@/, '') === cleanUsername)
+    );
+
+    const resolvedUserId = adminData.userId || existingUser?.id;
+
     const newAdmin: AdminRecord = {
-      adminId: adminData.adminId || crypto.randomUUID(),
-      userId: adminData.userId,
-      username: adminData.username || 'admin',
-      email: adminData.email || 'admin@viralhub.app',
-      role: adminData.role || 'Admin',
-      permissions: adminData.permissions || ['manage_users', 'manage_videos', 'manage_reports'],
+      adminId: adminData.adminId || (resolvedUserId ? toUuid(resolvedUserId) : crypto.randomUUID()),
+      userId: resolvedUserId,
+      username: cleanUsername,
+      email: cleanEmail,
+      role: 'Admin',
+      permissions: adminData.permissions || ['all', 'manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio'],
       createdAt: new Date().toISOString(),
       lastLogin: new Date().toISOString(),
     };
 
-    setAdmins(prev => [newAdmin, ...prev]);
-    storage.set('admins', [newAdmin, ...admins]);
-    await supabaseDb.upsertAdmin(newAdmin);
-    return true;
+    setAdmins(prev => {
+      const filtered = prev.filter(
+        a => a.email?.toLowerCase() !== cleanEmail &&
+             a.username?.toLowerCase() !== cleanUsername &&
+             a.adminId !== newAdmin.adminId
+      );
+      const updated = [newAdmin, ...filtered];
+      storage.set('admins', updated);
+      return updated;
+    });
+
+    // Also update users state: mark existing user as role: 'admin' or add placeholder
+    setUsers(prev => {
+      const exists = prev.some(
+        u => (u.email && u.email.trim().toLowerCase() === cleanEmail) ||
+             (u.username && u.username.trim().toLowerCase().replace(/^@/, '') === cleanUsername)
+      );
+      let nextUsers: User[];
+      if (exists) {
+        nextUsers = prev.map(u => {
+          if (
+            (u.email && u.email.trim().toLowerCase() === cleanEmail) ||
+            (u.username && u.username.trim().toLowerCase().replace(/^@/, '') === cleanUsername)
+          ) {
+            return { ...u, role: 'admin' as const };
+          }
+          return u;
+        });
+      } else {
+        const placeholderUser: User = {
+          id: resolvedUserId || crypto.randomUUID(),
+          username: cleanUsername,
+          displayName: cleanUsername,
+          email: cleanEmail,
+          avatar: '',
+          bio: 'Platform Administrator',
+          followingCount: 0,
+          followersCount: 0,
+          likesCount: '0',
+          isPrivate: false,
+          role: 'admin',
+          isBanned: false,
+          appealStatus: 'none',
+        };
+        nextUsers = [placeholderUser, ...prev];
+      }
+      storage.set('users', nextUsers);
+      return nextUsers;
+    });
+
+    const success = await supabaseDb.upsertAdmin(newAdmin);
+    return success;
   };
 
   const approveVideoAdmin = async (videoId: string): Promise<boolean> => {
@@ -5648,9 +5707,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const removeAdmin = async (adminId: string): Promise<boolean> => {
-    setAdmins(prev => prev.filter(a => a.adminId !== adminId));
-    storage.set('admins', admins.filter(a => a.adminId !== adminId));
-    await supabaseDb.deleteAdmin(adminId);
+    const targetAdmin = admins.find(a => a.adminId === adminId || a.userId === adminId);
+    const targetEmail = targetAdmin?.email?.toLowerCase();
+    const targetUserId = targetAdmin?.userId || adminId;
+
+    setAdmins(prev => {
+      const updated = prev.filter(a => a.adminId !== adminId && a.userId !== adminId);
+      storage.set('admins', updated);
+      return updated;
+    });
+
+    // Also demote in users state back to creator
+    setUsers(prev => {
+      const updated = prev.map(u => {
+        if (
+          (targetUserId && isSameUser(u.id, targetUserId)) ||
+          (targetEmail && u.email && u.email.toLowerCase() === targetEmail)
+        ) {
+          return { ...u, role: 'creator' as const };
+        }
+        return u;
+      });
+      storage.set('users', updated);
+      return updated;
+    });
+
+    await supabaseDb.deleteAdmin(adminId, targetEmail);
     return true;
   };
 
