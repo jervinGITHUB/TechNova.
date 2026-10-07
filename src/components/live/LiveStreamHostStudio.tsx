@@ -402,10 +402,32 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             setGameSource('genshin');
             liveBroadcastService.setScreenStream(null, 'genshin');
           };
+          const settings = vTrack.getSettings();
+          const vw = settings.width || 1920;
+          const vh = settings.height || 1080;
+          if (canvasAspectRatio === '9:16') {
+            const flexH = Math.min(100, Math.max(25, Math.round(((720 * (vh / vw)) / 1280) * 100)));
+            setScreenTransform(prev => ({
+              ...prev,
+              x: 0,
+              y: 0,
+              width: 100,
+              height: flexH,
+              visible: true,
+            }));
+          } else {
+            setScreenTransform(prev => ({
+              ...prev,
+              x: 0,
+              y: 0,
+              width: 100,
+              height: 100,
+              visible: true,
+            }));
+          }
         }
         setGameCustomStream(stream);
         setGameSource('custom_screen');
-        setScreenTransform(prev => ({ ...prev, visible: true }));
         liveBroadcastService.setScreenStream(stream, 'custom_screen');
       }
     } catch (err) {
@@ -417,9 +439,12 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   const applyPresetLayout = (
     preset: 'split' | 'pip' | 'game_focus' | 'cam_focus'
   ) => {
+    let newCam: CanvasSourceTransform;
+    let newScr: CanvasSourceTransform;
+
     if (preset === 'split') {
-      setCameraTransform(prev => ({
-        ...prev,
+      newCam = {
+        ...cameraTransform,
         x: 0,
         y: 0,
         width: 100,
@@ -428,9 +453,9 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         borderStyle: 'none',
         visible: true,
         zIndex: 20,
-      }));
-      setScreenTransform(prev => ({
-        ...prev,
+      };
+      newScr = {
+        ...screenTransform,
         x: 0,
         y: 50,
         width: 100,
@@ -439,10 +464,10 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         borderStyle: 'none',
         visible: true,
         zIndex: 10,
-      }));
+      };
     } else if (preset === 'pip') {
-      setScreenTransform(prev => ({
-        ...prev,
+      newScr = {
+        ...screenTransform,
         x: 0,
         y: 0,
         width: 100,
@@ -451,9 +476,9 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         borderStyle: 'none',
         visible: true,
         zIndex: 10,
-      }));
-      setCameraTransform(prev => ({
-        ...prev,
+      };
+      newCam = {
+        ...cameraTransform,
         x: 58,
         y: 68,
         width: 38,
@@ -462,33 +487,34 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         borderStyle: 'pink',
         visible: true,
         zIndex: 20,
-      }));
+      };
     } else if (preset === 'game_focus') {
-      setScreenTransform(prev => ({
-        ...prev,
+      const scrH = canvasAspectRatio === '9:16' ? 56 : 72;
+      newScr = {
+        ...screenTransform,
         x: 0,
         y: 0,
         width: 100,
-        height: 72,
+        height: scrH,
         borderRadius: 0,
         borderStyle: 'none',
         visible: true,
         zIndex: 10,
-      }));
-      setCameraTransform(prev => ({
-        ...prev,
-        x: 64,
-        y: 74,
-        width: 32,
-        height: 22,
+      };
+      newCam = {
+        ...cameraTransform,
+        x: 60,
+        y: Math.min(74, scrH + 2),
+        width: 36,
+        height: 24,
         borderRadius: 14,
         borderStyle: 'cyan',
         visible: true,
         zIndex: 20,
-      }));
-    } else if (preset === 'cam_focus') {
-      setCameraTransform(prev => ({
-        ...prev,
+      };
+    } else {
+      newCam = {
+        ...cameraTransform,
         x: 0,
         y: 0,
         width: 100,
@@ -497,19 +523,26 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         borderStyle: 'none',
         visible: true,
         zIndex: 10,
-      }));
-      setScreenTransform(prev => ({
-        ...prev,
-        x: 60,
+      };
+      newScr = {
+        ...screenTransform,
+        x: 58,
         y: 68,
-        width: 36,
+        width: 38,
         height: 28,
         borderRadius: 14,
         borderStyle: 'cyan',
         visible: true,
         zIndex: 20,
-      }));
+      };
     }
+
+    setCameraTransform(newCam);
+    setScreenTransform(newScr);
+    liveBroadcastService.updateStudioConfig({
+      cameraTransform: newCam,
+      screenTransform: newScr,
+    });
   };
 
   const activeSourceTransform =
@@ -1125,7 +1158,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           <span className="text-[11px] font-semibold text-neutral-400 block mb-1.5">
             Quick Alignments:
           </span>
-          <div className="grid grid-cols-3 gap-1.5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
             <button
               type="button"
               onClick={() =>
@@ -1140,6 +1173,33 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               className="py-1.5 px-2 rounded-xl bg-[#1c1c28] hover:bg-neutral-700 text-[10px] font-semibold text-white border border-neutral-700 text-center cursor-pointer"
             >
               Fill Canvas
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (selectedSourceId === 'screen') {
+                  const flexH = canvasAspectRatio === '9:16' ? 32 : 100;
+                  updateActiveTransform({
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: flexH,
+                    borderRadius: 0,
+                  });
+                } else {
+                  updateActiveTransform({
+                    x: 58,
+                    y: 68,
+                    width: 38,
+                    height: 26,
+                    borderRadius: 16,
+                  });
+                }
+              }}
+              className="py-1.5 px-2 rounded-xl bg-[#1c1c28] hover:bg-cyan-500/20 text-[10px] font-semibold text-cyan-300 hover:text-white border border-cyan-500/40 text-center cursor-pointer"
+              title="Flex to standard 16:9 ratio"
+            >
+              Flex to Size
             </button>
             <button
               type="button"
@@ -2146,7 +2206,10 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             <div className="flex items-center bg-[#181824] p-1 rounded-xl border border-neutral-800">
               <button
                 type="button"
-                onClick={() => setCanvasAspectRatio('9:16')}
+                onClick={() => {
+                  setCanvasAspectRatio('9:16');
+                  liveBroadcastService.updateStudioConfig({ aspectRatio: '9:16' });
+                }}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   canvasAspectRatio === '9:16'
                     ? 'bg-[#ff007a] text-white shadow-sm'
@@ -2159,7 +2222,10 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
               <button
                 type="button"
-                onClick={() => setCanvasAspectRatio('16:9')}
+                onClick={() => {
+                  setCanvasAspectRatio('16:9');
+                  liveBroadcastService.updateStudioConfig({ aspectRatio: '16:9' });
+                }}
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                   canvasAspectRatio === '16:9'
                     ? 'bg-[#ff007a] text-white shadow-sm'
@@ -2240,6 +2306,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   gameCustomStream={gameCustomStream}
                   cameraRealStream={cameraRealStream}
                   showOverlays={showOverlays}
+                  showHostTag={false}
                   showMusicBanner={showMusicBanner}
                   showGoalBar={showGoalBar || !!goalWidgetConfig.enabled}
                   goalWidgetConfig={goalWidgetConfig}
@@ -2589,7 +2656,10 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           <div className="flex items-center bg-[#181824] p-1 rounded-xl border border-neutral-800">
             <button
               type="button"
-              onClick={() => setCanvasAspectRatio('9:16')}
+              onClick={() => {
+                setCanvasAspectRatio('9:16');
+                liveBroadcastService.updateStudioConfig({ aspectRatio: '9:16' });
+              }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 canvasAspectRatio === '9:16'
                   ? 'bg-[#ff007a] text-white shadow-sm'
@@ -2602,7 +2672,10 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
             <button
               type="button"
-              onClick={() => setCanvasAspectRatio('16:9')}
+              onClick={() => {
+                setCanvasAspectRatio('16:9');
+                liveBroadcastService.updateStudioConfig({ aspectRatio: '16:9' });
+              }}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 canvasAspectRatio === '16:9'
                   ? 'bg-[#ff007a] text-white shadow-sm'
@@ -2696,6 +2769,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 gameCustomStream={gameCustomStream}
                 cameraRealStream={cameraRealStream}
                 showOverlays={showOverlays}
+                showHostTag={false}
                 showMusicBanner={showMusicBanner}
                 showGoalBar={showGoalBar || !!goalWidgetConfig.enabled}
                 goalWidgetConfig={goalWidgetConfig}

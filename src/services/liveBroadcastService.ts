@@ -49,7 +49,7 @@ const DEFAULT_SCREEN_TRANSFORM: CanvasSourceTransform = {
   x: 0,
   y: 0,
   width: 100,
-  height: 68,
+  height: 32, // Natural 16:9 height in 9:16 portrait canvas
   zIndex: 10,
   visible: true,
   locked: false,
@@ -183,6 +183,9 @@ class LiveBroadcastService {
     if (this.screenVideoEl) {
       if (stream) {
         this.screenVideoEl.srcObject = stream;
+        this.screenVideoEl.onloadedmetadata = () => {
+          this.autoFlexScreenTransform();
+        };
         this.screenVideoEl.play().catch(() => {});
       } else {
         this.screenVideoEl.srcObject = null;
@@ -190,6 +193,45 @@ class LiveBroadcastService {
     }
 
     this.updateCompositeStream();
+    this.notify();
+  }
+
+  public autoFlexScreenTransform() {
+    if (!this.screenVideoEl) return;
+    const vw = this.screenVideoEl.videoWidth || 1920;
+    const vh = this.screenVideoEl.videoHeight || 1080;
+    if (!vw || !vh) return;
+
+    const isPortrait = this.state.canvasAspectRatio === '9:16';
+    if (isPortrait) {
+      // In 9:16 portrait (720x1280), full width (720) corresponds to natural height:
+      const flexH = Math.min(100, Math.max(25, Math.round(((720 * (vh / vw)) / 1280) * 100)));
+      this.state.screenTransform = {
+        ...this.state.screenTransform,
+        x: 0,
+        y: 0,
+        width: 100,
+        height: flexH,
+        visible: true,
+      };
+      // If camera is positioned in the top area, place below screen share
+      if (this.state.cameraTransform.y < flexH && this.state.cameraTransform.x < 40) {
+        this.state.cameraTransform = {
+          ...this.state.cameraTransform,
+          x: 58,
+          y: Math.min(72, flexH + 4),
+        };
+      }
+    } else {
+      this.state.screenTransform = {
+        ...this.state.screenTransform,
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 100,
+        visible: true,
+      };
+    }
     this.notify();
   }
 
@@ -290,7 +332,7 @@ class LiveBroadcastService {
           ctx.rect(scrX, scrY, scrW, scrH);
           ctx.clip();
         }
-        ctx.drawImage(this.screenVideoEl, scrX, scrY, scrW, scrH);
+        this.drawVideoContain(ctx, this.screenVideoEl, scrX, scrY, scrW, scrH);
         ctx.restore();
       } else {
         // Fallback graphical display for game/screen
@@ -325,13 +367,7 @@ class LiveBroadcastService {
       ctx.clip();
 
       if (this.cameraVideoEl && this.state.cameraStream && this.cameraVideoEl.readyState >= 2) {
-        if (cam.mirrored) {
-          ctx.translate(camX + camW, camY);
-          ctx.scale(-1, 1);
-          ctx.drawImage(this.cameraVideoEl, 0, 0, camW, camH);
-        } else {
-          ctx.drawImage(this.cameraVideoEl, camX, camY, camW, camH);
-        }
+        this.drawVideoCover(ctx, this.cameraVideoEl, camX, camY, camW, camH, cam.mirrored);
       } else {
         // Default avatar or camera badge fallback
         ctx.fillStyle = '#1e1b2e';
@@ -413,6 +449,91 @@ class LiveBroadcastService {
 
     this.compositorAnimFrame = requestAnimationFrame(this.renderCompositeLoop);
   };
+
+  private drawVideoCover(
+    ctx: CanvasRenderingContext2D,
+    video: HTMLVideoElement,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number,
+    mirrored = false
+  ) {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) {
+      if (mirrored) {
+        ctx.save();
+        ctx.translate(dx + dw, dy);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0, dw, dh);
+        ctx.restore();
+      } else {
+        ctx.drawImage(video, dx, dy, dw, dh);
+      }
+      return;
+    }
+
+    const videoRatio = vw / vh;
+    const dstRatio = dw / dh;
+    let sx = 0;
+    let sy = 0;
+    let sw = vw;
+    let sh = vh;
+
+    if (videoRatio > dstRatio) {
+      sw = vh * dstRatio;
+      sx = (vw - sw) / 2;
+    } else {
+      sh = vw / dstRatio;
+      sy = (vh - sh) / 2;
+    }
+
+    if (mirrored) {
+      ctx.save();
+      ctx.translate(dx + dw, dy);
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, dw, dh);
+      ctx.restore();
+    } else {
+      ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+    }
+  }
+
+  private drawVideoContain(
+    ctx: CanvasRenderingContext2D,
+    video: HTMLVideoElement,
+    dx: number,
+    dy: number,
+    dw: number,
+    dh: number
+  ) {
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    if (!vw || !vh) {
+      ctx.drawImage(video, dx, dy, dw, dh);
+      return;
+    }
+
+    const videoRatio = vw / vh;
+    const dstRatio = dw / dh;
+    let rw = dw;
+    let rh = dh;
+    let rx = dx;
+    let ry = dy;
+
+    if (videoRatio > dstRatio) {
+      // Source is wider than destination: fit width, letterbox vertically
+      rh = dw / videoRatio;
+      ry = dy + (dh - rh) / 2;
+    } else {
+      // Source is taller than destination: fit height, letterbox horizontally
+      rw = dh * videoRatio;
+      rx = dx + (dw - rw) / 2;
+    }
+
+    ctx.drawImage(video, 0, 0, vw, vh, rx, ry, rw, rh);
+  }
 
   // ---------------------------------------------------------------------------
   // Start Broadcasting: Initializes Realtime WebSockets & WebRTC Signaling
@@ -727,6 +848,7 @@ const GLOBAL_ICE_SERVERS: RTCIceServer[] = [
 export interface ViewerSessionCallbacks {
   onRemoteStream: (stream: MediaStream) => void;
   onSnapshot?: (dataUrl: string) => void;
+  onAspectRatio?: (aspectRatio: '9:16' | '16:9') => void;
   onStreamEnded?: () => void;
   onConnectionStateChange?: (state: string) => void;
 }
@@ -741,6 +863,9 @@ export const createLiveViewerSession = (
     callbacks.onRemoteStream(currentState.compositeStream);
     if (currentState.lastSnapshotUrl && callbacks.onSnapshot) {
       callbacks.onSnapshot(currentState.lastSnapshotUrl);
+    }
+    if (currentState.canvasAspectRatio && callbacks.onAspectRatio) {
+      callbacks.onAspectRatio(currentState.canvasAspectRatio);
     }
   }
 
@@ -812,6 +937,10 @@ export const createLiveViewerSession = (
     if (signal.type === 'stream_ended' && signal.streamId === streamId) {
       callbacks.onStreamEnded?.();
       return;
+    }
+
+    if (signal.aspectRatio && callbacks.onAspectRatio) {
+      callbacks.onAspectRatio(signal.aspectRatio);
     }
 
     if (signal.type === 'snapshot' && signal.dataUrl) {

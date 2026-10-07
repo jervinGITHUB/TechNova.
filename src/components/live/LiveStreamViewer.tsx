@@ -38,6 +38,7 @@ export const LiveStreamViewer: React.FC = () => {
 
   const hostUser = users.find(u => u.id === currentLiveStream.host.id) || currentLiveStream.host;
   const isFollowingHost = !!hostUser.isFollowing;
+  const [streamAspectRatio, setStreamAspectRatio] = useState<'9:16' | '16:9'>('9:16');
 
   useEffect(() => {
     if (!currentLiveStream.id) return;
@@ -53,6 +54,11 @@ export const LiveStreamViewer: React.FC = () => {
         hasReceivedSignalOrStream = true;
         setSnapshotUrl(url);
         setConnectionStatus(prev => (prev === 'connected' ? 'connected' : 'streaming'));
+      },
+      onAspectRatio: ratio => {
+        if (ratio) {
+          setStreamAspectRatio(ratio);
+        }
       },
       onStreamEnded: () => {
         setIsLiveEnded(true);
@@ -181,7 +187,7 @@ export const LiveStreamViewer: React.FC = () => {
             </div>
           ) : (
             /* Active Live Stream Video Display: Split Camera & Game Canvas */
-            <div className="relative w-full h-full flex flex-col justify-between overflow-hidden">
+            <div className="relative w-full h-full flex flex-col justify-between overflow-hidden items-center bg-black">
               <LiveStreamCanvas
                 compositeStream={remoteStream}
                 snapshotUrl={snapshotUrl}
@@ -189,6 +195,8 @@ export const LiveStreamViewer: React.FC = () => {
                 cameraEnabled={true}
                 cameraSource="webcam"
                 showOverlays={true}
+                showHostTag={false}
+                canvasAspectRatio={streamAspectRatio}
                 showMusicBanner={false}
                 showGoalBar={false}
                 hostName={hostUser.displayName || 'Host'}
@@ -202,20 +210,60 @@ export const LiveStreamViewer: React.FC = () => {
                 isLive={!isLiveEnded}
               />
 
-              {/* Host Follow & Report Overlay Bar */}
-              <div className="absolute top-3 sm:top-4 left-3 sm:left-4 z-40 flex items-center gap-2">
-                <button
-                  onClick={() => toggleFollowUser(hostUser.id)}
-                  className={`py-1 sm:py-1.5 px-3 sm:px-3.5 rounded-full text-xs font-bold transition-all cursor-pointer shadow-lg ${
-                    isFollowingHost
-                      ? 'bg-neutral-800 text-white border border-neutral-600'
-                      : 'bg-[#ff007a] hover:bg-[#ff1a8c] text-white'
-                  }`}
-                >
-                  {isFollowingHost ? 'Following' : '+Follow'}
-                </button>
+              {/* Host Follow & Report Overlay Bar (Unified TikTok-style Streamer Pill) */}
+              <div className="absolute top-3 sm:top-4 left-3 sm:left-4 z-40 flex items-center gap-1.5 sm:gap-2 pointer-events-auto max-w-[calc(100vw-110px)] sm:max-w-none">
+                <div className="flex items-center gap-2 bg-black/65 backdrop-blur-md p-1 pl-1.5 pr-2.5 rounded-full border border-white/15 shadow-xl min-w-0">
+                  {/* Host Avatar */}
+                  <div className="relative shrink-0">
+                    <Avatar
+                      src={hostUser.avatar}
+                      alt={hostUser.displayName || 'Host'}
+                      size="sm"
+                      className="w-7 h-7 ring-1.5 ring-[#ff007a]"
+                    />
+                    <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-red-500 rounded-full ring-1 ring-black animate-pulse" />
+                  </div>
 
+                  {/* Host Name & Live Status */}
+                  <div className="flex flex-col text-left min-w-0 pr-0.5">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className="text-xs font-bold text-white truncate max-w-[80px] sm:max-w-[140px] leading-tight">
+                        {hostUser.displayName || 'Host'}
+                      </span>
+                      <span className="shrink-0 flex items-center gap-1 text-[9px] font-bold text-white bg-[#ff007a] px-1.5 py-0.5 rounded-full leading-none">
+                        <span className="w-1 h-1 rounded-full bg-white animate-ping" />
+                        Live
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* +Follow / Following Button cleanly inside the pill */}
+                  <button
+                    type="button"
+                    onClick={() => toggleFollowUser(hostUser.id)}
+                    className={`shrink-0 py-1 px-2.5 sm:px-3 rounded-full text-[11px] font-bold transition-all cursor-pointer shadow-md flex items-center gap-1 leading-none ${
+                      isFollowingHost
+                        ? 'bg-neutral-800 text-neutral-300 border border-neutral-600 hover:bg-neutral-700'
+                        : 'bg-[#ff007a] hover:bg-[#ff1a8c] text-white active:scale-95'
+                    }`}
+                  >
+                    {isFollowingHost ? (
+                      <>
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span>Following</span>
+                      </>
+                    ) : (
+                      <>
+                        <UserPlus className="w-3 h-3" />
+                        <span>+Follow</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Report Stream Button */}
                 <button
+                  type="button"
                   onClick={() =>
                     openReportModal({
                       type: 'video',
@@ -224,7 +272,7 @@ export const LiveStreamViewer: React.FC = () => {
                       targetSubtitle: currentLiveStream.title,
                     })
                   }
-                  className="p-1.5 sm:p-2 rounded-full bg-black/50 backdrop-blur-md text-white hover:text-red-400 transition-colors cursor-pointer"
+                  className="p-1.5 sm:p-2 rounded-full bg-black/60 backdrop-blur-md text-white/80 hover:text-red-400 border border-white/10 transition-colors cursor-pointer shrink-0 shadow-md"
                   title="Report Stream"
                 >
                   <Flag className="w-3.5 h-3.5" />
@@ -232,7 +280,7 @@ export const LiveStreamViewer: React.FC = () => {
               </div>
 
               {/* Mobile Viewers Badge (Top Right) */}
-              <div className="lg:hidden absolute top-3 right-3 z-40 flex items-center gap-1.5 bg-black/50 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-white text-[11px] font-bold">
+              <div className="lg:hidden absolute top-3 right-3 z-40 flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-white text-[11px] font-bold shadow-md">
                 <Radio className="w-3 h-3 text-[#ff007a] animate-pulse" />
                 <span>{currentLiveStream.viewersCount}</span>
               </div>

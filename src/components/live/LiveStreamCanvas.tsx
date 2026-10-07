@@ -49,6 +49,7 @@ export interface LiveStreamCanvasProps {
   streamTitle?: string;
   hostName?: string;
   hostAvatar?: string;
+  showHostTag?: boolean;
   timerText?: string;
   isLive?: boolean;
   // Interactive Studio Setup Props
@@ -87,6 +88,7 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
   streamTitle = '',
   hostName = 'Host',
   hostAvatar = '',
+  showHostTag = false,
   timerText = '00:00',
   isLive = true,
   isInteractive = false,
@@ -363,7 +365,7 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
           autoPlay
           playsInline
           muted
-          className="w-full h-full object-cover select-none"
+          className="w-full h-full object-contain bg-black select-none"
         />
       );
     }
@@ -740,7 +742,7 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
             autoPlay
             playsInline
             muted={isStreamMuted}
-            className="w-full h-full object-cover select-none"
+            className="w-full h-full max-w-full max-h-full object-contain select-none bg-black"
           />
 
           {/* Floating Audio Unmute/Mute Toggle Indicator */}
@@ -777,7 +779,7 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
           <img
             src={snapshotUrl}
             alt="Live Stream Broadcast"
-            className="w-full h-full object-cover select-none animate-fadeIn"
+            className="w-full h-full object-contain select-none animate-fadeIn bg-black"
           />
         </div>
       ) : isCustomMode ? (
@@ -790,24 +792,28 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
       {showOverlays && (
         <div className="absolute top-3 left-3 right-3 z-30 flex items-center justify-between pointer-events-none">
           {/* Host Tag */}
-          <div className="flex items-center gap-2.5 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/10 pointer-events-auto">
-            <div className="w-7 h-7 rounded-full bg-[#ff007a] flex items-center justify-center font-bold text-xs text-white overflow-hidden border border-[#ff007a]">
-              {(hostName || 'H').charAt(0).toUpperCase()}
-            </div>
-            <div className="text-left">
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-bold text-white truncate max-w-[120px]">
-                  {hostName || 'Host'}
-                </span>
-                {isLive && (
-                  <span className="flex items-center gap-1 text-[9px] font-bold text-white bg-[#ff007a] px-1.5 py-0.5 rounded-full">
-                    <span className="w-1 h-1 rounded-full bg-white animate-ping" />
-                    Live
+          {showHostTag ? (
+            <div className="flex items-center gap-2.5 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/10 pointer-events-auto">
+              <div className="w-7 h-7 rounded-full bg-[#ff007a] flex items-center justify-center font-bold text-xs text-white overflow-hidden border border-[#ff007a]">
+                {(hostName || 'H').charAt(0).toUpperCase()}
+              </div>
+              <div className="text-left">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-white truncate max-w-[120px]">
+                    {hostName || 'Host'}
                   </span>
-                )}
+                  {isLive && (
+                    <span className="flex items-center gap-1 text-[9px] font-bold text-white bg-[#ff007a] px-1.5 py-0.5 rounded-full">
+                      <span className="w-1 h-1 rounded-full bg-white animate-ping" />
+                      Live
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <div />
+          )}
 
           {/* Timer & Live state */}
           <div className="flex items-center gap-2 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-2xl border border-white/10 pointer-events-auto">
