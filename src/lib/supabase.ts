@@ -810,7 +810,12 @@ export const testSupabaseConnection = async (
 // =========================================================================
 let cachedUsersResult: { data: User[]; timestamp: number } | null = null;
 let cachedAdminsResult: { data: AdminRecord[]; timestamp: number } | null = null;
+let cachedAudioTracksResult: { data: AudioTrack[]; timestamp: number } | null = null;
 let systemStatsCache: { stats: SystemStats; timestamp: number } | null = null;
+let cachedDiscoveredBuckets: { buckets: string[]; timestamp: number } | null = null;
+let preferredAudioBucket: string | null = null;
+let preferredCoverBucket: string | null = null;
+let workingAudioTable: 'AudioLibrary' | 'AudioTrack' | 'audio_tracks' | null = null;
 
 /**
  * Injects or updates an authenticated user in memory cache immediately.
@@ -1999,65 +2004,157 @@ export const supabaseDb = {
     }
   },
 
-  async fetchAudioTracks(): Promise<AudioTrack[] | null> {
+  async fetchAudioTracks(force = false): Promise<AudioTrack[] | null> {
+    if (!force && cachedAudioTracksResult && Date.now() - cachedAudioTracksResult.timestamp < 30000) {
+      return cachedAudioTracksResult.data;
+    }
+
     const client = getSupabaseClient();
-    if (!client) return null;
+    if (!client) return cachedAudioTracksResult?.data || null;
+
     try {
       let data: any[] | null = null;
-      const res1 = await client.from('AudioLibrary').select('*');
-      if (!res1.error && res1.data) {
-        data = res1.data;
-      } else {
-        const res2 = await client.from('AudioTrack').select('*');
-        if (!res2.error && res2.data) {
-          data = res2.data;
+
+      // 1. If we already know the working table, query that first to avoid multiple DB calls
+      if (workingAudioTable) {
+        try {
+          const sortCol = workingAudioTable === 'audio_tracks' ? 'created_at' : 'CreatedAt';
+          const res = await client.from(workingAudioTable).select('*').order(sortCol, { ascending: false }).limit(100);
+          if (!res.error && res.data && res.data.length > 0) {
+            data = res.data;
+          } else if (res.error) {
+            workingAudioTable = null; // reset if table altered
+          }
+        } catch {
+          workingAudioTable = null;
+        }
+      }
+
+      // 2. Fallback probe across common audio schema conventions
+      if (!data) {
+        const res1 = await client.from('AudioLibrary').select('*').order('CreatedAt', { ascending: false }).limit(100);
+        if (!res1.error && res1.data && res1.data.length > 0) {
+          data = res1.data;
+          workingAudioTable = 'AudioLibrary';
+        } else {
+          const res2 = await client.from('AudioTrack').select('*').order('CreatedAt', { ascending: false }).limit(100);
+          if (!res2.error && res2.data && res2.data.length > 0) {
+            data = res2.data;
+            workingAudioTable = 'AudioTrack';
+          } else {
+            const res3 = await client.from('audio_tracks').select('*').order('created_at', { ascending: false }).limit(100);
+            if (!res3.error && res3.data && res3.data.length > 0) {
+              data = res3.data;
+              workingAudioTable = 'audio_tracks';
+            }
+          }
         }
       }
 
       if (!data || data.length === 0) return null;
 
-      return data.map((r: any) => ({
+      const mapped: AudioTrack[] = data.map((r: any) => ({
         id: r.AudioTrackID || r.id,
         title: r.Title || r.title || 'Sound',
         artist: r.Artist || r.artist || 'Creator',
-        duration: r.Duration || r.duration || '00:15',
+        duration: r.Duration || r.duration || '00:30',
         coverUrl: r.CoverURL || r.cover_url || '',
         audioUrl: r.AudioURL || r.audio_url || '',
+        category: r.Category || r.category || 'Trending',
       }));
+
+      cachedAudioTracksResult = { data: mapped, timestamp: Date.now() };
+      return mapped;
     } catch (e) {
       console.warn('Supabase fetchAudioTracks fallback:', e);
-      return null;
+      return cachedAudioTracksResult?.data || null;
     }
   },
 
   async insertAudioTrack(track: AudioTrack): Promise<boolean> {
+    cachedAudioTracksResult = null;
     const client = getSupabaseClient();
     if (!client) return false;
+
     try {
       const trackUuid = toUuid(track.id);
       const payload: Record<string, any> = {
         AudioTrackID: trackUuid,
         Title: track.title,
         Artist: track.artist,
-        Duration: track.duration,
+        Duration: track.duration || '00:30',
         AudioURL: track.audioUrl || '',
         CoverURL: track.coverUrl || '',
+        CreatedAt: new Date().toISOString(),
       };
       if (track.category) {
         payload.Category = track.category;
       }
-      let res = await client.from('AudioLibrary').upsert(payload, { onConflict: 'AudioTrackID' });
-      if (res.error) {
-        // Fallback retry without Category in case column does not exist in user schema
-        const { Category: _, ...fallbackPayload } = payload;
-        const resFb = await client.from('AudioLibrary').upsert(fallbackPayload, { onConflict: 'AudioTrackID' });
-        if (resFb.error) {
-          const res2 = await client.from('AudioTrack').upsert(payload, { onConflict: 'AudioTrackID' });
-          if (res2.error) {
-            await client.from('AudioTrack').upsert(fallbackPayload, { onConflict: 'AudioTrackID' });
-          }
-        }
+
+      // If working table is known, try it first
+      if (workingAudioTable === 'AudioLibrary') {
+        const { error } = await client.from('AudioLibrary').upsert(payload, { onConflict: 'AudioTrackID' });
+        if (!error) return true;
+      } else if (workingAudioTable === 'AudioTrack') {
+        const { error } = await client.from('AudioTrack').upsert(payload, { onConflict: 'AudioTrackID' });
+        if (!error) return true;
+      } else if (workingAudioTable === 'audio_tracks') {
+        const snakePayload = {
+          id: trackUuid,
+          title: track.title,
+          artist: track.artist,
+          duration: track.duration || '00:30',
+          audio_url: track.audioUrl || '',
+          cover_url: track.coverUrl || '',
+          category: track.category || 'Trending',
+          created_at: new Date().toISOString(),
+        };
+        const { error } = await client.from('audio_tracks').upsert(snakePayload, { onConflict: 'id' });
+        if (!error) return true;
       }
+
+      // Probing tables: 1. AudioLibrary (PascalCase)
+      let res = await client.from('AudioLibrary').upsert(payload, { onConflict: 'AudioTrackID' });
+      if (!res.error) {
+        workingAudioTable = 'AudioLibrary';
+        return true;
+      }
+      const { Category: _, ...fallbackPayload } = payload;
+      const resFb = await client.from('AudioLibrary').upsert(fallbackPayload, { onConflict: 'AudioTrackID' });
+      if (!resFb.error) {
+        workingAudioTable = 'AudioLibrary';
+        return true;
+      }
+
+      // 2. AudioTrack (PascalCase)
+      const res2 = await client.from('AudioTrack').upsert(payload, { onConflict: 'AudioTrackID' });
+      if (!res2.error) {
+        workingAudioTable = 'AudioTrack';
+        return true;
+      }
+      const res2Fb = await client.from('AudioTrack').upsert(fallbackPayload, { onConflict: 'AudioTrackID' });
+      if (!res2Fb.error) {
+        workingAudioTable = 'AudioTrack';
+        return true;
+      }
+
+      // 3. audio_tracks (snake_case)
+      const snakePayload = {
+        id: trackUuid,
+        title: track.title,
+        artist: track.artist,
+        duration: track.duration || '00:30',
+        audio_url: track.audioUrl || '',
+        cover_url: track.coverUrl || '',
+        category: track.category || 'Trending',
+        created_at: new Date().toISOString(),
+      };
+      const res3 = await client.from('audio_tracks').upsert(snakePayload, { onConflict: 'id' });
+      if (!res3.error) {
+        workingAudioTable = 'audio_tracks';
+        return true;
+      }
+
       return true;
     } catch {
       return false;
@@ -2065,12 +2162,17 @@ export const supabaseDb = {
   },
 
   async deleteAudioTrack(trackId: string): Promise<boolean> {
+    cachedAudioTracksResult = null;
     const client = getSupabaseClient();
     if (!client || !trackId) return false;
+
     try {
       const trackUuid = toUuid(trackId);
       await client.from('AudioLibrary').delete().or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${trackId}`);
       await client.from('AudioTrack').delete().or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${trackId}`);
+      try {
+        await client.from('audio_tracks').delete().or(`id.eq.${trackUuid},id.eq.${trackId}`);
+      } catch {}
       return true;
     } catch {
       return false;
@@ -2087,17 +2189,26 @@ export const supabaseDb = {
       const mimeType = file.type || (ext === 'wav' ? 'audio/wav' : ext === 'ogg' ? 'audio/ogg' : ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg');
 
       let candidateBuckets: string[] = ['audio', 'audios', 'sounds', 'music', 'media', 'uploads', 'public', 'files'];
-      try {
-        const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
-        if (!bucketError && bucketList && bucketList.length > 0) {
-          const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
-          const audioBuckets = discovered.filter(b => /audio|sound|music|media/i.test(b));
-          candidateBuckets = Array.from(new Set([...audioBuckets, ...discovered, ...candidateBuckets]));
-        } else {
-          await client.storage.createBucket('audio', { public: true }).catch(() => {});
+      if (preferredAudioBucket) {
+        candidateBuckets = [preferredAudioBucket, ...candidateBuckets.filter(b => b !== preferredAudioBucket)];
+      }
+
+      // Discover buckets only once every 10 minutes to protect Supabase API & disk IO
+      if (!cachedDiscoveredBuckets || Date.now() - cachedDiscoveredBuckets.timestamp > 600000) {
+        try {
+          const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
+          if (!bucketError && bucketList && bucketList.length > 0) {
+            const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
+            const audioBuckets = discovered.filter(b => /audio|sound|music|media/i.test(b));
+            const merged = Array.from(new Set([...audioBuckets, ...discovered, ...candidateBuckets]));
+            cachedDiscoveredBuckets = { buckets: merged, timestamp: Date.now() };
+          }
+        } catch {
+          // ignore listBuckets failure
         }
-      } catch {
-        // ignore listBuckets failure
+      }
+      if (cachedDiscoveredBuckets?.buckets) {
+        candidateBuckets = Array.from(new Set([preferredAudioBucket || '', ...cachedDiscoveredBuckets.buckets])).filter(Boolean);
       }
 
       let lastError: any = null;
@@ -2111,6 +2222,7 @@ export const supabaseDb = {
               upsert: false,
             });
             if (!error && data?.path) {
+              preferredAudioBucket = bucket;
               const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
               if (pubData?.publicUrl) return { url: pubData.publicUrl };
             }
@@ -2136,14 +2248,23 @@ export const supabaseDb = {
       const cleanFileName = `cover_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
       const mimeType = file.type || (ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
 
-      let candidateBuckets: string[] = ['images', 'covers', 'avatars', 'media', 'public', 'uploads'];
-      try {
-        const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
-        if (!bucketError && bucketList && bucketList.length > 0) {
-          const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
-          candidateBuckets = Array.from(new Set([...discovered, ...candidateBuckets]));
-        }
-      } catch {}
+      let candidateBuckets: string[] = ['audio', 'images', 'covers', 'avatars', 'media', 'public', 'uploads'];
+      if (preferredCoverBucket) {
+        candidateBuckets = [preferredCoverBucket, ...candidateBuckets.filter(b => b !== preferredCoverBucket)];
+      }
+
+      if (!cachedDiscoveredBuckets || Date.now() - cachedDiscoveredBuckets.timestamp > 600000) {
+        try {
+          const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
+          if (!bucketError && bucketList && bucketList.length > 0) {
+            const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
+            candidateBuckets = Array.from(new Set([...discovered, ...candidateBuckets]));
+            cachedDiscoveredBuckets = { buckets: candidateBuckets, timestamp: Date.now() };
+          }
+        } catch {}
+      } else if (cachedDiscoveredBuckets?.buckets) {
+        candidateBuckets = Array.from(new Set([preferredCoverBucket || '', ...cachedDiscoveredBuckets.buckets])).filter(Boolean);
+      }
 
       let lastError: any = null;
       for (const bucket of candidateBuckets) {
@@ -2156,6 +2277,7 @@ export const supabaseDb = {
               upsert: false,
             });
             if (!error && data?.path) {
+              preferredCoverBucket = bucket;
               const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
               if (pubData?.publicUrl) return { url: pubData.publicUrl };
             }

@@ -14,6 +14,7 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
     audioLibraryOpen,
     setAudioLibraryOpen,
     onSelectAudioCallback,
+    refreshAudioTracks,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -21,6 +22,13 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
 
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+
+  // Refresh latest audio tracks from Supabase when modal opens
+  useEffect(() => {
+    if (audioLibraryOpen && refreshAudioTracks) {
+      refreshAudioTracks(false);
+    }
+  }, [audioLibraryOpen, refreshAudioTracks]);
 
   // Stop audio preview when modal is closed
   useEffect(() => {

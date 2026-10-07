@@ -425,6 +425,7 @@ interface AppContextType {
   audioTracksList: AudioTrack[];
   addAudioTrack: (track: Omit<AudioTrack, 'id'> | AudioTrack) => Promise<AudioTrack>;
   deleteAudioTrack: (trackId: string) => Promise<boolean>;
+  refreshAudioTracks: (force?: boolean) => Promise<void>;
   conversations: Conversation[];
   activeConversationId: string | null;
   notifications: NotificationItem[];
@@ -554,7 +555,7 @@ interface AppContextType {
   deleteVideo: (videoId: string) => Promise<boolean>;
 
   // Admin user role assignment
-  updateUserRoleAdmin: (userId: string, newRole: 'creator' | 'admin' | 'moderator') => Promise<boolean>;
+  updateUserRoleAdmin: (userId: string, newRole: 'creator' | 'admin') => Promise<boolean>;
 
   // Cross-device realtime notification popup
   activeNotificationPopup: NotificationItem | null;
@@ -5287,7 +5288,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const addAudioTrack = async (trackData: Omit<AudioTrack, 'id'> | AudioTrack): Promise<AudioTrack> => {
-    const id = ('id' in trackData && trackData.id) ? trackData.id : `track_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const id = ('id' in trackData && trackData.id && isUuid(trackData.id))
+      ? trackData.id
+      : crypto.randomUUID();
+
     const newTrack: AudioTrack = {
       ...trackData,
       id,
@@ -5300,7 +5304,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return updated;
     });
 
-    supabaseDb.insertAudioTrack(newTrack).catch(() => {});
+    await supabaseDb.insertAudioTrack(newTrack);
     return newTrack;
   };
 
@@ -5313,6 +5317,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     supabaseDb.deleteAudioTrack(trackId).catch(() => {});
     return true;
+  };
+
+  const refreshAudioTracks = async (force = false): Promise<void> => {
+    try {
+      const remote = await supabaseDb.fetchAudioTracks(force);
+      if (remote && remote.length > 0) {
+        setAudioTracksList(prev => {
+          const map = new Map<string, AudioTrack>();
+          prev.forEach(t => map.set(t.id, t));
+          remote.forEach(t => map.set(t.id, t));
+          const merged = Array.from(map.values());
+          storage.set('audioTracks', merged);
+          return merged;
+        });
+      }
+    } catch {
+      // ignore
+    }
   };
 
   // Admin Operations
@@ -6310,7 +6332,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateUserRoleAdmin = async (
     userId: string,
-    newRole: 'creator' | 'admin' | 'moderator'
+    newRole: 'creator' | 'admin'
   ): Promise<boolean> => {
     setUsers(prev => {
       const next = prev.map(u => (u.id === userId ? { ...u, role: newRole } : u));
@@ -6485,6 +6507,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         audioTracksList,
         addAudioTrack,
         deleteAudioTrack,
+        refreshAudioTracks,
         conversations,
         activeConversationId,
         messagesMobileView,

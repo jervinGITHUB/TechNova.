@@ -12,7 +12,7 @@ export interface User {
   isFollowing?: boolean;
   isBlocked?: boolean;
   isReported?: boolean;
-  role?: 'creator' | 'viewer' | 'admin' | 'moderator';
+  role?: 'creator' | 'admin';
   isBanned?: boolean;
   banReason?: string;
   bannedAt?: string;
@@ -206,7 +206,7 @@ export interface AdminRecord {
   userId?: string;
   username: string;
   email: string;
-  role: 'Super Admin' | 'Admin' | 'Content Moderator';
+  role: 'Admin';
   permissions: string[];
   createdAt: string;
   lastLogin?: string;

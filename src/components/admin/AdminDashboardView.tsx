@@ -30,6 +30,7 @@ import {
   Play,
   Pause,
   Upload,
+  Image as ImageIcon,
   Sparkles,
 } from 'lucide-react';
 
@@ -175,11 +176,11 @@ export const AdminDashboardView: React.FC = () => {
   const [newAudioArtist, setNewAudioArtist] = useState('');
   const [newAudioCategory, setNewAudioCategory] = useState('Trending');
   const [newAudioDuration, setNewAudioDuration] = useState('00:30');
-  const [newAudioUrl, setNewAudioUrl] = useState('');
-  const [newAudioCoverUrl, setNewAudioCoverUrl] = useState('');
-  const [audioSourceMode, setAudioSourceMode] = useState<'file' | 'url' | 'preset'>('file');
   const [selectedAudioFile, setSelectedAudioFile] = useState<File | null>(null);
   const [selectedCoverFile, setSelectedCoverFile] = useState<File | null>(null);
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState<string>('');
+  const [audioPreviewUrl, setAudioPreviewUrl] = useState<string>('');
+  const [isAudioPreviewPlaying, setIsAudioPreviewPlaying] = useState<boolean>(false);
   const [isUploadingAudio, setIsUploadingAudio] = useState(false);
   const modalAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -297,28 +298,33 @@ export const AdminDashboardView: React.FC = () => {
       return;
     }
 
+    if (!selectedAudioFile && !audioPreviewUrl) {
+      showToast('Please select an audio file (.mp3, .wav).', 'error');
+      return;
+    }
+
     setIsUploadingAudio(true);
     try {
-      let finalAudioUrl = newAudioUrl.trim();
-      let finalCoverUrl = newAudioCoverUrl.trim();
+      let finalAudioUrl = '';
+      let finalCoverUrl = '';
 
-      // 1. Upload audio file if selected
-      if (audioSourceMode === 'file' && selectedAudioFile) {
+      // 1. Upload audio file to Supabase Storage
+      if (selectedAudioFile) {
         const uploadRes = await supabaseDb.uploadAudioFile(selectedAudioFile);
         if (uploadRes.url) {
           finalAudioUrl = uploadRes.url;
         } else {
-          finalAudioUrl = URL.createObjectURL(selectedAudioFile);
+          finalAudioUrl = audioPreviewUrl || URL.createObjectURL(selectedAudioFile);
         }
       }
 
-      // 2. Upload cover image if selected
+      // 2. Upload cover image to Supabase Storage
       if (selectedCoverFile) {
         const coverRes = await supabaseDb.uploadAudioCover(selectedCoverFile);
         if (coverRes.url) {
           finalCoverUrl = coverRes.url;
         } else {
-          finalCoverUrl = URL.createObjectURL(selectedCoverFile);
+          finalCoverUrl = coverPreviewUrl || URL.createObjectURL(selectedCoverFile);
         }
       }
 
@@ -335,7 +341,7 @@ export const AdminDashboardView: React.FC = () => {
       const newTrack: Omit<AudioTrack, 'id'> = {
         title: newAudioTitle.trim(),
         artist: newAudioArtist.trim(),
-        category: newAudioCategory,
+        category: newAudioCategory || 'Trending',
         duration: newAudioDuration.trim() || '00:30',
         audioUrl: finalAudioUrl,
         coverUrl: finalCoverUrl,
@@ -343,17 +349,21 @@ export const AdminDashboardView: React.FC = () => {
       };
 
       await addAudioTrack(newTrack);
-      showToast(`Audio track "${newAudioTitle.trim()}" published to library!`);
+      showToast(`Audio track "${newAudioTitle.trim()}" published to Supabase & added to sound library!`);
 
       // Reset form
       setNewAudioTitle('');
       setNewAudioArtist('');
       setNewAudioCategory('Trending');
       setNewAudioDuration('00:30');
-      setNewAudioUrl('');
-      setNewAudioCoverUrl('');
       setSelectedAudioFile(null);
       setSelectedCoverFile(null);
+      setCoverPreviewUrl('');
+      setAudioPreviewUrl('');
+      setIsAudioPreviewPlaying(false);
+      if (modalAudioRef.current) {
+        modalAudioRef.current.pause();
+      }
       setShowAddAudioModal(false);
     } catch (err: any) {
       showToast(err?.message || 'Failed to save audio track', 'error');
@@ -384,9 +394,21 @@ export const AdminDashboardView: React.FC = () => {
   };
 
   const handleAudioFileSelection = (file: File) => {
+    if (!file) return;
     setSelectedAudioFile(file);
+    if (!newAudioTitle.trim()) {
+      const baseName = file.name.replace(/\.[^/.]+$/, '').replace(/[_-]/g, ' ');
+      setNewAudioTitle(baseName.charAt(0).toUpperCase() + baseName.slice(1));
+    }
+    const tempUrl = URL.createObjectURL(file);
+    setAudioPreviewUrl(tempUrl);
+    setIsAudioPreviewPlaying(false);
+    if (modalAudioRef.current) {
+      modalAudioRef.current.pause();
+      modalAudioRef.current.src = tempUrl;
+    }
+
     try {
-      const tempUrl = URL.createObjectURL(file);
       const audioObj = new Audio(tempUrl);
       audioObj.onloadedmetadata = () => {
         const secs = Math.round(audioObj.duration);
@@ -398,6 +420,31 @@ export const AdminDashboardView: React.FC = () => {
       };
     } catch {
       // fallback
+    }
+  };
+
+  const handleCoverFileSelection = (file: File) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('Please select a valid image file (PNG, JPG, WebP).', 'error');
+      return;
+    }
+    setSelectedCoverFile(file);
+    const objectUrl = URL.createObjectURL(file);
+    setCoverPreviewUrl(objectUrl);
+  };
+
+  const toggleModalAudioPlayback = () => {
+    if (!modalAudioRef.current || !audioPreviewUrl) return;
+    if (isAudioPreviewPlaying) {
+      modalAudioRef.current.pause();
+      setIsAudioPreviewPlaying(false);
+    } else {
+      modalAudioRef.current.src = audioPreviewUrl;
+      modalAudioRef.current
+        .play()
+        .then(() => setIsAudioPreviewPlaying(true))
+        .catch(() => setIsAudioPreviewPlaying(false));
     }
   };
 
@@ -1102,25 +1149,16 @@ export const AdminDashboardView: React.FC = () => {
                         </td>
                         <td className="py-3 px-3 text-neutral-300 font-mono text-[11px]">{u.email || '—'}</td>
                         <td className="py-3 px-3">
-                          <select
-                            value={u.role || 'creator'}
-                            onChange={async e => {
-                              const newRole = e.target.value as 'creator' | 'admin' | 'moderator';
-                              if (u.id === currentUser?.id && newRole !== 'admin') {
-                                const confirmSelf = window.confirm(
-                                  'Are you sure you want to demote your own account from Admin?'
-                                );
-                                if (!confirmSelf) return;
-                              }
-                              await updateUserRoleAdmin(u.id, newRole);
-                              showToast(`Role for @${u.username} updated to ${newRole}`);
-                            }}
-                            className="text-xs font-semibold py-1 px-2 rounded-lg bg-neutral-900 text-neutral-200 border border-neutral-700 outline-none cursor-pointer"
-                          >
-                            <option value="creator">Creator</option>
-                            <option value="moderator">Moderator</option>
-                            <option value="admin">Admin</option>
-                          </select>
+                          {u.role === 'admin' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-bold">
+                              <Shield className="w-3 h-3 text-[#ff007a]" />
+                              Admin
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-neutral-800 text-neutral-300 border border-neutral-700/60 text-xs font-medium">
+                              Creator
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-3">
                           {u.isBanned ? (
@@ -1735,45 +1773,76 @@ export const AdminDashboardView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Audio Source Selector */}
+              {/* Audio File Upload */}
               <div>
-                <label className="text-neutral-300 font-semibold block mb-1.5">Audio Source</label>
-                <div className="flex items-center gap-1.5 p-1 bg-neutral-950 rounded-xl border border-neutral-800 mb-2">
-                  <button
-                    type="button"
-                    onClick={() => setAudioSourceMode('file')}
-                    className={`flex-1 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-                      audioSourceMode === 'file' ? 'bg-[#ff007a] text-white' : 'text-neutral-400'
-                    }`}
-                  >
-                    Upload File (.mp3, .wav)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAudioSourceMode('url')}
-                    className={`flex-1 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-                      audioSourceMode === 'url' ? 'bg-[#ff007a] text-white' : 'text-neutral-400'
-                    }`}
-                  >
-                    Direct Audio URL
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setAudioSourceMode('preset')}
-                    className={`flex-1 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-                      audioSourceMode === 'preset' ? 'bg-[#ff007a] text-white' : 'text-neutral-400'
-                    }`}
-                  >
-                    Presets
-                  </button>
-                </div>
+                <label className="text-neutral-300 font-semibold block mb-1.5">
+                  Audio File (.mp3, .wav, .ogg, .m4a) *
+                </label>
 
-                {audioSourceMode === 'file' && (
+                {selectedAudioFile ? (
+                  <div className="p-3.5 rounded-xl border border-neutral-700 bg-neutral-950 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <button
+                        type="button"
+                        onClick={toggleModalAudioPlayback}
+                        className="w-10 h-10 rounded-xl bg-[#ff007a]/20 hover:bg-[#ff007a]/30 text-[#ff007a] flex items-center justify-center shrink-0 transition-colors cursor-pointer border border-[#ff007a]/40"
+                        title={isAudioPreviewPlaying ? 'Pause preview' : 'Play preview'}
+                      >
+                        {isAudioPreviewPlaying ? (
+                          <Pause className="w-5 h-5 fill-current" />
+                        ) : (
+                          <Play className="w-5 h-5 fill-current ml-0.5" />
+                        )}
+                      </button>
+                      <div className="min-w-0">
+                        <div className="font-semibold text-white truncate text-xs">
+                          {selectedAudioFile.name}
+                        </div>
+                        <div className="text-[11px] text-neutral-400 flex items-center gap-2 mt-0.5">
+                          <span>{(selectedAudioFile.size / (1024 * 1024)).toFixed(2)} MB</span>
+                          <span>•</span>
+                          <span className="text-[#ff007a] font-mono">{newAudioDuration}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <input
+                        type="file"
+                        id="adminAudioUploadInputReplace"
+                        accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
+                        className="hidden"
+                        onChange={e => {
+                          const file = e.target.files?.[0];
+                          if (file) handleAudioFileSelection(file);
+                        }}
+                      />
+                      <label
+                        htmlFor="adminAudioUploadInputReplace"
+                        className="px-2.5 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-[11px] font-semibold cursor-pointer transition-colors"
+                      >
+                        Change
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (modalAudioRef.current) modalAudioRef.current.pause();
+                          setSelectedAudioFile(null);
+                          setAudioPreviewUrl('');
+                          setIsAudioPreviewPlaying(false);
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-[11px] font-semibold cursor-pointer transition-colors"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ) : (
                   <div className="p-4 rounded-xl border border-dashed border-neutral-700 bg-neutral-950 text-center space-y-2">
                     <input
                       type="file"
                       id="adminAudioUploadInput"
-                      accept="audio/*"
+                      accept="audio/*,.mp3,.wav,.ogg,.m4a,.aac"
                       className="hidden"
                       onChange={e => {
                         const file = e.target.files?.[0];
@@ -1782,99 +1851,96 @@ export const AdminDashboardView: React.FC = () => {
                     />
                     <label
                       htmlFor="adminAudioUploadInput"
-                      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 cursor-pointer font-semibold transition-colors"
+                      className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 cursor-pointer font-semibold transition-colors"
                     >
                       <Upload className="w-4 h-4 text-[#ff007a]" />
-                      <span>{selectedAudioFile ? selectedAudioFile.name : 'Select Audio File'}</span>
+                      <span>Select Audio File</span>
                     </label>
-                    <p className="text-[11px] text-neutral-400">Supports MP3, WAV, AAC, OGG up to 25MB</p>
-                  </div>
-                )}
-
-                {audioSourceMode === 'url' && (
-                  <input
-                    type="url"
-                    placeholder="https://example.com/audio/track.mp3"
-                    value={newAudioUrl}
-                    onChange={e => setNewAudioUrl(e.target.value)}
-                    className="w-full bg-neutral-950 px-3 py-2 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
-                  />
-                )}
-
-                {audioSourceMode === 'preset' && (
-                  <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto pr-1">
-                    {[
-                      {
-                        title: 'Cyber Pulse Beat',
-                        url: 'https://actions.google.com/sounds/v1/science_fiction/alien_beacon.ogg',
-                        artist: 'PulseAudio',
-                      },
-                      {
-                        title: 'Lo-Fi Coffee Shop',
-                        url: 'https://actions.google.com/sounds/v1/ambiences/coffee_shop.ogg',
-                        artist: 'LofiChill',
-                      },
-                      {
-                        title: 'Ticking Tension',
-                        url: 'https://actions.google.com/sounds/v1/household/clock_ticking.ogg',
-                        artist: 'RhythmFX',
-                      },
-                      {
-                        title: 'Arcade Zap Electronic',
-                        url: 'https://actions.google.com/sounds/v1/cartoon/metal_twang.ogg',
-                        artist: 'ArcadeFX',
-                      },
-                    ].map(preset => (
-                      <button
-                        key={preset.title}
-                        type="button"
-                        onClick={() => {
-                          setNewAudioUrl(preset.url);
-                          if (!newAudioTitle) setNewAudioTitle(preset.title);
-                          if (!newAudioArtist) setNewAudioArtist(preset.artist);
-                        }}
-                        className={`p-2 rounded-xl border text-left text-xs transition-colors cursor-pointer ${
-                          newAudioUrl === preset.url
-                            ? 'bg-[#ff007a]/20 border-[#ff007a] text-white'
-                            : 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:border-neutral-700'
-                        }`}
-                      >
-                        <div className="font-bold truncate">{preset.title}</div>
-                        <div className="text-[10px] text-neutral-400">{preset.artist}</div>
-                      </button>
-                    ))}
+                    <p className="text-[11px] text-neutral-400">
+                      Supports MP3, WAV, AAC, M4A, OGG up to 25MB
+                    </p>
                   </div>
                 )}
               </div>
 
-              {/* Cover Artwork */}
+              {/* Cover Artwork with Immediate Image Preview */}
               <div>
-                <label className="text-neutral-300 font-semibold block mb-1">Cover Artwork Image (Optional)</label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="file"
-                    id="adminAudioCoverUpload"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={e => {
-                      const file = e.target.files?.[0];
-                      if (file) setSelectedCoverFile(file);
-                    }}
-                  />
-                  <label
-                    htmlFor="adminAudioCoverUpload"
-                    className="px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer shrink-0"
-                  >
-                    {selectedCoverFile ? selectedCoverFile.name : 'Choose Cover Image'}
-                  </label>
-                  <input
-                    type="url"
-                    placeholder="or paste image URL"
-                    value={newAudioCoverUrl}
-                    onChange={e => setNewAudioCoverUrl(e.target.value)}
-                    className="flex-1 bg-neutral-950 px-3 py-2 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
-                  />
-                </div>
+                <label className="text-neutral-300 font-semibold block mb-1.5">
+                  Cover Artwork Image (Optional)
+                </label>
+
+                {coverPreviewUrl ? (
+                  <div className="p-3 rounded-xl border border-neutral-700 bg-neutral-950 flex items-center gap-3">
+                    <img
+                      src={coverPreviewUrl}
+                      alt="Cover Preview"
+                      className="w-16 h-16 rounded-lg object-cover border border-[#ff007a]/40 shadow-md shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-white truncate">
+                        {selectedCoverFile?.name || 'Cover Artwork'}
+                      </div>
+                      <div className="text-[11px] text-emerald-400 flex items-center gap-1 mt-0.5">
+                        <Check className="w-3 h-3 text-emerald-400" />
+                        <span>
+                          Image preview ready ({selectedCoverFile ? `${(selectedCoverFile.size / 1024).toFixed(0)} KB` : 'Ready'})
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        <input
+                          type="file"
+                          id="adminAudioCoverUploadChange"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={e => {
+                            const file = e.target.files?.[0];
+                            if (file) handleCoverFileSelection(file);
+                          }}
+                        />
+                        <label
+                          htmlFor="adminAudioCoverUploadChange"
+                          className="text-[11px] text-neutral-300 hover:text-white font-medium cursor-pointer underline"
+                        >
+                          Change Image
+                        </label>
+                        <span className="text-neutral-600">•</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedCoverFile(null);
+                            setCoverPreviewUrl('');
+                          }}
+                          className="text-[11px] text-red-400 hover:text-red-300 font-medium cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-xl border border-dashed border-neutral-700 bg-neutral-950 text-center space-y-2">
+                    <input
+                      type="file"
+                      id="adminAudioCoverUpload"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        if (file) handleCoverFileSelection(file);
+                      }}
+                    />
+                    <label
+                      htmlFor="adminAudioCoverUpload"
+                      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 cursor-pointer text-xs font-semibold transition-colors"
+                    >
+                      <ImageIcon className="w-4 h-4 text-[#ff007a]" />
+                      <span>Select Cover Image</span>
+                    </label>
+                    <p className="text-[11px] text-neutral-400">
+                      Supports PNG, JPG, JPEG, WebP cover art thumbnail
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Action Buttons */}
@@ -2060,17 +2126,9 @@ export const AdminDashboardView: React.FC = () => {
                 />
               </div>
 
-              <div>
-                <label className="text-neutral-300 font-semibold block mb-1">Role</label>
-                <div className="w-full bg-neutral-950 px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Shield className="w-3.5 h-3.5 text-[#ff007a]" />
-                    <span className="font-semibold text-white">Admin</span>
-                  </div>
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-[#ff007a]/20 text-[#ff007a] border border-[#ff007a]/30 uppercase tracking-wider">
-                    Full Platform Access
-                  </span>
-                </div>
+              <div className="p-2.5 rounded-xl bg-purple-500/10 border border-purple-500/20 text-purple-300 text-[11px] flex items-center gap-2">
+                <Shield className="w-3.5 h-3.5 text-[#ff007a] shrink-0" />
+                <span>Assigns full platform Administrator role & synchronizes with Supabase.</span>
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-800">
