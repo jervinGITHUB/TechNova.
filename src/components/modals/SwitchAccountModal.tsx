@@ -46,55 +46,25 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
   // Strictly ONLY accounts logged-in on THIS device (stored in savedAccounts / currentUser)
   const displayAccounts: User[] = (() => {
     const map = new Map<string, User>();
-    const emailToId = new Map<string, string>();
 
     // 1. Saved accounts that actually logged in on this device
     for (const a of savedAccounts) {
       if (!a || !a.id) continue;
-      const emailKey = a.email ? a.email.trim().toLowerCase() : null;
       map.set(a.id, a);
-      if (emailKey) emailToId.set(emailKey, a.id);
     }
 
     // 2. Ensure current active user is also present
     if (currentUser && currentUser.id) {
-      const emailKey = currentUser.email ? currentUser.email.trim().toLowerCase() : null;
-      if (emailKey && emailToId.has(emailKey)) {
-        const existingId = emailToId.get(emailKey)!;
-        map.set(existingId, currentUser);
-      } else {
-        map.set(currentUser.id, currentUser);
-      }
+      map.set(currentUser.id, currentUser);
     }
 
     return Array.from(map.values());
   })();
 
-  const handleSwitchTo = async (target: User) => {
-    // If the account has an active session on this device (was not logged out),
-    // switch to it INSTANTLY without asking for any password or Google chooser!
-    if (isAccountLoggedInOnDevice(target.id, target.email)) {
-      quickLoginAs(target.id);
-      onClose();
-      return;
-    }
-
-    // If the account was explicitly logged out, require credentials or Google chooser
-    if (isGoogleAccount(target)) {
-      setIsConnectingGoogle(true);
-      onClose();
-      if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('viralhub_user_logged_out');
-      }
-      await loginWithGoogle({ prompt: 'select_account' });
-    } else {
-      onClose();
-      logout();
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('viralhub_prefill_login', target.email || target.username);
-      }
-      setAuthView('login');
-    }
+  const handleSwitchTo = (target: User) => {
+    // Switch to target saved account instantly without prompting or redirecting
+    quickLoginAs(target.id);
+    onClose();
   };
 
   const handleAddNewAccount = () => {
@@ -234,7 +204,7 @@ export const SwitchAccountModal: React.FC<SwitchAccountModalProps> = ({
                           onClick={() => handleSwitchTo(u)}
                           className="text-xs font-bold text-[#ff007a] hover:underline px-2 py-1 rounded-lg hover:bg-[#ff007a]/10 cursor-pointer"
                         >
-                          {isLoggedInOnDevice ? 'Switch →' : isGoogle ? 'Choose Account →' : 'Enter Password →'}
+                          Switch →
                         </button>
                         <button
                           type="button"

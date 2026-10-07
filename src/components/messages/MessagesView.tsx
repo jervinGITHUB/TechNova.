@@ -203,7 +203,7 @@ export const MessagesView: React.FC = () => {
         const hasNewVisibleMsg = (conv.messages || []).some(m => {
           if (m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
           if (convClearTime > 0) {
-            const sentTime = toTimestampMillis(m.sentAt);
+            const sentTime = toTimestampMillis(m.sentAt || m.timestamp);
             if (sentTime > 0 && sentTime <= convClearTime) return false;
             if (typeof m.id === 'string' && m.id.startsWith('m_')) {
               const parts = m.id.split('_');
@@ -449,7 +449,7 @@ export const MessagesView: React.FC = () => {
               const convVisibleMsgs = deduplicateMessages((conv.messages || []).filter(m => {
                 if (currentUser && m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
                 if (convClearTime > 0) {
-                  const sentTime = toTimestampMillis(m.sentAt);
+                  const sentTime = toTimestampMillis(m.sentAt || m.timestamp);
                   if (sentTime > 0 && sentTime <= convClearTime) return false;
                   if (typeof m.id === 'string' && m.id.startsWith('m_')) {
                     const parts = m.id.split('_');
@@ -737,7 +737,7 @@ export const MessagesView: React.FC = () => {
                   }
                   // Hide if created on or before the conversation was cleared for this user
                   if (userClearedTimestamp > 0) {
-                    const sentTime = toTimestampMillis(msg.sentAt);
+                    const sentTime = toTimestampMillis(msg.sentAt || msg.timestamp);
                     if (sentTime > 0 && sentTime <= userClearedTimestamp) return false;
                     if (typeof msg.id === 'string' && msg.id.startsWith('m_')) {
                       const parts = msg.id.split('_');
@@ -757,7 +757,7 @@ export const MessagesView: React.FC = () => {
                 }
 
                 return visibleMessages.map(msg => {
-                  const isMe = currentUser ? msg.senderId === currentUser.id : msg.isMine;
+                  const isMe = currentUser ? isSameUser(msg.senderId, currentUser.id) : Boolean(msg.isMine);
                   const videoData = resolveSharedVideo(msg, videos, users);
 
                   return (

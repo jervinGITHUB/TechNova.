@@ -525,7 +525,10 @@ export const markAccountLoggedInOnDevice = (userId?: string | null, email?: stri
     const raw = localStorage.getItem('viralhub_active_device_accounts_v1') || '[]';
     const list: string[] = JSON.parse(raw);
     const set = new Set(list.map(s => s.toLowerCase()));
-    if (userId) set.add(String(userId).toLowerCase());
+    if (userId) {
+      set.add(String(userId).toLowerCase());
+      set.add(toUuid(userId).toLowerCase());
+    }
     if (email) set.add(email.trim().toLowerCase());
     localStorage.setItem('viralhub_active_device_accounts_v1', JSON.stringify(Array.from(set)));
   } catch {}
@@ -537,10 +540,12 @@ export const markAccountLoggedOutOnDevice = (userId?: string | null, email?: str
     const raw = localStorage.getItem('viralhub_active_device_accounts_v1') || '[]';
     const list: string[] = JSON.parse(raw);
     const idLower = userId ? String(userId).toLowerCase() : null;
+    const idUuid = userId ? toUuid(userId).toLowerCase() : null;
     const emailLower = email ? email.trim().toLowerCase() : null;
     const next = list.filter(item => {
       const lower = item.toLowerCase();
       if (idLower && lower === idLower) return false;
+      if (idUuid && lower === idUuid) return false;
       if (emailLower && lower === emailLower) return false;
       return true;
     });
@@ -554,7 +559,10 @@ export const isAccountLoggedInOnDevice = (userId?: string | null, email?: string
     const raw = localStorage.getItem('viralhub_active_device_accounts_v1') || '[]';
     const list: string[] = JSON.parse(raw);
     const set = new Set(list.map(s => s.toLowerCase()));
-    if (userId && set.has(String(userId).toLowerCase())) return true;
+    if (userId) {
+      if (set.has(String(userId).toLowerCase())) return true;
+      if (set.has(toUuid(userId).toLowerCase())) return true;
+    }
     if (email && set.has(email.trim().toLowerCase())) return true;
   } catch {}
   return false;
@@ -3170,8 +3178,8 @@ export const supabaseDb = {
           type: (r.NotificationType as any) || 'like',
           actor,
           targetText,
-          timestamp: r.NotificationDate || new Date().toISOString(),
-          createdAt: r.NotificationDate || new Date().toISOString(),
+          timestamp: r.NotificationDate || '',
+          createdAt: r.NotificationDate || '',
           isUnread: !r.IsRead,
           videoId,
           requestId,

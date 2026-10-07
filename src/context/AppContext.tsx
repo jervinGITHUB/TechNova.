@@ -614,6 +614,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       markAccountLoggedInOnDevice(currentUser.id, currentUser.email);
     }
   }, []);
+
+  const currentUserRef = useRef<User | null>(currentUser);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
   const [isAuthLoading, setIsAuthLoading] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const hash = window.location.hash || '';
@@ -833,7 +838,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         appealSubmittedAt: banInfo.appealSubmittedAt,
       };
       const exists = saved.some(
-        s => isSameUser(s.id, current.id) || (s.email && current.email && s.email.toLowerCase() === current.email.toLowerCase())
+        s => isSameUser(s.id, current.id)
       );
       if (!exists) {
         const init = [patchedCurrent, ...saved];
@@ -858,7 +863,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setSavedAccounts(prev => {
       const filtered = prev.filter(
-        a => !isSameUser(a.id, acc.id) && (!acc.email || !a.email || a.email.toLowerCase() !== acc.email.toLowerCase())
+        a => !isSameUser(a.id, acc.id)
       );
       const next = [patchedAcc, ...filtered].slice(0, 5); // Device limit of 5 logged-in accounts
       storage.set('saved_accounts_v2', next);
@@ -877,9 +882,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Feed refresh trigger counter: incrementing this forces feed re-shuffle and reload
   const [feedRefreshKey, setFeedRefreshKey] = useState<number>(0);
-  const refreshFeed = () => {
+  const refreshFeed = (overrideUser?: User) => {
     setFeedRefreshKey(k => k + 1);
-    syncWithSupabase();
+    syncWithSupabase(overrideUser);
   };
 
   // Dynamic admin state (queried from Supabase Admin table or role)
@@ -1137,14 +1142,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Sync state with cloud Supabase database when connected
-  const syncWithSupabase = async () => {
+  const syncWithSupabase = async (overrideUser?: User) => {
     const config = getSupabaseConfig();
     setIsSupabaseConnected(config.isConnected);
     if (!config.isConnected) return;
 
+    const activeUser = overrideUser || currentUserRef.current || storage.get<User | null>('currentUser', null);
+
     try {
-      const convsPromise = currentUser?.id
-        ? supabaseDb.fetchConversationsAndMessages(currentUser.id)
+      const convsPromise = activeUser?.id
+        ? supabaseDb.fetchConversationsAndMessages(activeUser.id)
         : Promise.resolve(null);
 
       // Fetch users first, then pass to fetchVideos to eliminate redundant fetchUsers calls
@@ -1169,9 +1176,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // 1. Synchronize Users
       if (remoteUsers !== null) {
-        // Only log out if currentUser was explicitly deleted by an administrator
-        if (currentUser && !isAdmin) {
-          const isDeleted = isUserIdDeleted(currentUser.id, currentUser.email);
+        // Only log out if activeUser was explicitly deleted by an administrator
+        if (activeUser && !isAdmin) {
+          const isDeleted = isUserIdDeleted(activeUser.id, activeUser.email);
           if (isDeleted) {
             console.warn('Current account was deleted by administrator. Logging out session...');
             logout(false);
@@ -1179,17 +1186,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         }
 
-        // Ensure currentUser is always preserved in remoteUsers list if not deleted!
-        if (currentUser && !isUserIdDeleted(currentUser.id, currentUser.email)) {
+        // Ensure activeUser is always preserved in remoteUsers list if not deleted!
+        if (activeUser && !isUserIdDeleted(activeUser.id, activeUser.email)) {
           const inRemote = remoteUsers.some(
             u =>
-              isSameUser(u.id, currentUser.id) ||
-              (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase())
+              isSameUser(u.id, activeUser.id) ||
+              (activeUser.email && u.email && u.email.toLowerCase() === activeUser.email.toLowerCase())
           );
           if (!inRemote) {
-            remoteUsers.unshift(currentUser);
+            remoteUsers.unshift(activeUser);
             // Gently ensure they are recorded in database in the background without blocking
-            supabaseDb.upsertUser(currentUser).catch(() => {});
+            supabaseDb.upsertUser(activeUser).catch(() => {});
           }
         }
 
@@ -1214,17 +1221,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             };
           });
 
-          // Ensure currentUser is always preserved in saved accounts on this device
-          if (currentUser && !isUserIdDeleted(currentUser.id, currentUser.email)) {
+          // Ensure activeUser is always preserved in saved accounts on this device
+          if (activeUser && !isUserIdDeleted(activeUser.id, activeUser.email)) {
             const hasCurrent = updated.some(
               a =>
-                isSameUser(a.id, currentUser.id) ||
-                (currentUser.email && a.email && currentUser.email.toLowerCase() === a.email.toLowerCase())
+                isSameUser(a.id, activeUser.id) ||
+                (activeUser.email && a.email && activeUser.email.toLowerCase() === a.email.toLowerCase())
             );
             if (!hasCurrent) {
-              const curBanInfo = checkIsUserBanned(currentUser.id, currentUser.email, currentUser);
+              const curBanInfo = checkIsUserBanned(activeUser.id, activeUser.email, activeUser);
               updated.unshift({
-                ...currentUser,
+                ...activeUser,
                 isBanned: curBanInfo.isBanned,
                 banReason: curBanInfo.isBanned ? curBanInfo.banReason : undefined,
                 bannedAt: curBanInfo.isBanned ? curBanInfo.bannedAt : undefined,
@@ -1240,9 +1247,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return finalSaved;
         });
 
-        // 3. Set users to remoteUsers (authoritative, deduplicated, excluding any deleted users)
+        // 3. Set users to remoteUsers (authoritative, deduplicated by ID, excluding any deleted users)
           const userMap = new Map<string, User>();
-          const emailMap = new Map<string, string>(); // email -> id
 
           for (const u of remoteUsers) {
             if (isUserIdDeleted(u.id, u.email)) continue;
@@ -1257,38 +1263,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               appealSubmittedAt: banInfo.appealSubmittedAt,
             };
 
-            const emailKey = patchedUser.email ? patchedUser.email.trim().toLowerCase() : null;
-            if (emailKey && emailMap.has(emailKey)) {
-              const existingId = emailMap.get(emailKey)!;
-              const existing = userMap.get(existingId);
-              if (existing) {
-                if (patchedUser.role === 'admin' || existing.role !== 'admin') {
-                  existing.role = patchedUser.role === 'admin' ? 'admin' : existing.role;
-                }
-                if (patchedUser.isBanned) {
-                  existing.isBanned = true;
-                  existing.banReason = patchedUser.banReason || existing.banReason;
-                  existing.bannedAt = patchedUser.bannedAt || existing.bannedAt;
-                  existing.appealStatus = patchedUser.appealStatus || existing.appealStatus;
-                }
+            const existing = userMap.get(patchedUser.id) || (toUuid(patchedUser.id) !== patchedUser.id ? userMap.get(toUuid(patchedUser.id)) : undefined);
+            if (existing) {
+              if (patchedUser.role === 'admin' || existing.role !== 'admin') {
+                existing.role = patchedUser.role === 'admin' ? 'admin' : existing.role;
               }
-              continue; // Deduplicate
+              if (patchedUser.isBanned) {
+                existing.isBanned = true;
+                existing.banReason = patchedUser.banReason || existing.banReason;
+                existing.bannedAt = patchedUser.bannedAt || existing.bannedAt;
+                existing.appealStatus = patchedUser.appealStatus || existing.appealStatus;
+              }
+              continue;
             }
             userMap.set(patchedUser.id, patchedUser);
-            if (emailKey) emailMap.set(emailKey, patchedUser.id);
           }
 
           const nextUsers = Array.from(userMap.values());
           setUsers(nextUsers);
           storage.set('users', nextUsers);
 
-          // 4. Synchronize currentUser ban status so user stays locked on BannedAccountView!
-          if (currentUser) {
+          // 4. Synchronize activeUser ban and profile status
+          // CRITICAL: Verify that the user did not switch accounts during this in-flight fetch!
+          const currentActiveOnDevice = currentUserRef.current || storage.get<User | null>('currentUser', null);
+          if (activeUser && currentActiveOnDevice && isSameUser(currentActiveOnDevice.id, activeUser.id)) {
             const freshMe = nextUsers.find(
-              u =>
-                isSameUser(u.id, currentUser.id) ||
-                (currentUser.email && u.email && u.email.toLowerCase() === currentUser.email.toLowerCase()) ||
-                (currentUser.username && u.username && u.username.toLowerCase() === currentUser.username.toLowerCase())
+              u => isSameUser(u.id, activeUser.id)
             );
             // Supabase is the single authoritative source of truth for ban and unban status!
             let finalIsBanned = false;
@@ -1304,9 +1304,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               finalBannedAt = finalIsBanned ? freshMe.bannedAt : undefined;
             } else {
               const banInfo = checkIsUserBanned(
-                currentUser.id,
-                currentUser.email,
-                currentUser
+                activeUser.id,
+                activeUser.email,
+                activeUser
               );
               finalIsBanned = banInfo.isBanned;
               finalAppealStatus = banInfo.appealStatus;
@@ -1315,24 +1315,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
 
             if (!finalIsBanned) {
-              recordUserUnban(currentUser.id, currentUser.email, currentUser.username);
+              recordUserUnban(activeUser.id, activeUser.email, activeUser.username);
             }
 
+            const targetRole = (freshMe?.role === 'admin' || currentActiveOnDevice.role === 'admin') ? 'admin' : (freshMe?.role || currentActiveOnDevice.role || 'creator');
+
             if (
-              finalIsBanned !== currentUser.isBanned ||
-              finalAppealStatus !== currentUser.appealStatus ||
-              (freshMe && (freshMe.displayName !== currentUser.displayName || freshMe.avatar !== currentUser.avatar))
+              finalIsBanned !== currentActiveOnDevice.isBanned ||
+              finalAppealStatus !== currentActiveOnDevice.appealStatus ||
+              targetRole !== currentActiveOnDevice.role ||
+              (freshMe && (freshMe.displayName !== currentActiveOnDevice.displayName || freshMe.avatar !== currentActiveOnDevice.avatar))
             ) {
               const updatedCurr: User = {
-                ...currentUser,
+                ...currentActiveOnDevice,
                 ...(freshMe || {}),
+                id: currentActiveOnDevice.id, // Strictly preserve active account ID
+                email: currentActiveOnDevice.email || freshMe?.email || '',
+                role: targetRole,
                 isBanned: finalIsBanned,
                 banReason: finalBanReason,
                 bannedAt: finalBannedAt,
                 appealStatus: finalAppealStatus,
-                appealReason: freshMe?.appealReason || (finalIsBanned ? currentUser.appealReason : undefined),
-                appealSubmittedAt: freshMe?.appealSubmittedAt || (finalIsBanned ? currentUser.appealSubmittedAt : undefined),
+                appealReason: freshMe?.appealReason || (finalIsBanned ? currentActiveOnDevice.appealReason : undefined),
+                appealSubmittedAt: freshMe?.appealSubmittedAt || (finalIsBanned ? currentActiveOnDevice.appealSubmittedAt : undefined),
               };
+              currentUserRef.current = updatedCurr;
               setCurrentUser(updatedCurr);
               storage.set('currentUser', updatedCurr);
             }
@@ -1382,16 +1389,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (remoteConvs.length === 0) {
           setConversations([]);
           storage.set('conversations', []);
-        } else if (currentUser) {
+        } else if (activeUser) {
           setConversations(prev => {
             const remoteMapped: Conversation[] = remoteConvs.map((rc: any) => {
-              const partnerId = isSameUser(rc.userAId, currentUser.id)
+              const partnerId = isSameUser(rc.userAId, activeUser.id)
                 ? rc.userBId
                 : rc.userAId;
 
               const existingConv = prev.find(c => {
                 if (c.id === rc.id || toUuid(c.id) === toUuid(rc.id)) return true;
-                const pId = c.participantIds?.find(id => !isSameUser(id, currentUser.id)) || c.participant?.id;
+                const pId = c.participantIds?.find(id => !isSameUser(id, activeUser.id)) || c.participant?.id;
                 return isSameUser(pId, partnerId);
               });
 
@@ -1414,7 +1421,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               let remoteClearTime = 0;
               if (rc.clearedHistory && typeof rc.clearedHistory === 'object') {
                 for (const [k, v] of Object.entries(rc.clearedHistory)) {
-                  if (isSameUser(k, currentUser.id)) {
+                  if (isSameUser(k, activeUser.id)) {
                     const ms = toTimestampMillis(v as any);
                     if (ms > remoteClearTime) remoteClearTime = ms;
                   }
@@ -1423,25 +1430,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               const clearTime = Math.max(
                 remoteClearTime,
-                getConversationClearedTimestamp(rc.id, currentUser.id),
-                getConversationClearedTimestamp(toUuid(rc.id), currentUser.id),
-                toTimestampMillis(existingConv?.clearedHistoryAt?.[currentUser.id]),
-                toTimestampMillis(existingConv?.clearedHistoryAt?.[toUuid(currentUser.id)]),
+                getConversationClearedTimestamp(rc.id, activeUser.id),
+                getConversationClearedTimestamp(toUuid(rc.id), activeUser.id),
+                toTimestampMillis(existingConv?.clearedHistoryAt?.[activeUser.id]),
+                toTimestampMillis(existingConv?.clearedHistoryAt?.[toUuid(activeUser.id)]),
                 0
               );
 
               // Persist cleared timestamp locally on this device so subsequent loads respect it
               if (clearTime > 0) {
-                setConversationClearedTimestamp(rc.id, currentUser.id, clearTime);
+                setConversationClearedTimestamp(rc.id, activeUser.id, clearTime);
                 const convCanonical = toUuid(rc.id);
                 if (convCanonical && convCanonical !== rc.id) {
-                  setConversationClearedTimestamp(convCanonical, currentUser.id, clearTime);
+                  setConversationClearedTimestamp(convCanonical, activeUser.id, clearTime);
                 }
               }
 
               const rawMessages = rc.rawMessages || [];
               const parsedMessages: Message[] = rawMessages.map((m: any) => {
-                const isMine = isSameUser(m.SenderUserID, currentUser.id);
+                const isMine = isSameUser(m.SenderUserID, activeUser.id);
                 let msgContent = m.MessageContent || '';
                 let sharedVideoId: string | undefined = undefined;
 
@@ -1460,16 +1467,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 );
                 let deletedFor = [...(matchedExistingMsg?.deletedForUserIds || [])];
 
-                // If conversation was cleared before or at this message's sentAt time, hide it for currentUser
+                // If conversation was cleared before or at this message's sentAt time, hide it for activeUser
                 if (clearTime > 0) {
                   const sentTime = toTimestampMillis(m.SentAt);
                   if (sentTime > 0 && sentTime <= clearTime) {
-                    if (!deletedFor.some(id => isSameUser(id, currentUser.id))) {
-                      deletedFor.push(currentUser.id);
+                    if (!deletedFor.some(id => isSameUser(id, activeUser.id))) {
+                      deletedFor.push(activeUser.id);
                     }
                   } else if (!m.SentAt) {
-                    if (!deletedFor.some(id => isSameUser(id, currentUser.id))) {
-                      deletedFor.push(currentUser.id);
+                    if (!deletedFor.some(id => isSameUser(id, activeUser.id))) {
+                      deletedFor.push(activeUser.id);
                     }
                   }
                 }
@@ -1507,7 +1514,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               // Filter out messages that are deleted for this user
               const visibleMsgs = allMsgs.filter(m => {
-                if (m.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) return false;
+                if (m.deletedForUserIds?.some(id => isSameUser(id, activeUser.id))) return false;
                 if (clearTime > 0) {
                   const sentTime = toTimestampMillis(m.sentAt);
                   if (sentTime > 0 && sentTime <= clearTime) return false;
@@ -1524,13 +1531,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               // Check if any incoming message from the partner arrived after clearTime (auto-unhide)
               const hasNewIncomingMsg = visibleMsgs.some(pm =>
-                !isSameUser(pm.senderId, currentUser.id) &&
+                !isSameUser(pm.senderId, activeUser.id) &&
                 (!clearTime || (toTimestampMillis(pm.sentAt) > clearTime))
               );
 
               let convDeletedForUserIds = [...(existingConv?.deletedForUserIds || [])];
               if (hasNewIncomingMsg) {
-                convDeletedForUserIds = convDeletedForUserIds.filter(id => !isSameUser(id, currentUser.id));
+                convDeletedForUserIds = convDeletedForUserIds.filter(id => !isSameUser(id, activeUser.id));
               }
 
               // Normalize clearedHistoryAt to purely numbers so Math.max never evaluates to NaN!
@@ -1551,13 +1558,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
               }
               if (clearTime > 0) {
-                normalizedClearedHistory[currentUser.id] = clearTime;
-                normalizedClearedHistory[toUuid(currentUser.id)] = clearTime;
+                normalizedClearedHistory[activeUser.id] = clearTime;
+                normalizedClearedHistory[toUuid(activeUser.id)] = clearTime;
               }
 
               return {
                 id: rc.id,
-                participantIds: [currentUser.id, partnerId],
+                participantIds: [activeUser.id, partnerId],
                 participant: partnerUser,
                 lastMessage: lastVisible
                   ? (lastVisible.sharedVideo ? '🎥 Shared a video' : lastVisible.text)
@@ -1574,15 +1581,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             // Retain any purely local conversations that don't match any remote partner
             const remainingLocal = prev.filter(lc => {
-              const localPartnerId = lc.participantIds?.find(id => !isSameUser(id, currentUser.id)) || lc.participant?.id;
+              const localPartnerId = lc.participantIds?.find(id => !isSameUser(id, activeUser.id)) || lc.participant?.id;
               return !remoteMapped.some(rc => {
-                const remotePartnerId = rc.participantIds?.find(id => !isSameUser(id, currentUser.id)) || rc.participant?.id;
+                const remotePartnerId = rc.participantIds?.find(id => !isSameUser(id, activeUser.id)) || rc.participant?.id;
                 return isSameUser(localPartnerId, remotePartnerId) || rc.id === lc.id || toUuid(rc.id) === toUuid(lc.id);
               });
             });
 
             const combined = [...remoteMapped, ...remainingLocal];
-            const deduped = deduplicateConversations(combined, currentUser.id);
+            const deduped = deduplicateConversations(combined, activeUser.id);
             storage.set('conversations', deduped);
             return deduped;
           });
@@ -1632,36 +1639,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           const readIds = getReadNotificationIds();
 
-          // Check for new notifications to trigger in-app popup across devices!
-          if (currentUser) {
-            const userRecip = remoteNotifications.filter(n => {
-              const isForMe =
-                n.recipientId === currentUser.id ||
-                toUuid(n.recipientId) === toUuid(currentUser.id) ||
-                (currentUser.email && n.recipientEmail && currentUser.email.toLowerCase() === n.recipientEmail.toLowerCase());
-              const notFromMe = n.actor.id !== currentUser.id && toUuid(n.actor.id) !== toUuid(currentUser.id);
-              return isForMe && notFromMe && n.isUnread;
-            });
-
-            // If initial sync has been performed, any new unread notification that we haven't seen pops up!
-            if (initialNotifSyncDoneRef.current) {
-              for (const n of userRecip) {
-                if (!knownNotificationIdsRef.current.has(n.id)) {
-                  setActiveNotificationPopup(n);
-                  break;
-                }
+          if (activeUser) {
+            // Always register all remote notifications in known set so they never trigger toasts
+            remoteNotifications.forEach(n => {
+              if (n.id) {
+                knownNotificationIdsRef.current.add(n.id);
+                knownNotificationIdsRef.current.add(toUuid(n.id));
               }
-            }
-
-            // Update known set
-            remoteNotifications.forEach(n => knownNotificationIdsRef.current.add(n.id));
+            });
             initialNotifSyncDoneRef.current = true;
 
             // Also populate followRequests from incoming follow_request notifications
             const incomingFollowReqs = remoteNotifications.filter(
               n =>
                 n.type === 'follow_request' &&
-                (isSameUser(n.recipientId, currentUser.id) || (currentUser.email && n.recipientEmail && currentUser.email.toLowerCase() === n.recipientEmail.toLowerCase())) &&
+                isSameUser(n.recipientId, activeUser.id) &&
                 n.requestId &&
                 n.status !== 'accepted' &&
                 n.status !== 'confirmed' &&
@@ -1673,7 +1665,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setFollowRequests(incomingFollowReqs.map(n => ({
               id: n.requestId!,
               fromUserId: n.actor.id,
-              toUserId: currentUser.id,
+              toUserId: activeUser.id,
               timestamp: n.createdAt || n.timestamp || new Date().toISOString(),
             })));
             storage.set('follow_requests_v2', incomingFollowReqs);
@@ -1888,12 +1880,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const isLoggedOut = typeof window !== 'undefined' && sessionStorage.getItem('viralhub_user_logged_out') === 'true';
       const activeStored = storage.get<User | null>('currentUser', null);
       if (session?.user && (!isLoggedOut || isExplicitOAuth)) {
-        if (isInitialOAuth || !activeStored || !currentUser) {
+        if (isInitialOAuth || !activeStored) {
           if (typeof window !== 'undefined') {
             sessionStorage.removeItem('viralhub_user_logged_out');
             sessionStorage.removeItem('viralhub_oauth_in_progress');
             localStorage.removeItem('viralhub_oauth_in_progress');
           }
+          handleSupabaseUserSession(session.user).finally(() => {
+            setIsAuthLoading(false);
+            clearTimeout(safetyTimer);
+          });
+          return;
+        } else if (activeStored && (activeStored.id === session.user.id || toUuid(activeStored.id) === toUuid(session.user.id))) {
           handleSupabaseUserSession(session.user).finally(() => {
             setIsAuthLoading(false);
             clearTimeout(safetyTimer);
@@ -1931,23 +1929,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return;
           }
 
-          // If user is not yet logged in on screen (on AuthPage), ALWAYS log in!
-          if (!activeStored || !currentUser) {
+          // If user is not yet logged in on screen (on AuthPage), log in with session
+          if (!activeStored) {
             await handleSupabaseUserSession(session.user);
             setIsAuthLoading(false);
             clearTimeout(safetyTimer);
             return;
           }
 
-          // If there is an active user currently in storage, check if this event belongs to them
-          const isSameUser =
+          // Strictly match by user ID so account switches to secondary accounts are never overwritten
+          const isSame =
             activeStored.id === session.user.id ||
-            toUuid(activeStored.id) === toUuid(session.user.id) ||
-            (activeStored.email &&
-              session.user.email &&
-              activeStored.email.trim().toLowerCase() === session.user.email.trim().toLowerCase());
+            toUuid(activeStored.id) === toUuid(session.user.id);
 
-          if (isSameUser) {
+          if (isSame) {
             await handleSupabaseUserSession(session.user);
           }
           setIsAuthLoading(false);
@@ -1957,11 +1952,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (session?.user) {
           const isExplicitOAuth = checkIsOAuthRedirect();
           const activeStored = storage.get<User | null>('currentUser', null);
-          if (isExplicitOAuth || !activeStored || !currentUser) {
+          if (isExplicitOAuth || !activeStored) {
             if (typeof window !== 'undefined') {
               sessionStorage.removeItem('viralhub_oauth_in_progress');
               localStorage.removeItem('viralhub_oauth_in_progress');
             }
+            await handleSupabaseUserSession(session.user);
+            setIsAuthLoading(false);
+            clearTimeout(safetyTimer);
+          } else if (activeStored && (activeStored.id === session.user.id || toUuid(activeStored.id) === toUuid(session.user.id))) {
             await handleSupabaseUserSession(session.user);
             setIsAuthLoading(false);
             clearTimeout(safetyTimer);
@@ -2133,14 +2132,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const parsedNotifs = JSON.parse(e.newValue) as NotificationItem[];
             if (Array.isArray(parsedNotifs)) {
               setNotifications(parsedNotifs);
+              const now = Date.now();
               const newForMe = parsedNotifs.find(n => {
-                const isForMe =
-                  n.recipientId === currentUser.id || toUuid(n.recipientId) === toUuid(currentUser.id);
-                const notFromMe = n.actor?.id !== currentUser.id;
-                return isForMe && notFromMe && n.isUnread && !knownNotificationIdsRef.current.has(n.id);
+                const isForMe = isSameUser(n.recipientId, currentUser.id);
+                const notFromMe = !isSameUser(n.actor?.id, currentUser.id);
+                const t = toTimestampMillis(n.timestamp || n.createdAt);
+                const notifAgeMs = now - t;
+                return isForMe && notFromMe && n.isUnread && t > 0 && notifAgeMs >= 0 && notifAgeMs < 60000 && !knownNotificationIdsRef.current.has(n.id) && !knownNotificationIdsRef.current.has(toUuid(n.id));
               });
               if (newForMe) {
                 knownNotificationIdsRef.current.add(newForMe.id);
+                if (newForMe.id) knownNotificationIdsRef.current.add(toUuid(newForMe.id));
                 setActiveNotificationPopup(newForMe);
               }
             }
@@ -2193,15 +2195,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 supabaseDb.fetchNotifications().then(notifs => {
                   if (notifs) {
                     setNotifications(notifs);
-                    const newForMe = notifs.find(
-                      n =>
+                    const now = Date.now();
+                    const newForMe = notifs.find(n => {
+                      const t = toTimestampMillis(n.timestamp || n.createdAt);
+                      const notifAgeMs = now - t;
+                      return (
                         n.isUnread &&
                         isSameUser(n.recipientId, currentUser.id) &&
                         !isSameUser(n.actor?.id, currentUser.id) &&
-                        !knownNotificationIdsRef.current.has(n.id)
-                    );
+                        t > 0 &&
+                        notifAgeMs >= 0 &&
+                        notifAgeMs < 60000 &&
+                        !knownNotificationIdsRef.current.has(n.id) &&
+                        !knownNotificationIdsRef.current.has(toUuid(n.id))
+                      );
+                    });
                     if (newForMe) {
                       knownNotificationIdsRef.current.add(newForMe.id);
+                      if (newForMe.id) knownNotificationIdsRef.current.add(toUuid(newForMe.id));
                       setActiveNotificationPopup(newForMe);
                     }
                   }
@@ -2292,6 +2303,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             .on('broadcast', { event: 'chat_message' }, ({ payload }: any) => {
               if (!payload || !currentUser) return;
               if (!isSameUser(payload.recipientId, currentUser.id)) return;
+              if (isSameUser(payload.senderId, currentUser.id)) return;
 
               const convId = payload.conversationId;
               const senderId = payload.senderId;
@@ -2387,28 +2399,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 return deduped;
               });
 
-              // Trigger in-app notification popup for new message
-              const senderUser = users.find(u => isSameUser(u.id, senderId)) || payload.sender || {
-                id: senderId,
-                username: 'user',
-                displayName: 'Someone',
-                avatar: '',
-              };
-              setActiveNotificationPopup({
-                id: `chat_notif_${Date.now()}`,
-                recipientId: currentUser.id,
-                type: 'message',
-                actor: {
+              // Trigger in-app notification popup for new message only if user is not currently viewing this conversation
+              const isLookingAtThisChat = activeTab === 'messages' && (
+                activeConversationId === convId ||
+                toUuid(activeConversationId || '') === toUuid(convId)
+              );
+              const msgAge = Date.now() - toTimestampMillis(incomingMsg.sentAt);
+              if (!isLookingAtThisChat && !isSameUser(senderId, currentUser.id) && msgAge >= 0 && msgAge < 60000) {
+                const senderUser = users.find(u => isSameUser(u.id, senderId)) || payload.sender || {
                   id: senderId,
-                  username: senderUser.username || 'user',
-                  displayName: senderUser.displayName || 'User',
-                  avatar: senderUser.avatar || '',
-                },
-                targetText: payload.text.length > 50 ? `${payload.text.slice(0, 50)}...` : payload.text,
-                timestamp: new Date().toISOString(),
-                createdAt: new Date().toISOString(),
-                isUnread: true,
-              });
+                  username: 'user',
+                  displayName: 'Someone',
+                  avatar: '',
+                };
+                setActiveNotificationPopup({
+                  id: `chat_notif_${Date.now()}`,
+                  recipientId: currentUser.id,
+                  type: 'message',
+                  actor: {
+                    id: senderId,
+                    username: senderUser.username || 'user',
+                    displayName: senderUser.displayName || 'User',
+                    avatar: senderUser.avatar || '',
+                  },
+                  targetText: payload.text.length > 50 ? `${payload.text.slice(0, 50)}...` : payload.text,
+                  timestamp: new Date().toISOString(),
+                  createdAt: new Date().toISOString(),
+                  isUnread: true,
+                });
+              }
             })
             .on('broadcast', { event: 'conversation_deleted' }, ({ payload }: any) => {
               if (!payload || !currentUser) return;
@@ -3108,6 +3127,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Clear active session
+    currentUserRef.current = null;
     setCurrentUser(null);
     storage.remove('currentUser');
     setActiveConversationId(null);
@@ -3119,12 +3139,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const quickLoginAs = (userId: string) => {
     let target =
-      users.find(u => u.id === userId) ||
-      savedAccounts.find(u => u.id === userId);
+      users.find(u => isSameUser(u.id, userId)) ||
+      savedAccounts.find(u => isSameUser(u.id, userId));
 
     if (!target) {
       const matchedAdmin = admins.find(
-        a => a.adminId === userId || a.userId === userId || (a.email && a.email.toLowerCase() === userId.toLowerCase())
+        a => isSameUser(a.adminId, userId) || isSameUser(a.userId, userId) || (a.email && a.email.toLowerCase() === userId.toLowerCase())
       );
       if (matchedAdmin) {
         target = {
@@ -3154,8 +3174,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       rawRole === 'administrator' ||
       rawRole === 'content moderator' ||
       admins.some(a =>
-        (a.userId && a.userId === target.id) ||
-        (a.adminId && a.adminId === target.id) ||
+        isSameUser(a.userId, target.id) ||
+        isSameUser(a.adminId, target.id) ||
         (a.email && target.email && a.email.toLowerCase() === target.email.toLowerCase()) ||
         (a.username && target.username && a.username.toLowerCase() === target.username.toLowerCase())
       );
@@ -3172,25 +3192,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       appealSubmittedAt: banInfo.appealSubmittedAt,
     };
 
+    currentUserRef.current = updatedTarget;
     setCurrentUser(updatedTarget);
     storage.set('currentUser', updatedTarget);
     setIsAdmin(isTargetAdmin);
     recordSavedAccount(updatedTarget);
     markAccountLoggedInOnDevice(updatedTarget.id, updatedTarget.email);
 
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('viralhub_active_user_id', updatedTarget.id);
+      localStorage.setItem('viralhub_active_user_id', updatedTarget.id);
+      sessionStorage.removeItem('viralhub_user_logged_out');
+      sessionStorage.removeItem('viralhub_oauth_in_progress');
+      localStorage.removeItem('viralhub_oauth_in_progress');
+    }
+
+    // Seed existing notifications as known so switching accounts never pops up old toasts
+    notifications.forEach(n => {
+      if (n.id) {
+        knownNotificationIdsRef.current.add(n.id);
+        knownNotificationIdsRef.current.add(toUuid(n.id));
+      }
+    });
+
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setSelectedUserId(null);
 
-    // Refresh feed and shuffle
-    refreshFeed();
+    // Refresh feed directly with updatedTarget so syncWithSupabase uses new user!
+    refreshFeed(updatedTarget);
 
     // Also verify remote admin asynchronously in case not cached
     if (!isTargetAdmin && updatedTarget.email) {
       supabaseDb.checkIsAdmin(updatedTarget).then(remoteAdmin => {
         if (remoteAdmin) {
           setIsAdmin(true);
-          setCurrentUser(prev => (prev?.id === updatedTarget.id ? { ...prev, role: 'admin' } : prev));
+          setCurrentUser(prev => (prev && isSameUser(prev.id, updatedTarget.id) ? { ...prev, role: 'admin' } : prev));
         }
       }).catch(() => {});
     }
@@ -3201,6 +3238,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       markAccountLoggedInOnDevice(currentUser.id, currentUser.email);
       recordSavedAccount(currentUser);
     }
+    currentUserRef.current = null;
     setCurrentUser(null);
     storage.remove('currentUser');
     setAuthView('login');
@@ -4434,6 +4472,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? getDirectConversationId(currentUser?.id, recipientId)
       : convId;
 
+    const nowIso = new Date().toISOString();
     const displayText = text.trim() || (sharedVideo ? `Shared a video: "${sharedVideo.caption}"` : '');
     const newMsg: Message = {
       id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
@@ -4441,6 +4480,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderId: currentUser ? currentUser.id : 'unknown',
       text: displayText,
       timestamp: 'Today, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      sentAt: nowIso,
       isMine: true,
       status: 'sent',
       replyTo,
@@ -4540,11 +4580,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           createdAt: nowIso,
           isUnread: true,
         };
-        setNotifications(prev => {
-          const next = [msgNotif, ...prev];
-          storage.set('notifications', next);
-          return next;
-        });
+        knownNotificationIdsRef.current.add(msgNotif.id);
+        if (msgNotif.id) knownNotificationIdsRef.current.add(toUuid(msgNotif.id));
         supabaseDb.insertNotification(msgNotif, recipientId);
       }
     }

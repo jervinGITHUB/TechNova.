@@ -11,32 +11,16 @@
 export const formatRealtimeAgo = (timestampOrDate?: string | number | null): string => {
   if (!timestampOrDate) return 'Just now';
 
-  let date: Date;
-  if (typeof timestampOrDate === 'number') {
-    date = new Date(timestampOrDate);
-  } else {
-    const str = String(timestampOrDate).trim();
-    if (str.toLowerCase() === 'just now') {
-      return 'Just now';
-    }
-    // If it's an ISO timestamp from PostgreSQL / Supabase without timezone suffix, force UTC 'Z'
-    let parseTarget = str;
-    if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(parseTarget)) {
-      parseTarget = parseTarget.replace(' ', 'T');
-      if (!parseTarget.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(parseTarget)) {
-        parseTarget += 'Z';
-      }
-    }
-    // If it's already a relative format like "2m ago" or "5h ago" and invalid as Date, return as-is
-    const parsed = new Date(parseTarget);
-    if (isNaN(parsed.getTime())) {
-      return str;
-    }
-    date = parsed;
+  const str = typeof timestampOrDate === 'string' ? timestampOrDate.trim() : '';
+  if (str.toLowerCase() === 'just now') return 'Just now';
+
+  const millis = toTimestampMillis(timestampOrDate);
+  if (!millis || millis <= 0) {
+    return str || 'Just now';
   }
 
   const now = Date.now();
-  const diffMs = Math.max(0, now - date.getTime());
+  const diffMs = Math.max(0, now - millis);
   const diffSec = Math.floor(diffMs / 1000);
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
@@ -58,12 +42,13 @@ export const formatRealtimeAgo = (timestampOrDate?: string | number | null): str
   if (diffWeek < 4) {
     return `${diffWeek}w ago`;
   }
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return new Date(millis).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 };
 
 /**
- * Safely parses any timestamp (ISO string, Postgres timestamp, or milliseconds)
- * into a valid UTC epoch millisecond number. Guarantees never returning NaN.
+ * Safely parses any timestamp (ISO string, Postgres timestamptz, "Today, 10:30 PM",
+ * "Yesterday, 8:45 PM", or epoch milliseconds) into a valid UTC epoch millisecond number.
+ * Guarantees never returning NaN.
  */
 export const toTimestampMillis = (timestampOrDate?: string | number | null): number => {
   if (!timestampOrDate) return 0;
@@ -71,16 +56,44 @@ export const toTimestampMillis = (timestampOrDate?: string | number | null): num
     return isNaN(timestampOrDate) ? 0 : timestampOrDate;
   }
   const str = String(timestampOrDate).trim();
-  if (!str || str.toLowerCase() === 'just now') return 0;
+  if (!str) return 0;
+  if (str.toLowerCase() === 'just now') return Date.now();
 
-  let parseTarget = str;
-  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}/.test(parseTarget)) {
-    parseTarget = parseTarget.replace(' ', 'T');
-    if (!parseTarget.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(parseTarget)) {
+  // Handle "Today, 8:45 PM" or "Today 20:45"
+  if (/^today/i.test(str)) {
+    const timePart = str.replace(/^today,?\s*/i, '').trim();
+    const d = new Date();
+    if (timePart) {
+      const parsed = new Date(`${d.toDateString()} ${timePart}`);
+      if (!isNaN(parsed.getTime())) return parsed.getTime();
+    }
+    return d.getTime();
+  }
+
+  // Handle "Yesterday, 8:45 PM" or "Yesterday"
+  if (/^yesterday/i.test(str)) {
+    const timePart = str.replace(/^yesterday,?\s*/i, '').trim();
+    const d = new Date(Date.now() - 86400000);
+    if (timePart) {
+      const parsed = new Date(`${d.toDateString()} ${timePart}`);
+      if (!isNaN(parsed.getTime())) return parsed.getTime();
+    }
+    return d.getTime();
+  }
+
+  // Normalize Postgres timestamps (e.g. "2026-10-06 14:30:00.123456+00" or space separated)
+  let parseTarget = str.replace(' ', 'T');
+  // Fix 2-digit timezone offset at end (e.g. +00 or -05)
+  parseTarget = parseTarget.replace(/([+-]\d{2})$/, '$1:00');
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(parseTarget)) {
+    if (!parseTarget.endsWith('Z') && !/[+-]\d{2}:\d{2}$/.test(parseTarget)) {
       parseTarget += 'Z';
     }
   }
 
   const parsed = new Date(parseTarget).getTime();
-  return isNaN(parsed) ? 0 : parsed;
+  if (!isNaN(parsed)) return parsed;
+
+  const direct = new Date(str).getTime();
+  return isNaN(direct) ? 0 : direct;
 };
