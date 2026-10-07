@@ -73,6 +73,7 @@ export const deduplicateMessages = (messages: Message[]): Message[] => {
     if (!m) continue;
     const cleanText = (m.text || '').trim();
     const mTime = toTimestampMillis(m.sentAt);
+    const mVidId = m.sharedVideoId || m.sharedVideo?.id;
 
     const isDup = result.some(existing => {
       // 1. Direct ID match
@@ -80,7 +81,25 @@ export const deduplicateMessages = (messages: Message[]): Message[] => {
         return true;
       }
 
-      // 2. Exact same sender + exact same text
+      // 2. Shared video match (same sender + same shared video ID)
+      const exVidId = existing.sharedVideoId || existing.sharedVideo?.id;
+      if (
+        mVidId &&
+        exVidId &&
+        (mVidId === exVidId || toUuid(mVidId) === toUuid(exVidId)) &&
+        isSameUser(existing.senderId, m.senderId)
+      ) {
+        const exTime = toTimestampMillis(existing.sentAt);
+        if (mTime > 0 && exTime > 0) {
+          if (Math.abs(mTime - exTime) < 5 * 60 * 1000) {
+            return true;
+          }
+        } else {
+          return true;
+        }
+      }
+
+      // 3. Exact same sender + exact same text
       if (
         cleanText &&
         cleanText === (existing.text || '').trim() &&
@@ -109,6 +128,8 @@ export const deduplicateMessages = (messages: Message[]): Message[] => {
       // If the incoming message is confirmed from Supabase, prefer it over a temporary local optimistic message
       const idx = result.findIndex(existing => {
         if (existing.id && m.id && (existing.id === m.id || toUuid(existing.id) === toUuid(m.id))) return true;
+        const exVidId = existing.sharedVideoId || existing.sharedVideo?.id;
+        if (mVidId && exVidId && (mVidId === exVidId || toUuid(mVidId) === toUuid(exVidId)) && isSameUser(existing.senderId, m.senderId)) return true;
         if (cleanText && cleanText === (existing.text || '').trim() && isSameUser(existing.senderId, m.senderId)) return true;
         return false;
       });
@@ -116,9 +137,14 @@ export const deduplicateMessages = (messages: Message[]): Message[] => {
         const existing = result[idx];
         const isMRemote = m.sentAt && isUuid(m.id);
         const isExistingLocal = existing.id && (existing.id.startsWith('m_') || existing.id.startsWith('msg_'));
-        if (isMRemote && isExistingLocal) {
-          result[idx] = m;
-        }
+        // Merge so we preserve the richer sharedVideo and metadata
+        result[idx] = {
+          ...existing,
+          ...(isMRemote && isExistingLocal ? m : {}),
+          sharedVideo: m.sharedVideo || existing.sharedVideo,
+          sharedVideoId: m.sharedVideoId || existing.sharedVideoId || mVidId,
+          deletedForUserIds: Array.from(new Set([...(existing.deletedForUserIds || []), ...(m.deletedForUserIds || [])])),
+        };
       }
     }
   }
@@ -1473,6 +1499,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 lm => !parsedMessages.some(pm =>
                   pm.id === lm.id ||
                   toUuid(pm.id) === toUuid(lm.id) ||
+                  ((pm.sharedVideoId || pm.sharedVideo?.id) && (pm.sharedVideoId || pm.sharedVideo?.id) === (lm.sharedVideoId || lm.sharedVideo?.id) && isSameUser(pm.senderId, lm.senderId)) ||
                   (pm.text.trim() === lm.text.trim() && isSameUser(pm.senderId, lm.senderId))
                 )
               );
@@ -2295,10 +2322,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
                   if (isThisConv) {
                     matched = true;
+                    const inVidId = incomingMsg.sharedVideoId || incomingMsg.sharedVideo?.id;
                     const exists = c.messages.some(
                       m =>
                         m.id === incomingMsg.id ||
                         toUuid(m.id) === toUuid(incomingMsg.id) ||
+                        (inVidId && (m.sharedVideoId || m.sharedVideo?.id) === inVidId && isSameUser(m.senderId, incomingMsg.senderId)) ||
                         (m.text.trim() === incomingMsg.text.trim() && isSameUser(m.senderId, incomingMsg.senderId))
                     );
                     const newMessages = exists ? c.messages : deduplicateMessages([...c.messages, incomingMsg]);
@@ -4429,7 +4458,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             id: canonicalConvId,
             lastMessage: sharedVideo ? `🎥 Shared a video: "${sharedVideo.caption.slice(0, 25)}"` : text.trim(),
             lastMessageTime: 'Today, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            messages: [...c.messages, newMsg],
+            messages: deduplicateMessages([...c.messages, newMsg]),
             deletedForUserIds: (c.deletedForUserIds || []).filter(
               id => !isSameUser(id, currentUser?.id) && !isSameUser(id, recipientId)
             ),
@@ -4474,7 +4503,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               text: displayText,
               timestamp: newMsg.timestamp,
               sentAt: new Date().toISOString(),
-              sharedVideo: sharedVideo ? { id: sharedVideo.id, caption: sharedVideo.caption, mediaUrl: sharedVideo.mediaUrl } : undefined,
+              sharedVideo: sharedVideo
+                ? {
+                    ...sharedVideo,
+                    creator: sharedVideo.creator || currentUser,
+                  }
+                : undefined,
               sender: {
                 id: currentUser.id,
                 username: currentUser.username,

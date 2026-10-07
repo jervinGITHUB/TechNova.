@@ -50,10 +50,30 @@ export const resolveConversationClearTime = (
 
 const resolveSharedVideo = (
   msg: Message,
-  allVideos: Video[]
+  allVideos: Video[],
+  users: User[] = []
 ): { isVideo: boolean; video?: Video; note?: string } => {
+  const vidId = msg.sharedVideoId || msg.sharedVideo?.id;
+  const foundInAll = vidId
+    ? allVideos.find(v => v.id === vidId || toUuid(v.id) === toUuid(vidId))
+    : undefined;
+
   if (msg.sharedVideo) {
-    return { isVideo: true, video: msg.sharedVideo, note: msg.text };
+    let vid: Video = {
+      ...(foundInAll || {}),
+      ...msg.sharedVideo,
+    };
+    // Ensure creator is real and not placeholder
+    if (!vid.creator || !vid.creator.username || vid.creator.username === 'creator') {
+      const creatorUser =
+        foundInAll?.creator ||
+        users.find(u => u.id === vid.creatorId || toUuid(u.id) === toUuid(vid.creatorId)) ||
+        users.find(u => isSameUser(u.id, msg.senderId));
+      if (creatorUser) {
+        vid = { ...vid, creator: creatorUser };
+      }
+    }
+    return { isVideo: true, video: vid, note: msg.text };
   }
 
   // Check marker: [VIDEO_SHARE:<id>] note
@@ -61,8 +81,16 @@ const resolveSharedVideo = (
   if (markerMatch) {
     const videoId = markerMatch[1].trim();
     const note = markerMatch[2]?.trim() || '';
-    const found = allVideos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
+    let found = allVideos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
     if (found) {
+      if (!found.creator || !found.creator.username || found.creator.username === 'creator') {
+        const creatorUser =
+          users.find(u => u.id === found?.creatorId || toUuid(u.id) === toUuid(found?.creatorId)) ||
+          users.find(u => isSameUser(u.id, msg.senderId));
+        if (creatorUser) {
+          found = { ...found, creator: creatorUser };
+        }
+      }
       return { isVideo: true, video: found, note };
     }
   }
@@ -82,18 +110,22 @@ const resolveSharedVideo = (
     if (!found) {
       // Extract creator username and caption from message text if available (like in user screenshot)
       const creatorMatch = msg.text.match(/by\s+@([a-zA-Z0-9_.-]+):?\s*"([^"]*)"/i);
-      const extractedUsername = creatorMatch ? creatorMatch[1] : 'creator';
+      const extractedUsername = creatorMatch ? creatorMatch[1] : '';
       const extractedCaption = creatorMatch ? creatorMatch[2] : 'Shared video';
+      const senderUser: User | undefined = users.find(u => isSameUser(u.id, msg.senderId));
+      const authorUser: User | undefined = extractedUsername
+        ? users.find(u => u.username.toLowerCase() === extractedUsername.toLowerCase())
+        : senderUser;
 
       found = {
         id: videoId,
-        creatorId: videoId,
-        creator: {
+        creatorId: authorUser?.id || videoId,
+        creator: authorUser || {
           id: videoId,
-          username: extractedUsername,
-          displayName: extractedUsername,
+          username: extractedUsername || senderUser?.username || 'user',
+          displayName: senderUser?.displayName || extractedUsername || 'Creator',
           email: '',
-          avatar: '',
+          avatar: senderUser?.avatar || '',
           bio: '',
           followingCount: 0,
           followersCount: 0,
@@ -110,6 +142,15 @@ const resolveSharedVideo = (
         sharesCount: 1,
         createdAt: new Date().toISOString(),
       };
+    } else {
+      if (!found.creator || !found.creator.username || found.creator.username === 'creator') {
+        const creatorUser =
+          users.find(u => u.id === found?.creatorId || toUuid(u.id) === toUuid(found?.creatorId)) ||
+          users.find(u => isSameUser(u.id, msg.senderId));
+        if (creatorUser) {
+          found = { ...found, creator: creatorUser };
+        }
+      }
     }
 
     return { isVideo: true, video: found, note };
@@ -717,7 +758,7 @@ export const MessagesView: React.FC = () => {
 
                 return visibleMessages.map(msg => {
                   const isMe = currentUser ? msg.senderId === currentUser.id : msg.isMine;
-                  const videoData = resolveSharedVideo(msg, videos);
+                  const videoData = resolveSharedVideo(msg, videos, users);
 
                   return (
                     <div
@@ -758,6 +799,10 @@ export const MessagesView: React.FC = () => {
                             video={videoData.video}
                             note={videoData.note}
                             isMe={isMe}
+                            messageId={msg.id}
+                            conversationId={activeConv.id}
+                            senderName={isMe ? 'You' : activeParticipant.displayName || activeParticipant.username}
+                            onDeleteMessage={() => deleteMessage(activeConv.id, msg.id)}
                           />
                         ) : (
                           <div>{msg.text}</div>

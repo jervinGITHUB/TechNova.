@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Video, User } from '../../types';
 import { useApp } from '../../context/AppContext';
 import {
@@ -29,6 +29,7 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
   const {
     currentUser,
     users,
+    videos,
     getFollowStatus,
     shareVideoToUser,
     shareVideo,
@@ -39,24 +40,37 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
   const [sentUserIds, setSentUserIds] = useState<string[]>([]);
   const [personalNote, setPersonalNote] = useState('');
 
+  // Lock body scroll while modal is open to prevent background scrolling
+  useEffect(() => {
+    if (isOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [isOpen]);
+
   if (!isOpen || !video) return null;
 
+  // Reactively track the latest shares count from app context
+  const liveVideo = videos.find(v => v.id === video.id) || video;
+
   const videoUrl = typeof window !== 'undefined'
-    ? `${window.location.origin}/video/${video.id}`
-    : `https://viralhub.app/video/${video.id}`;
+    ? `${window.location.origin}/video/${liveVideo.id}`
+    : `https://viralhub.app/video/${liveVideo.id}`;
 
   const handleCopyLink = () => {
     navigator.clipboard?.writeText(videoUrl);
-    shareVideo(video.id);
+    shareVideo(liveVideo.id);
     setCopied(true);
     setTimeout(() => setCopied(false), 2200);
   };
 
   const handleSendToUser = (targetUser: User) => {
-    const success = shareVideoToUser(video, targetUser.id, personalNote);
-    if (success) {
-      setSentUserIds(prev => [...prev, targetUser.id]);
-    }
+    if (sentUserIds.includes(targetUser.id)) return;
+    setSentUserIds(prev => [...prev, targetUser.id]);
+    shareVideoToUser(liveVideo, targetUser.id, personalNote);
   };
 
   // Eligible users: not currentUser, not banned, and either public OR mutual friends
@@ -78,15 +92,27 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
     : eligibleUsers;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn select-none">
+    <div
+      onWheel={e => e.stopPropagation()}
+      onTouchMove={e => e.stopPropagation()}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn select-none overscroll-contain"
+    >
       <div className="absolute inset-0" onClick={onClose} />
 
-      <div className="relative w-full max-w-md bg-[#13131a] border border-neutral-800 rounded-3xl p-5 shadow-2xl z-10 text-left">
-        {/* Header */}
+      <div
+        onWheel={e => e.stopPropagation()}
+        onTouchMove={e => e.stopPropagation()}
+        className="relative w-full max-w-md bg-[#13131a] border border-neutral-800 rounded-3xl p-5 shadow-2xl z-10 text-left overscroll-contain"
+      >
+        {/* Header with Share Count badge */}
         <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2.5">
             <Share2 className="w-5 h-5 text-[#ff007a]" />
             <h3 className="font-bold text-white font-brand text-base">Share Video</h3>
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-[#ff007a]/15 text-[#ff007a] font-bold border border-[#ff007a]/30 flex items-center gap-1 shadow-sm">
+              <Share2 className="w-3 h-3" />
+              <span>{liveVideo.sharesCount ?? 0} shares</span>
+            </span>
           </div>
           <button
             type="button"
@@ -97,13 +123,13 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
           </button>
         </div>
 
-        {/* Video Preview Snippet */}
+        {/* Video Preview Snippet with live Share Count */}
         <div className="flex items-center gap-3 my-3 p-2.5 bg-[#181824] rounded-2xl border border-neutral-800/80">
           <div className="relative w-12 h-16 rounded-xl overflow-hidden bg-[#232336] shrink-0 flex items-center justify-center">
-            {video.thumbnailUrl || video.mediaUrl ? (
+            {liveVideo.thumbnailUrl || liveVideo.mediaUrl ? (
               <img
-                src={video.thumbnailUrl || video.mediaUrl}
-                alt={video.caption}
+                src={liveVideo.thumbnailUrl || liveVideo.mediaUrl}
+                alt={liveVideo.caption}
                 className="w-full h-full object-cover"
                 onError={e => {
                   (e.currentTarget as HTMLImageElement).style.display = 'none';
@@ -116,11 +142,19 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-xs font-bold text-white truncate">
-              @{video.creator.username}
+              @{liveVideo.creator.username}
             </div>
             <p className="text-xs text-neutral-300 line-clamp-2 mt-0.5 leading-snug">
-              {video.caption}
+              {liveVideo.caption}
             </p>
+            <div className="text-[11px] text-neutral-400 mt-1 flex items-center gap-2">
+              <span className="text-[#ff007a] font-semibold flex items-center gap-1">
+                <Share2 className="w-3 h-3 inline" />
+                {liveVideo.sharesCount ?? 0} shares
+              </span>
+              <span>•</span>
+              <span>{liveVideo.likesCount ?? 0} likes</span>
+            </div>
           </div>
         </div>
 
@@ -143,7 +177,7 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
             ) : (
               <>
                 <Copy className="w-4 h-4" />
-                <span>Copy Link</span>
+                <span>Copy Link ({liveVideo.sharesCount ?? 0} shares)</span>
               </>
             )}
           </button>
@@ -189,8 +223,12 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
             )}
           </div>
 
-          {/* Recipient Users List */}
-          <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1 mt-2">
+          {/* Recipient Users List: Isolated scrolling so background never scrolls */}
+          <div
+            onWheel={e => e.stopPropagation()}
+            onTouchMove={e => e.stopPropagation()}
+            className="max-h-56 overflow-y-auto space-y-1.5 pr-1 mt-2 overscroll-contain"
+          >
             {filteredUsers.map(u => {
               const isSent = sentUserIds.includes(u.id);
               const followStatus = getFollowStatus(u.id);

@@ -804,6 +804,9 @@ export const HomeFeed: React.FC = () => {
 
   // Scroll handler for wheel events
   const handleContainerWheel = (e: React.WheelEvent) => {
+    // Never scroll background videos when share video modal is open
+    if (shareModalVideo) return;
+
     if (videoFeedRef.current && e.target !== videoFeedRef.current && !videoFeedRef.current.contains(e.target as Node)) {
       videoFeedRef.current.scrollBy({
         top: e.deltaY,
