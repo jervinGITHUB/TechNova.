@@ -3215,9 +3215,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
+    setActiveTab('home');
+    setSelectedUserId(null);
     setActiveConversationId(null);
     setMessagesMobileView('list');
-    setSelectedUserId(null);
+    setCommentsVideoId(null);
+    setSwitchAccountModalOpen(false);
 
     // Refresh feed directly with updatedTarget so syncWithSupabase uses new user!
     refreshFeed(updatedTarget);
