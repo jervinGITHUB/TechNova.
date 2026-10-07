@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { AudioTrack } from '../../types';
+import { getCuratedCoverForTrack, resolveTrackCover } from '../../utils/audio';
 import { Search, Plus, Play, Pause, X, Music, Film, Sparkles, Volume2 } from 'lucide-react';
 
 interface AudioLibraryModalProps {
@@ -218,32 +219,46 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
               ? videos.find(v => v.id === track.sourceVideoId)
               : null;
 
+            // Only actual video files (.mp4, .webm) are video - never disqualify blob: or data:image URLs
             const isCoverVid = Boolean(
               track.coverUrl &&
-                (track.coverUrl.startsWith('blob:') ||
-                  /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(track.coverUrl))
+                /\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(track.coverUrl)
             );
 
-            let resolvedCover = !isCoverVid && track.coverUrl ? track.coverUrl : '';
+            let resolvedCover = (!isCoverVid && track.coverUrl) ? track.coverUrl : '';
             if (!resolvedCover && sourceVid) {
               const srcThumb = sourceVid.thumbnailUrl;
               const srcAvatar = sourceVid.creator?.avatar;
               if (
                 srcThumb &&
-                !srcThumb.startsWith('blob:') &&
-                !/\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(srcThumb)
+                !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(srcThumb)
               ) {
                 resolvedCover = srcThumb;
               } else if (
                 srcAvatar &&
-                !srcAvatar.startsWith('blob:') &&
-                !/\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(srcAvatar)
+                !/\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(srcAvatar)
               ) {
                 resolvedCover = srcAvatar;
               }
             }
 
-            const hasImg = Boolean(resolvedCover);
+            // If still no cover, automatically resolve stunning curated album art
+            if (!resolvedCover) {
+              resolvedCover = resolveTrackCover(track);
+            }
+
+            // Deterministic vibrant gradient for tracks without a custom cover image
+            const gradients = [
+              'from-[#ff007a] to-[#7928ca]',
+              'from-[#0070f3] to-[#00dfd8]',
+              'from-[#7928ca] to-[#ff0080]',
+              'from-[#f5a623] to-[#ff007a]',
+              'from-[#00dfd8] to-[#7928ca]',
+              'from-[#e11d48] to-[#4f46e5]',
+              'from-[#ec4899] to-[#8b5cf6]',
+            ];
+            const charSum = (track.title + track.artist).split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+            const gradientClass = gradients[charSum % gradients.length];
 
             return (
               <div
@@ -255,52 +270,58 @@ export const AudioLibraryModal: React.FC<AudioLibraryModalProps> = ({ onSelectTr
                 }`}
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  {/* Track Cover + Play/Pause preview */}
-                  <button
-                    type="button"
-                    onClick={() => togglePlayTrack(track)}
-                    className="relative w-12 h-12 rounded-xl overflow-hidden shrink-0 cursor-pointer shadow-md group/cover"
-                    title={isPlaying ? 'Pause audio preview' : 'Play audio preview'}
-                  >
-                    <div className="relative w-full h-full bg-[#232336] flex items-center justify-center">
-                      {hasImg ? (
-                        <img
-                          src={resolvedCover}
-                          alt={track.title}
-                          className="w-full h-full object-cover"
-                          onError={e => {
-                            (e.currentTarget as HTMLImageElement).style.display = 'none';
-                            const fallback = e.currentTarget.parentElement?.querySelector('.track-fallback-icon');
-                            if (fallback) (fallback as HTMLElement).style.display = 'flex';
-                          }}
-                        />
-                      ) : null}
-                      <div
-                        className={`track-fallback-icon w-full h-full items-center justify-center bg-gradient-to-tr from-[#1f1b2e] to-[#2b2540] ${
-                          hasImg ? 'hidden' : 'flex'
-                        }`}
-                      >
-                        {isVideoSource ? (
-                          <Film className="w-5 h-5 text-cyan-400" />
-                        ) : (
-                          <Music className="w-5 h-5 text-[#ff007a]" />
-                        )}
-                      </div>
+                  {/* Track Cover Thumbnail + Play/Pause preview */}
+                  <div className="relative w-12 h-12 rounded-xl overflow-hidden shrink-0 shadow-md group/cover border border-neutral-700/60 bg-[#1e1b2e]">
+                    <img
+                      src={resolvedCover}
+                      alt={track.title}
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover/cover:scale-105"
+                      onError={e => {
+                        const fallback = getCuratedCoverForTrack(track.title, track.artist, track.category);
+                        if ((e.currentTarget as HTMLImageElement).src !== fallback) {
+                          (e.currentTarget as HTMLImageElement).src = fallback;
+                        }
+                      }}
+                    />
+
+                    {/* Aesthetic Album Artwork Fallback (Vinyl disc + music note + category) */}
+                    <div
+                      className={`track-fallback-disc w-full h-full items-center justify-center bg-gradient-to-tr ${gradientClass} ${
+                        resolvedCover ? 'hidden' : 'flex'
+                      } relative flex-col`}
+                    >
+                      <div className="absolute inset-1 rounded-full border border-white/20 opacity-40 pointer-events-none" />
+                      <div className="absolute inset-2.5 rounded-full border border-white/10 opacity-30 pointer-events-none" />
+                      {isVideoSource ? (
+                        <Film className="w-5 h-5 text-white drop-shadow-sm z-0" />
+                      ) : (
+                        <Music className="w-5 h-5 text-white drop-shadow-sm z-0" />
+                      )}
+                      <span className="text-[7.5px] font-black text-white/90 uppercase tracking-wider drop-shadow-xs z-0 mt-0.5">
+                        {track.category ? track.category.slice(0, 5) : 'AUDIO'}
+                      </span>
                     </div>
 
-                    {/* Play/Pause Overlay */}
-                    <div
-                      className={`absolute inset-0 bg-black/40 flex items-center justify-center transition-opacity ${
-                        isPlaying ? 'opacity-100 bg-[#ff007a]/40' : 'opacity-80 group-hover/cover:opacity-100'
+                    {/* Play/Pause Button Overlay (Clean hover reveal or active playing state) */}
+                    <button
+                      type="button"
+                      onClick={() => togglePlayTrack(track)}
+                      className={`absolute inset-0 flex items-center justify-center transition-all cursor-pointer z-10 ${
+                        isPlaying
+                          ? 'bg-[#ff007a]/70 opacity-100 ring-2 ring-[#ff007a]'
+                          : 'bg-black/35 opacity-0 group-hover/cover:opacity-100 hover:bg-black/55'
                       }`}
+                      title={isPlaying ? 'Pause preview' : 'Play audio preview'}
                     >
                       {isPlaying ? (
-                        <Pause className="w-5 h-5 text-white fill-white" />
+                        <Pause className="w-5 h-5 text-white fill-white drop-shadow" />
                       ) : (
-                        <Play className="w-5 h-5 text-white fill-white ml-0.5" />
+                        <div className="w-7 h-7 rounded-full bg-[#ff007a] flex items-center justify-center shadow-md transform transition-transform group-hover/cover:scale-110">
+                          <Play className="w-3.5 h-3.5 text-white fill-white ml-0.5" />
+                        </div>
                       )}
-                    </div>
-                  </button>
+                    </button>
+                  </div>
 
                   {/* Title & Artist & Duration */}
                   <div className="min-w-0">

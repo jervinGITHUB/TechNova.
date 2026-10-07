@@ -6,6 +6,7 @@ import {
   isSameUser,
   toUuid,
 } from '../../lib/supabase';
+import { getCuratedCoverForTrack, resolveTrackCover } from '../../utils/audio';
 import { AudioTrack, SystemStats } from '../../types';
 import {
   Shield,
@@ -32,6 +33,9 @@ import {
   Upload,
   Image as ImageIcon,
   Sparkles,
+  Database,
+  Copy,
+  ExternalLink,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -290,6 +294,23 @@ export const AdminDashboardView: React.FC = () => {
     }
   };
 
+  // Automatically sync any existing local curated tracks (e.g. "Sunova Heroes" by Jervin)
+  // straight into Supabase AudioLibrary in the background - completely automatic with 0 Disk IO impact!
+  useEffect(() => {
+    if (!audioTracksList || audioTracksList.length === 0) return;
+    const syncExistingCuratedTracks = async () => {
+      for (const track of audioTracksList) {
+        if (track.sourceVideoId || track.title.toLowerCase().startsWith('original sound')) continue;
+        try {
+          await supabaseDb.insertAudioTrack(track);
+        } catch {
+          // background sync
+        }
+      }
+    };
+    syncExistingCuratedTracks();
+  }, [audioTracksList.length]);
+
   // Handle Add Audio Form
   const handleCreateAudio = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -307,14 +328,19 @@ export const AdminDashboardView: React.FC = () => {
     try {
       let finalAudioUrl = '';
       let finalCoverUrl = '';
+      let storageAudioUploaded = false;
 
-      // 1. Upload audio file to Supabase Storage
+      // 1. Upload audio file to Supabase Storage (bucket 'audio')
       if (selectedAudioFile) {
         const uploadRes = await supabaseDb.uploadAudioFile(selectedAudioFile);
         if (uploadRes.url) {
           finalAudioUrl = uploadRes.url;
+          storageAudioUploaded = true;
         } else {
           finalAudioUrl = audioPreviewUrl || URL.createObjectURL(selectedAudioFile);
+          if (uploadRes.error) {
+            console.warn('[Admin Audio] Storage upload note:', uploadRes.error);
+          }
         }
       }
 
@@ -333,9 +359,9 @@ export const AdminDashboardView: React.FC = () => {
         finalAudioUrl = 'https://actions.google.com/sounds/v1/science_fiction/alien_beacon.ogg';
       }
 
-      // Fallback default cover artwork
+      // Fallback default cover artwork (generates beautiful themed artwork)
       if (!finalCoverUrl) {
-        finalCoverUrl = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=300&auto=format&fit=crop';
+        finalCoverUrl = getCuratedCoverForTrack(newAudioTitle.trim(), newAudioArtist.trim(), newAudioCategory);
       }
 
       const newTrack: Omit<AudioTrack, 'id'> = {
@@ -348,8 +374,14 @@ export const AdminDashboardView: React.FC = () => {
         useCount: 0,
       };
 
+      // Automatically saves locally AND automatically records into Supabase AudioLibrary table
       await addAudioTrack(newTrack);
-      showToast(`Audio track "${newAudioTitle.trim()}" published to Supabase & added to sound library!`);
+
+      if (storageAudioUploaded) {
+        showToast(`Track "${newAudioTitle.trim()}" published to Supabase AudioLibrary and Storage bucket!`);
+      } else {
+        showToast(`Track "${newAudioTitle.trim()}" recorded to AudioLibrary!`);
+      }
 
       // Reset form
       setNewAudioTitle('');
@@ -903,7 +935,7 @@ export const AdminDashboardView: React.FC = () => {
 
                 <button
                   onClick={() => setShowAddAudioModal(true)}
-                  className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#ff007a] hover:bg-[#e0006c] text-white text-xs font-bold transition-all cursor-pointer shadow-md shadow-[#ff007a]/20"
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#ff007a] hover:bg-[#e0006c] text-white text-xs font-bold transition-all cursor-pointer shadow-md shadow-[#ff007a]/20 shrink-0"
                 >
                   <Plus className="w-4 h-4 stroke-[2.5]" />
                   <span>Add Audio</span>
@@ -999,21 +1031,19 @@ export const AdminDashboardView: React.FC = () => {
                           {/* Track Title with Cover & Play Button */}
                           <td className="py-3 px-3">
                             <div className="flex items-center gap-3">
-                              <div className="relative w-10 h-10 rounded-xl overflow-hidden bg-neutral-800 shrink-0 border border-neutral-700/80 group">
-                                {track.coverUrl ? (
-                                  <img
-                                    src={track.coverUrl}
-                                    alt={track.title}
-                                    className="w-full h-full object-cover"
-                                  />
-                                ) : (
-                                  <div className="w-full h-full flex items-center justify-center bg-gradient-to-tr from-cyan-900 to-purple-900">
-                                    <Music className="w-4 h-4 text-cyan-300" />
-                                  </div>
-                                )}
+                              <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-[#1e1b2e] shrink-0 border border-neutral-700/80 group shadow-sm">
+                                <img
+                                  src={resolveTrackCover(track)}
+                                  alt={track.title}
+                                  className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                                  onError={e => {
+                                    (e.currentTarget as HTMLImageElement).src = getCuratedCoverForTrack(track.title, track.artist, track.category);
+                                  }}
+                                />
                                 <button
+                                  type="button"
                                   onClick={() => togglePlayTrack(track)}
-                                  className={`absolute inset-0 flex items-center justify-center bg-black/50 transition-opacity cursor-pointer ${
+                                  className={`absolute inset-0 flex items-center justify-center bg-black/45 transition-opacity cursor-pointer ${
                                     isPlaying ? 'opacity-100 text-[#ff007a]' : 'opacity-0 group-hover:opacity-100 text-white'
                                   }`}
                                   title={isPlaying ? 'Pause' : 'Play Preview'}
@@ -1072,17 +1102,19 @@ export const AdminDashboardView: React.FC = () => {
 
                           {/* Action */}
                           <td className="py-3 px-3 text-right">
-                            {isCurated ? (
-                              <button
-                                onClick={() => handleDeleteAudio(track)}
-                                className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer"
-                                title="Delete Track"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            ) : (
-                              <span className="text-[11px] text-neutral-600">—</span>
-                            )}
+                            <div className="flex items-center justify-end gap-1.5">
+                              {isCurated ? (
+                                <button
+                                  onClick={() => handleDeleteAudio(track)}
+                                  className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer"
+                                  title="Delete Track"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              ) : (
+                                <span className="text-[11px] text-neutral-600">—</span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );

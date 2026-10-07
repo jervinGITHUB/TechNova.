@@ -6,6 +6,7 @@ import {
   testSupabaseConnection,
   SUPABASE_SQL_SCHEMA,
   LIVESTREAM_SQL_SNIPPET,
+  AUDIO_STORAGE_SQL_SNIPPET,
 } from '../../lib/supabase';
 import {
   Database,
@@ -40,10 +41,11 @@ export const SupabaseVercelModal: React.FC<SupabaseVercelModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [copiedAdminSql, setCopiedAdminSql] = useState(false);
   const [copiedLivestreamSql, setCopiedLivestreamSql] = useState(false);
+  const [copiedAudioSql, setCopiedAudioSql] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [activeSqlTab, setActiveSqlTab] = useState<'livestream' | 'full'>('livestream');
+  const [activeSqlTab, setActiveSqlTab] = useState<'audio' | 'livestream' | 'full'>('audio');
 
   if (!isOpen) return null;
 
@@ -275,7 +277,19 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
                 <span>2. Supabase SQL Schema (Tables & Policies)</span>
               </h3>
               <div className="flex items-center gap-2">
-                {activeSqlTab === 'livestream' ? (
+                {activeSqlTab === 'audio' ? (
+                  <button
+                    onClick={() => {
+                      navigator.clipboard?.writeText(AUDIO_STORAGE_SQL_SNIPPET);
+                      setCopiedAudioSql(true);
+                      setTimeout(() => setCopiedAudioSql(false), 2000);
+                    }}
+                    className="py-1 px-3 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                  >
+                    {copiedAudioSql ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedAudioSql ? 'Copied Audio SQL!' : 'Copy Audio & Storage SQL'}</span>
+                  </button>
+                ) : activeSqlTab === 'livestream' ? (
                   <button
                     onClick={handleCopyLivestreamSql}
                     className="py-1 px-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
@@ -295,8 +309,19 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
               </div>
             </div>
 
-            {/* Sub-tabs for Livestream vs Full Schema */}
-            <div className="flex items-center gap-1.5 mb-2 bg-[#0d0d14] p-1 rounded-xl border border-neutral-800 w-fit">
+            {/* Sub-tabs for Audio vs Livestream vs Full Schema */}
+            <div className="flex items-center gap-1.5 mb-2 bg-[#0d0d14] p-1 rounded-xl border border-neutral-800 w-fit flex-wrap">
+              <button
+                type="button"
+                onClick={() => setActiveSqlTab('audio')}
+                className={`py-1 px-2.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                  activeSqlTab === 'audio'
+                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40 shadow-sm'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Audio & Storage SQL (Bucket + Table)
+              </button>
               <button
                 type="button"
                 onClick={() => setActiveSqlTab('livestream')}
@@ -306,7 +331,7 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
                     : 'text-neutral-400 hover:text-white'
                 }`}
               >
-                Livestream & Comments SQL (Fixes Errors)
+                Livestream & Comments SQL
               </button>
               <button
                 type="button"
@@ -317,23 +342,27 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
                     : 'text-neutral-400 hover:text-white'
                 }`}
               >
-                Full Platform Schema (All 11 Tables)
+                Full Platform Schema
               </button>
             </div>
 
             <p className="text-neutral-400 mb-2">
-              {activeSqlTab === 'livestream' ? (
+              {activeSqlTab === 'audio' ? (
+                <span>
+                  <strong>Safe & Zero Disk IO:</strong> Enables public file uploads for the <code className="text-cyan-400">audio</code> storage bucket and ensures columns exist on the <code className="text-cyan-400">AudioLibrary</code> table with permissive public RLS policies.
+                </span>
+              ) : activeSqlTab === 'livestream' ? (
                 <span>
                   <strong>100% Safe & Zero Disk IO:</strong> Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to create the <code className="text-emerald-400">Livestream</code> and <code className="text-emerald-400">LiveComment</code> tables with instant indexing and public access policies.
                 </span>
               ) : (
                 <span>
-                  Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to initialize all 11 tables with Row Level Security.
+                  Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to initialize all tables with Row Level Security.
                 </span>
               )}
             </p>
             <div className="bg-[#0c0c10] p-3 rounded-xl border border-neutral-800 font-mono text-[11px] text-neutral-400 max-h-40 overflow-y-auto leading-relaxed">
-              <pre>{activeSqlTab === 'livestream' ? LIVESTREAM_SQL_SNIPPET : SUPABASE_SQL_SCHEMA}</pre>
+              <pre>{activeSqlTab === 'audio' ? AUDIO_STORAGE_SQL_SNIPPET : activeSqlTab === 'livestream' ? LIVESTREAM_SQL_SNIPPET : SUPABASE_SQL_SCHEMA}</pre>
             </div>
           </div>
 

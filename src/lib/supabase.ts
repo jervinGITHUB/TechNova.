@@ -2015,35 +2015,44 @@ export const supabaseDb = {
     try {
       let data: any[] | null = null;
 
-      // 1. If we already know the working table, query that first to avoid multiple DB calls
+      // 1. If we already know the working table, query that first
       if (workingAudioTable) {
         try {
           const sortCol = workingAudioTable === 'audio_tracks' ? 'created_at' : 'CreatedAt';
-          const res = await client.from(workingAudioTable).select('*').order(sortCol, { ascending: false }).limit(100);
-          if (!res.error && res.data && res.data.length > 0) {
+          let res = await client.from(workingAudioTable).select('*').order(sortCol, { ascending: false }).limit(100);
+          if (res.error && (res.error.code === '42703' || res.error.message?.includes('column'))) {
+            // Sort column might not exist, query without sort
+            res = await client.from(workingAudioTable).select('*').limit(100);
+          }
+          if (!res.error && res.data) {
             data = res.data;
-          } else if (res.error) {
-            workingAudioTable = null; // reset if table altered
+          } else if (res.error && res.error.code === '42P01') {
+            workingAudioTable = null;
           }
         } catch {
           workingAudioTable = null;
         }
       }
 
-      // 2. Fallback probe across common audio schema conventions
+      // 2. Query AudioLibrary as primary table (matching user's Supabase schema)
       if (!data) {
-        const res1 = await client.from('AudioLibrary').select('*').order('CreatedAt', { ascending: false }).limit(100);
-        if (!res1.error && res1.data && res1.data.length > 0) {
+        let res1 = await client.from('AudioLibrary').select('*').order('CreatedAt', { ascending: false }).limit(100);
+        if (res1.error && (res1.error.code === '42703' || res1.error.message?.includes('column'))) {
+          // CreatedAt column may not exist yet
+          res1 = await client.from('AudioLibrary').select('*').limit(100);
+        }
+
+        if (!res1.error && res1.data) {
           data = res1.data;
           workingAudioTable = 'AudioLibrary';
         } else {
-          const res2 = await client.from('AudioTrack').select('*').order('CreatedAt', { ascending: false }).limit(100);
-          if (!res2.error && res2.data && res2.data.length > 0) {
+          let res2 = await client.from('AudioTrack').select('*').limit(100);
+          if (!res2.error && res2.data) {
             data = res2.data;
             workingAudioTable = 'AudioTrack';
           } else {
-            const res3 = await client.from('audio_tracks').select('*').order('created_at', { ascending: false }).limit(100);
-            if (!res3.error && res3.data && res3.data.length > 0) {
+            let res3 = await client.from('audio_tracks').select('*').limit(100);
+            if (!res3.error && res3.data) {
               data = res3.data;
               workingAudioTable = 'audio_tracks';
             }
@@ -2051,16 +2060,16 @@ export const supabaseDb = {
         }
       }
 
-      if (!data || data.length === 0) return null;
+      if (!data) return cachedAudioTracksResult?.data || null;
 
       const mapped: AudioTrack[] = data.map((r: any) => ({
-        id: r.AudioTrackID || r.id,
-        title: r.Title || r.title || 'Sound',
-        artist: r.Artist || r.artist || 'Creator',
-        duration: r.Duration || r.duration || '00:30',
-        coverUrl: r.CoverURL || r.cover_url || '',
-        audioUrl: r.AudioURL || r.audio_url || '',
-        category: r.Category || r.category || 'Trending',
+        id: r.AudioTrackID || r.audio_track_id || r.id,
+        title: r.AudioTitle || r.audio_title || r.Title || r.title || 'Sound',
+        artist: r.AudioArtist || r.audio_artist || r.Artist || r.artist || 'Creator',
+        duration: r.Duration || r.duration || r.AudioDuration || r.audio_duration || '00:30',
+        coverUrl: r.CoverURL || r.CoverUrl || r.cover_url || r.ThumbnailURL || r.thumbnail_url || r.ThumbnailUrl || '',
+        audioUrl: r.AudioURL || r.AudioUrl || r.audio_url || r.AudioPath || '',
+        category: r.Category || r.category || r.AudioCategory || r.audio_category || 'Trending',
       }));
 
       cachedAudioTracksResult = { data: mapped, timestamp: Date.now() };
@@ -2071,93 +2080,120 @@ export const supabaseDb = {
     }
   },
 
-  async insertAudioTrack(track: AudioTrack): Promise<boolean> {
+  async insertAudioTrack(track: AudioTrack): Promise<{ success: boolean; error?: string }> {
     cachedAudioTracksResult = null;
     const client = getSupabaseClient();
-    if (!client) return false;
+    if (!client) return { success: true };
 
     try {
       const trackUuid = toUuid(track.id);
-      const payload: Record<string, any> = {
+
+      // Primary payload strictly matching user's public."AudioLibrary" schema
+      // (AudioTrackID, AudioTitle, AudioArtist as visible in Supabase Table Editor)
+      const fullPayload: Record<string, any> = {
         AudioTrackID: trackUuid,
-        Title: track.title,
-        Artist: track.artist,
-        Duration: track.duration || '00:30',
+        AudioTitle: track.title,
+        AudioArtist: track.artist,
         AudioURL: track.audioUrl || '',
         CoverURL: track.coverUrl || '',
+        Duration: track.duration || '00:30',
+        Category: track.category || 'Trending',
         CreatedAt: new Date().toISOString(),
       };
-      if (track.category) {
-        payload.Category = track.category;
+
+      // Candidate tables in priority order
+      const tablesToTry = workingAudioTable
+        ? [workingAudioTable, 'AudioLibrary', 'AudioTrack', 'audio_library', 'audio_tracks']
+        : ['AudioLibrary', 'AudioTrack', 'audio_library', 'audio_tracks'];
+      const uniqueTables = Array.from(new Set(tablesToTry));
+
+      let lastErr: any = null;
+
+      for (const table of uniqueTables) {
+        let currentPayload = { ...fullPayload };
+
+        // Try inserting up to 4 attempts (pruning missing columns if code 42703)
+        for (let attempt = 0; attempt < 4; attempt++) {
+          // Standard insert (safest, does not require onConflict constraint specification)
+          const insertRes = await client.from(table).insert(currentPayload);
+          if (!insertRes.error) {
+            workingAudioTable = table as any;
+            return { success: true };
+          }
+
+          // If duplicate key (code 23505), update existing row
+          if (insertRes.error.code === '23505' || insertRes.error.message?.includes('duplicate key')) {
+            const updateRes = await client.from(table).update(currentPayload).or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${track.id}`);
+            if (!updateRes.error) {
+              workingAudioTable = table as any;
+              return { success: true };
+            }
+          }
+
+          lastErr = insertRes.error;
+
+          // If table does not exist (code 42P01), switch to next table immediately
+          if (insertRes.error.code === '42P01' || insertRes.error.message?.includes('does not exist')) {
+            break;
+          }
+
+          // If error is missing column (code 42703)
+          if (insertRes.error.code === '42703' || insertRes.error.message?.includes('column')) {
+            const match = insertRes.error.message.match(/column ["']?([^"' ]+)["']? of relation/i) ||
+                          insertRes.error.message.match(/could not find the ['"]([^'"]+)['"] column/i) ||
+                          insertRes.error.message.match(/column ["']?([^"' ]+)["']? does not exist/i);
+            if (match && match[1]) {
+              delete currentPayload[match[1]];
+              continue;
+            }
+
+            if ('Category' in currentPayload) {
+              delete currentPayload.Category;
+            } else if ('CreatedAt' in currentPayload) {
+              delete currentPayload.CreatedAt;
+            } else if ('Duration' in currentPayload) {
+              delete currentPayload.Duration;
+            } else if ('CoverURL' in currentPayload) {
+              delete currentPayload.CoverURL;
+            } else if ('AudioURL' in currentPayload) {
+              delete currentPayload.AudioURL;
+            } else {
+              break;
+            }
+          } else {
+            // Other error (e.g. RLS policy violation), don't loop endlessly to protect Disk IO
+            break;
+          }
+        }
+
+        // If uppercase columns failed with 42703, attempt lowercase column names
+        if (lastErr && (lastErr.code === '42703' || lastErr.message?.includes('column'))) {
+          const lowerPayload: Record<string, any> = {
+            audiotrackid: trackUuid,
+            audiotitle: track.title,
+            audioartist: track.artist,
+            audiourl: track.audioUrl || '',
+            coverurl: track.coverUrl || '',
+            duration: track.duration || '00:30',
+            category: track.category || 'Trending',
+          };
+          const lowerRes = await client.from(table).insert(lowerPayload);
+          if (!lowerRes.error) {
+            workingAudioTable = table as any;
+            return { success: true };
+          }
+        }
       }
 
-      // If working table is known, try it first
-      if (workingAudioTable === 'AudioLibrary') {
-        const { error } = await client.from('AudioLibrary').upsert(payload, { onConflict: 'AudioTrackID' });
-        if (!error) return true;
-      } else if (workingAudioTable === 'AudioTrack') {
-        const { error } = await client.from('AudioTrack').upsert(payload, { onConflict: 'AudioTrackID' });
-        if (!error) return true;
-      } else if (workingAudioTable === 'audio_tracks') {
-        const snakePayload = {
-          id: trackUuid,
-          title: track.title,
-          artist: track.artist,
-          duration: track.duration || '00:30',
-          audio_url: track.audioUrl || '',
-          cover_url: track.coverUrl || '',
-          category: track.category || 'Trending',
-          created_at: new Date().toISOString(),
-        };
-        const { error } = await client.from('audio_tracks').upsert(snakePayload, { onConflict: 'id' });
-        if (!error) return true;
+      if (lastErr) {
+        console.warn('[Supabase] insertAudioTrack issue:', lastErr.message);
+        return { success: false, error: lastErr.message };
       }
 
-      // Probing tables: 1. AudioLibrary (PascalCase)
-      let res = await client.from('AudioLibrary').upsert(payload, { onConflict: 'AudioTrackID' });
-      if (!res.error) {
-        workingAudioTable = 'AudioLibrary';
-        return true;
-      }
-      const { Category: _, ...fallbackPayload } = payload;
-      const resFb = await client.from('AudioLibrary').upsert(fallbackPayload, { onConflict: 'AudioTrackID' });
-      if (!resFb.error) {
-        workingAudioTable = 'AudioLibrary';
-        return true;
-      }
-
-      // 2. AudioTrack (PascalCase)
-      const res2 = await client.from('AudioTrack').upsert(payload, { onConflict: 'AudioTrackID' });
-      if (!res2.error) {
-        workingAudioTable = 'AudioTrack';
-        return true;
-      }
-      const res2Fb = await client.from('AudioTrack').upsert(fallbackPayload, { onConflict: 'AudioTrackID' });
-      if (!res2Fb.error) {
-        workingAudioTable = 'AudioTrack';
-        return true;
-      }
-
-      // 3. audio_tracks (snake_case)
-      const snakePayload = {
-        id: trackUuid,
-        title: track.title,
-        artist: track.artist,
-        duration: track.duration || '00:30',
-        audio_url: track.audioUrl || '',
-        cover_url: track.coverUrl || '',
-        category: track.category || 'Trending',
-        created_at: new Date().toISOString(),
-      };
-      const res3 = await client.from('audio_tracks').upsert(snakePayload, { onConflict: 'id' });
-      if (!res3.error) {
-        workingAudioTable = 'audio_tracks';
-        return true;
-      }
-
-      return true;
-    } catch {
-      return false;
+      return { success: true };
+    } catch (e: any) {
+      console.warn('Supabase insertAudioTrack exception:', e);
+      return { success: false, error: e?.message || 'Database insert failed' };
     }
   },
 
@@ -2188,51 +2224,59 @@ export const supabaseDb = {
       const cleanFileName = `audio_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
       const mimeType = file.type || (ext === 'wav' ? 'audio/wav' : ext === 'ogg' ? 'audio/ogg' : ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg');
 
-      let candidateBuckets: string[] = ['audio', 'audios', 'sounds', 'music', 'media', 'uploads', 'public', 'files'];
-      if (preferredAudioBucket) {
-        candidateBuckets = [preferredAudioBucket, ...candidateBuckets.filter(b => b !== preferredAudioBucket)];
-      }
-
-      // Discover buckets only once every 10 minutes to protect Supabase API & disk IO
-      if (!cachedDiscoveredBuckets || Date.now() - cachedDiscoveredBuckets.timestamp > 600000) {
-        try {
-          const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
-          if (!bucketError && bucketList && bucketList.length > 0) {
-            const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
-            const audioBuckets = discovered.filter(b => /audio|sound|music|media/i.test(b));
-            const merged = Array.from(new Set([...audioBuckets, ...discovered, ...candidateBuckets]));
-            cachedDiscoveredBuckets = { buckets: merged, timestamp: Date.now() };
-          }
-        } catch {
-          // ignore listBuckets failure
+      // 1. Inspect existing buckets from Supabase Storage
+      let candidateBuckets = ['audio', 'audios', 'sounds', 'music', 'media', 'uploads', 'public'];
+      try {
+        const { data: bucketList } = await client.storage.listBuckets();
+        if (bucketList && bucketList.length > 0) {
+          const names = bucketList.map(b => b.name || b.id).filter(Boolean);
+          const matched = names.filter(n => /audio|music|sound/i.test(n));
+          candidateBuckets = Array.from(new Set([...matched, ...names, ...candidateBuckets]));
         }
-      }
-      if (cachedDiscoveredBuckets?.buckets) {
-        candidateBuckets = Array.from(new Set([preferredAudioBucket || '', ...cachedDiscoveredBuckets.buckets])).filter(Boolean);
+      } catch {
+        // ignore listBuckets failure
       }
 
       let lastError: any = null;
       for (const bucket of candidateBuckets) {
-        const tryPaths = [cleanFileName, `audio/${cleanFileName}`];
-        for (const targetPath of tryPaths) {
-          try {
-            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
-              contentType: mimeType,
-              cacheControl: '3600',
-              upsert: false,
-            });
-            if (!error && data?.path) {
-              preferredAudioBucket = bucket;
-              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
-              if (pubData?.publicUrl) return { url: pubData.publicUrl };
-            }
-            if (error) lastError = error;
-          } catch (err: any) {
-            lastError = err;
+        // Try 1: upsert: false (standard INSERT policy only, avoids 403 where UPDATE is not granted)
+        try {
+          const { data, error } = await client.storage.from(bucket).upload(cleanFileName, file, {
+            contentType: mimeType,
+            cacheControl: '3600',
+            upsert: false,
+          });
+
+          if (!error && data?.path) {
+            preferredAudioBucket = bucket;
+            const { data: pubData } = client.storage.from(bucket).getPublicUrl(cleanFileName);
+            if (pubData?.publicUrl) return { url: pubData.publicUrl };
           }
+
+          if (error) {
+            lastError = error;
+            // If already exists, retry with upsert: true
+            if (error.message?.includes('already exists') || error.message?.includes('duplicate')) {
+              const { data: upData, error: upError } = await client.storage.from(bucket).upload(cleanFileName, file, {
+                contentType: mimeType,
+                cacheControl: '3600',
+                upsert: true,
+              });
+              if (!upError && upData?.path) {
+                const { data: pubData } = client.storage.from(bucket).getPublicUrl(cleanFileName);
+                if (pubData?.publicUrl) return { url: pubData.publicUrl };
+              }
+            }
+          }
+        } catch (err: any) {
+          lastError = err;
         }
       }
-      return { url: null, error: lastError?.message || 'Bucket upload failed' };
+
+      return {
+        url: null,
+        error: lastError?.message || 'Bucket upload failed. Please verify storage RLS policies for bucket "audio".',
+      };
     } catch (e: any) {
       console.warn('Supabase uploadAudioFile exception:', e);
       return { url: null, error: e?.message || 'Audio upload failed' };
@@ -2248,45 +2292,38 @@ export const supabaseDb = {
       const cleanFileName = `cover_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
       const mimeType = file.type || (ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
 
-      let candidateBuckets: string[] = ['audio', 'images', 'covers', 'avatars', 'media', 'public', 'uploads'];
-      if (preferredCoverBucket) {
-        candidateBuckets = [preferredCoverBucket, ...candidateBuckets.filter(b => b !== preferredCoverBucket)];
-      }
-
-      if (!cachedDiscoveredBuckets || Date.now() - cachedDiscoveredBuckets.timestamp > 600000) {
-        try {
-          const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
-          if (!bucketError && bucketList && bucketList.length > 0) {
-            const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
-            candidateBuckets = Array.from(new Set([...discovered, ...candidateBuckets]));
-            cachedDiscoveredBuckets = { buckets: candidateBuckets, timestamp: Date.now() };
-          }
-        } catch {}
-      } else if (cachedDiscoveredBuckets?.buckets) {
-        candidateBuckets = Array.from(new Set([preferredCoverBucket || '', ...cachedDiscoveredBuckets.buckets])).filter(Boolean);
-      }
+      let candidateBuckets = ['audio', 'covers', 'images', 'media', 'uploads', 'public'];
+      try {
+        const { data: bucketList } = await client.storage.listBuckets();
+        if (bucketList && bucketList.length > 0) {
+          const names = bucketList.map(b => b.name || b.id).filter(Boolean);
+          candidateBuckets = Array.from(new Set([...names, ...candidateBuckets]));
+        }
+      } catch {}
 
       let lastError: any = null;
       for (const bucket of candidateBuckets) {
-        const tryPaths = [cleanFileName, `covers/${cleanFileName}`];
-        for (const targetPath of tryPaths) {
-          try {
-            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
-              contentType: mimeType,
-              cacheControl: '3600',
-              upsert: false,
-            });
-            if (!error && data?.path) {
-              preferredCoverBucket = bucket;
-              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
-              if (pubData?.publicUrl) return { url: pubData.publicUrl };
-            }
-            if (error) lastError = error;
-          } catch (err: any) {
-            lastError = err;
+        try {
+          const targetPath = bucket === 'audio' ? `covers/${cleanFileName}` : cleanFileName;
+          const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
+            contentType: mimeType,
+            cacheControl: '3600',
+            upsert: false,
+          });
+
+          if (!error && data?.path) {
+            preferredCoverBucket = bucket;
+            const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
+            if (pubData?.publicUrl) return { url: pubData.publicUrl };
           }
+          if (error) {
+            lastError = error;
+          }
+        } catch (err: any) {
+          lastError = err;
         }
       }
+
       return { url: null, error: lastError?.message || 'Cover upload failed' };
     } catch (e: any) {
       return { url: null, error: e?.message || 'Cover upload failed' };
@@ -5086,14 +5123,30 @@ BEGIN
   CREATE POLICY "Public all access on Admin" ON public."Admin" FOR ALL USING (true) WITH CHECK (true);
 END $$;
 
--- 5. STORAGE BUCKET FOR VIDEOS (Public access so videos stream on any device)
+-- 5. STORAGE BUCKETS FOR AUDIO & VIDEOS (Public access so audio tracks and videos stream on any device)
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('audio', 'audio', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('videos', 'videos', true)
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+-- Ensure AudioLibrary columns exist for storing audio URL, cover URL, duration, category
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "AudioTitle" TEXT;
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "AudioArtist" TEXT;
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "AudioURL" TEXT;
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "CoverURL" TEXT;
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "Duration" TEXT DEFAULT '00:30';
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "Category" TEXT DEFAULT 'Trending';
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "CreatedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now());
 
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'storage' AND tablename = 'objects') THEN
+    DROP POLICY IF EXISTS "Public Audio Access" ON storage.objects;
+    CREATE POLICY "Public Audio Access" ON storage.objects FOR ALL USING (bucket_id = 'audio') WITH CHECK (bucket_id = 'audio');
+
     DROP POLICY IF EXISTS "Public Videos Access" ON storage.objects;
     CREATE POLICY "Public Videos Access" ON storage.objects FOR ALL USING (bucket_id = 'videos') WITH CHECK (bucket_id = 'videos');
   END IF;
@@ -5119,5 +5172,43 @@ BEGIN
   END IF;
 EXCEPTION
   WHEN OTHERS THEN NULL;
+END $$;
+`;
+
+export const AUDIO_STORAGE_SQL_SNIPPET = `-- =====================================================================
+-- VIRALHUB: FIX AUDIO LIBRARY TABLE & STORAGE BUCKET POLICIES
+-- Run this in Supabase Dashboard -> SQL Editor -> New query -> Run
+-- Safe & non-destructive: only creates missing columns & enables upload
+-- =====================================================================
+
+-- 1. Ensure public."AudioLibrary" table has all needed columns
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "AudioTitle" TEXT;
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "AudioArtist" TEXT;
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "AudioURL" TEXT;
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "CoverURL" TEXT;
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "Duration" TEXT DEFAULT '00:30';
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "Category" TEXT DEFAULT 'Trending';
+ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "CreatedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now());
+
+-- 2. Enable Row Level Security and grant permissive public access to AudioLibrary
+ALTER TABLE IF EXISTS public."AudioLibrary" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public all access on AudioLibrary" ON public."AudioLibrary";
+CREATE POLICY "Public all access on AudioLibrary" ON public."AudioLibrary" FOR ALL USING (true) WITH CHECK (true);
+
+-- 3. Ensure the 'audio' bucket is registered and public
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('audio', 'audio', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
+
+-- 4. Enable public upload & read access for the 'audio' storage bucket
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'storage' AND tablename = 'objects') THEN
+    DROP POLICY IF EXISTS "Public Audio Access" ON storage.objects;
+    CREATE POLICY "Public Audio Access" ON storage.objects
+    FOR ALL
+    USING (bucket_id = 'audio')
+    WITH CHECK (bucket_id = 'audio');
+  END IF;
 END $$;
 `;

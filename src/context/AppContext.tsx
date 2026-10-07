@@ -691,11 +691,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     storage.get('audioTracks', INITIAL_AUDIO_TRACKS)
   );
 
-  // Helper to ensure we never pass a video file (.mp4, .webm, blob:) as an image coverUrl
+  // Helper to check if a URL points to a video file (.mp4, .webm, etc.)
   const isVideoUrl = (url?: string | null): boolean => {
     if (!url) return false;
     const lower = url.trim().toLowerCase();
-    return lower.startsWith('blob:') || /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(lower);
+    return /\.(mp4|webm|mov|mkv|ogg|m4v|avi)($|\?)/i.test(lower);
   };
 
   // Combine curated audio tracks + sounds from all uploaded community videos
@@ -719,12 +719,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           : '';
 
       if (v.audioTrack && v.audioTrack.id) {
+        const existingTrack = map.get(v.audioTrack.id);
+        const resolvedCover =
+          v.audioTrack.coverUrl && !isVideoUrl(v.audioTrack.coverUrl)
+            ? v.audioTrack.coverUrl
+            : (existingTrack?.coverUrl || validCover);
+
         const cleanedTrack: AudioTrack = {
           ...v.audioTrack,
-          coverUrl:
-            v.audioTrack.coverUrl && !isVideoUrl(v.audioTrack.coverUrl)
-              ? v.audioTrack.coverUrl
-              : validCover,
+          coverUrl: resolvedCover,
           sourceVideoId: v.audioTrack.sourceVideoId || v.id,
           sourceUsername: v.audioTrack.sourceUsername || v.creator?.username || '',
         };
@@ -4279,24 +4282,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       storage.set('videos', next);
       return next;
     });
-
-    // If an audio track was attached, ensure it's saved in Supabase AudioTrack/AudioLibrary
-    if (newVideo.audioTrack) {
-      supabaseDb.insertAudioTrack(newVideo.audioTrack);
-    }
-
-    // Also register this video's original sound as an audio track in Supabase
-    const originalSoundTrack: AudioTrack = {
-      id: `sound_vid_${videoId}`,
-      title: newVideo.audioTrack?.title || `Original Sound - @${currentUser.username}`,
-      artist: currentUser.displayName || currentUser.username,
-      duration: '00:30',
-      coverUrl: validThumb,
-      audioUrl: newVideo.audioTrack?.audioUrl || created.mediaUrl,
-      sourceVideoId: videoId,
-      sourceUsername: currentUser.username,
-    };
-    supabaseDb.insertAudioTrack(originalSoundTrack);
 
     const ok = await supabaseDb.insertVideo(created);
     return ok;
