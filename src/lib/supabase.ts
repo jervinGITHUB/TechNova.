@@ -2012,7 +2012,7 @@ export const supabaseDb = {
     if (!client) return false;
     try {
       const trackUuid = toUuid(track.id);
-      const payload = {
+      const payload: Record<string, any> = {
         AudioTrackID: trackUuid,
         Title: track.title,
         Artist: track.artist,
@@ -2020,13 +2020,131 @@ export const supabaseDb = {
         AudioURL: track.audioUrl || '',
         CoverURL: track.coverUrl || '',
       };
+      if (track.category) {
+        payload.Category = track.category;
+      }
       let res = await client.from('AudioLibrary').upsert(payload, { onConflict: 'AudioTrackID' });
       if (res.error) {
-        await client.from('AudioTrack').upsert(payload, { onConflict: 'AudioTrackID' });
+        // Fallback retry without Category in case column does not exist in user schema
+        const { Category: _, ...fallbackPayload } = payload;
+        const resFb = await client.from('AudioLibrary').upsert(fallbackPayload, { onConflict: 'AudioTrackID' });
+        if (resFb.error) {
+          const res2 = await client.from('AudioTrack').upsert(payload, { onConflict: 'AudioTrackID' });
+          if (res2.error) {
+            await client.from('AudioTrack').upsert(fallbackPayload, { onConflict: 'AudioTrackID' });
+          }
+        }
       }
       return true;
     } catch {
       return false;
+    }
+  },
+
+  async deleteAudioTrack(trackId: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !trackId) return false;
+    try {
+      const trackUuid = toUuid(trackId);
+      await client.from('AudioLibrary').delete().or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${trackId}`);
+      await client.from('AudioTrack').delete().or(`AudioTrackID.eq.${trackUuid},AudioTrackID.eq.${trackId}`);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  async uploadAudioFile(file: File): Promise<{ url: string | null; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { url: null, error: 'Supabase client is not connected' };
+
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'mp3';
+      const cleanFileName = `audio_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
+      const mimeType = file.type || (ext === 'wav' ? 'audio/wav' : ext === 'ogg' ? 'audio/ogg' : ext === 'm4a' ? 'audio/mp4' : 'audio/mpeg');
+
+      let candidateBuckets: string[] = ['audio', 'audios', 'sounds', 'music', 'media', 'uploads', 'public', 'files'];
+      try {
+        const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
+        if (!bucketError && bucketList && bucketList.length > 0) {
+          const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
+          const audioBuckets = discovered.filter(b => /audio|sound|music|media/i.test(b));
+          candidateBuckets = Array.from(new Set([...audioBuckets, ...discovered, ...candidateBuckets]));
+        } else {
+          await client.storage.createBucket('audio', { public: true }).catch(() => {});
+        }
+      } catch {
+        // ignore listBuckets failure
+      }
+
+      let lastError: any = null;
+      for (const bucket of candidateBuckets) {
+        const tryPaths = [cleanFileName, `audio/${cleanFileName}`];
+        for (const targetPath of tryPaths) {
+          try {
+            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
+              contentType: mimeType,
+              cacheControl: '3600',
+              upsert: false,
+            });
+            if (!error && data?.path) {
+              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
+              if (pubData?.publicUrl) return { url: pubData.publicUrl };
+            }
+            if (error) lastError = error;
+          } catch (err: any) {
+            lastError = err;
+          }
+        }
+      }
+      return { url: null, error: lastError?.message || 'Bucket upload failed' };
+    } catch (e: any) {
+      console.warn('Supabase uploadAudioFile exception:', e);
+      return { url: null, error: e?.message || 'Audio upload failed' };
+    }
+  },
+
+  async uploadAudioCover(file: File): Promise<{ url: string | null; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { url: null, error: 'Supabase client is not connected' };
+
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase() || 'jpg';
+      const cleanFileName = `cover_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
+      const mimeType = file.type || (ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg');
+
+      let candidateBuckets: string[] = ['images', 'covers', 'avatars', 'media', 'public', 'uploads'];
+      try {
+        const { data: bucketList, error: bucketError } = await client.storage.listBuckets();
+        if (!bucketError && bucketList && bucketList.length > 0) {
+          const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
+          candidateBuckets = Array.from(new Set([...discovered, ...candidateBuckets]));
+        }
+      } catch {}
+
+      let lastError: any = null;
+      for (const bucket of candidateBuckets) {
+        const tryPaths = [cleanFileName, `covers/${cleanFileName}`];
+        for (const targetPath of tryPaths) {
+          try {
+            const { data, error } = await client.storage.from(bucket).upload(targetPath, file, {
+              contentType: mimeType,
+              cacheControl: '3600',
+              upsert: false,
+            });
+            if (!error && data?.path) {
+              const { data: pubData } = client.storage.from(bucket).getPublicUrl(targetPath);
+              if (pubData?.publicUrl) return { url: pubData.publicUrl };
+            }
+            if (error) lastError = error;
+          } catch (err: any) {
+            lastError = err;
+          }
+        }
+      }
+      return { url: null, error: lastError?.message || 'Cover upload failed' };
+    } catch (e: any) {
+      return { url: null, error: e?.message || 'Cover upload failed' };
     }
   },
 
@@ -4233,6 +4351,7 @@ export const supabaseDb = {
       totalReports: 0,
       activeLivestreams: 0,
       totalAdmins: 0,
+      totalAudioTracks: 0,
     };
 
     if (!client) return fallbackStats;
@@ -4241,9 +4360,7 @@ export const supabaseDb = {
       const [
         usersRes,
         videosRes,
-        likesRes,
-        commentsRes,
-        sharesRes,
+        audioRes,
         reportVidRes,
         reportUserRes,
         livestreamsRes,
@@ -4251,9 +4368,7 @@ export const supabaseDb = {
       ] = await Promise.all([
         client.from('User').select('*', { count: 'exact', head: true }),
         client.from('Video').select('*', { count: 'exact', head: true }),
-        client.from('Like').select('*', { count: 'exact', head: true }),
-        client.from('Comment').select('*', { count: 'exact', head: true }),
-        client.from('Share').select('*', { count: 'exact', head: true }),
+        client.from('AudioLibrary').select('*', { count: 'exact', head: true }),
         client.from('ReportVideo').select('*', { count: 'exact', head: true }),
         client.from('ReportUser').select('*', { count: 'exact', head: true }),
         client.from('Livestream').select('*', { count: 'exact', head: true }).is('EndedAt', null),
@@ -4265,12 +4380,13 @@ export const supabaseDb = {
       const computedStats: SystemStats = {
         totalUsers: usersRes.count ?? 0,
         totalVideos: videosRes.count ?? 0,
-        totalLikes: likesRes.count ?? 0,
-        totalComments: commentsRes.count ?? 0,
-        totalShares: sharesRes.count ?? 0,
+        totalLikes: 0,
+        totalComments: 0,
+        totalShares: 0,
         totalReports,
         activeLivestreams: livestreamsRes.count ?? 0,
         totalAdmins: (adminsRes as any)?.count ?? 0,
+        totalAudioTracks: audioRes.count ?? 0,
       };
 
       systemStatsCache = { stats: computedStats, timestamp: Date.now() };

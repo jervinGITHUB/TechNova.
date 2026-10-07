@@ -31,6 +31,8 @@ export interface AudioTrack {
   audioUrl?: string;
   sourceVideoId?: string;
   sourceUsername?: string;
+  category?: string;
+  useCount?: number;
 }
 
 export interface CommentReplyEntry {
@@ -219,6 +221,7 @@ export interface SystemStats {
   totalReports: number;
   activeLivestreams: number;
   totalAdmins: number;
+  totalAudioTracks?: number;
 }
 
 export interface LiveStreamMessage {

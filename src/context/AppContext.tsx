@@ -422,6 +422,9 @@ interface AppContextType {
   users: User[];
   videos: Video[];
   audioTracks: AudioTrack[];
+  audioTracksList: AudioTrack[];
+  addAudioTrack: (track: Omit<AudioTrack, 'id'> | AudioTrack) => Promise<AudioTrack>;
+  deleteAudioTrack: (trackId: string) => Promise<boolean>;
   conversations: Conversation[];
   activeConversationId: string | null;
   notifications: NotificationItem[];
@@ -5283,6 +5286,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAudioLibraryOpen(true);
   };
 
+  const addAudioTrack = async (trackData: Omit<AudioTrack, 'id'> | AudioTrack): Promise<AudioTrack> => {
+    const id = ('id' in trackData && trackData.id) ? trackData.id : `track_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const newTrack: AudioTrack = {
+      ...trackData,
+      id,
+    };
+
+    setAudioTracksList(prev => {
+      const filtered = (prev || []).filter(t => t.id !== id);
+      const updated = [newTrack, ...filtered];
+      storage.set('audioTracks', updated);
+      return updated;
+    });
+
+    supabaseDb.insertAudioTrack(newTrack).catch(() => {});
+    return newTrack;
+  };
+
+  const deleteAudioTrack = async (trackId: string): Promise<boolean> => {
+    setAudioTracksList(prev => {
+      const updated = (prev || []).filter(t => t.id !== trackId);
+      storage.set('audioTracks', updated);
+      return updated;
+    });
+
+    supabaseDb.deleteAudioTrack(trackId).catch(() => {});
+    return true;
+  };
+
   // Admin Operations
   const addAdmin = async (adminData: Partial<AdminRecord>): Promise<boolean> => {
     const newAdmin: AdminRecord = {
@@ -6368,6 +6400,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         users,
         videos: activeVideos,
         audioTracks,
+        audioTracksList,
+        addAudioTrack,
+        deleteAudioTrack,
         conversations,
         activeConversationId,
         messagesMobileView,

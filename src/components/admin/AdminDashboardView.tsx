@@ -1,44 +1,39 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import {
   supabaseDb,
-  getSupabaseConfig,
-  testSupabaseConnection,
   isSameUser,
   toUuid,
 } from '../../lib/supabase';
-import { AdminRecord, SystemStats } from '../../types';
+import { AudioTrack, SystemStats } from '../../types';
 import {
   Shield,
   Users,
   Film,
-  Heart,
-  MessageSquare,
-  Share2,
   AlertTriangle,
-  Radio,
-  RefreshCw,
-  Database,
-  Copy,
-  Check,
   Search,
   Trash2,
   CheckCircle2,
   XCircle,
   Plus,
   Activity,
-  Server,
   Lock,
   Eye,
-  Sliders,
-  Sparkles,
   Clock,
   LogOut,
   ArrowRightLeft,
-  UserCog,
   Ban,
   UserCheck,
+  Check,
+  Music,
+  Play,
+  Pause,
+  Volume2,
+  Upload,
+  Radio,
+  Sparkles,
+  Disc,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -46,6 +41,10 @@ export const AdminDashboardView: React.FC = () => {
     currentUser,
     users,
     videos,
+    audioTracks,
+    audioTracksList,
+    addAudioTrack,
+    deleteAudioTrack,
     reports,
     admins,
     addAdmin,
@@ -60,9 +59,7 @@ export const AdminDashboardView: React.FC = () => {
     rejectVideoAdmin,
     reviewVideoAppeal,
     updateReportStatusAdmin,
-    syncAllToSupabase,
     syncWithSupabase,
-    setSupabaseModalOpen,
     navigateToUserProfile,
     setSwitchAccountModalOpen,
     savedAccounts,
@@ -70,15 +67,24 @@ export const AdminDashboardView: React.FC = () => {
   } = useApp();
 
   const [activeAdminTab, setActiveAdminTab] = useState<
-    'overview' | 'users' | 'videos' | 'reports' | 'admins'
+    'overview' | 'users' | 'videos' | 'audio' | 'reports' | 'admins'
   >('overview');
 
-  const [resolvingReportId, setResolvingReportId] = useState<string | null>(null);
-  const [banningUser, setBanningUser] = useState<{ id: string; username: string; displayName: string } | null>(null);
-  const [banCustomReason, setBanCustomReason] = useState('Violation of Community Guidelines');
+  // Status feedback toast message
+  const [feedbackToast, setFeedbackToast] = useState<{
+    type: 'success' | 'error' | 'info';
+    text: string;
+  } | null>(null);
 
-  // Deduplicate users so that even if database had duplicate rows for an email, each unique user account displays once!
-  const uniqueUsers = React.useMemo(() => {
+  const showToast = (text: string, type: 'success' | 'error' | 'info' = 'success') => {
+    setFeedbackToast({ type, text });
+    setTimeout(() => {
+      setFeedbackToast(prev => (prev?.text === text ? null : prev));
+    }, 3800);
+  };
+
+  // Deduplicate users by email or ID
+  const uniqueUsers = useMemo(() => {
     const map = new Map<string, typeof users[0]>();
     for (const u of users) {
       const emailKey = u.email ? u.email.trim().toLowerCase() : u.id;
@@ -94,40 +100,106 @@ export const AdminDashboardView: React.FC = () => {
     return Array.from(map.values());
   }, [users]);
 
+  // System stats (Likes and Comments removed as requested)
   const [stats, setStats] = useState<SystemStats>({
     totalUsers: uniqueUsers.length,
     totalVideos: videos.length,
-    totalLikes: videos.reduce((acc, v) => acc + (v.likesCount || 0), 0),
-    totalComments: videos.reduce((acc, v) => acc + (v.commentsCount || 0), 0),
-    totalShares: videos.reduce((acc, v) => acc + (v.sharesCount || 0), 0),
+    totalLikes: 0,
+    totalComments: 0,
+    totalShares: 0,
     totalReports: reports.length,
     activeLivestreams: 0,
     totalAdmins: admins.length || 1,
+    totalAudioTracks: audioTracks.length,
   });
 
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isSyncingAll, setIsSyncAll] = useState(false);
-  const [syncStatusMsg, setSyncStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [connectionLatency, setConnectionLatency] = useState<number | null>(null);
+  // Automatic Background Synchronization (Lightweight, IOPS-safe)
+  const isSyncingRef = useRef(false);
+  const autoSyncQuietly = async () => {
+    if (isSyncingRef.current) return;
+    isSyncingRef.current = true;
+    try {
+      await syncWithSupabase();
+      const remoteStats = await supabaseDb.fetchSystemStats(false);
+      setStats({
+        totalUsers: uniqueUsers.length,
+        totalVideos: remoteStats.totalVideos || videos.length,
+        totalLikes: 0,
+        totalComments: 0,
+        totalShares: 0,
+        totalReports: remoteStats.totalReports || reports.length,
+        activeLivestreams: remoteStats.activeLivestreams,
+        totalAdmins: remoteStats.totalAdmins || admins.length || 1,
+        totalAudioTracks: remoteStats.totalAudioTracks || audioTracks.length,
+      });
+    } catch (err) {
+      // Quiet background fallback
+    } finally {
+      isSyncingRef.current = false;
+    }
+  };
 
-  // Filters
+  // Run initial sync on mount and low-frequency background check
+  useEffect(() => {
+    autoSyncQuietly();
+    const interval = setInterval(autoSyncQuietly, 90000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Update stats dynamically when local state changes
+  useEffect(() => {
+    setStats(prev => ({
+      ...prev,
+      totalUsers: uniqueUsers.length,
+      totalVideos: videos.length,
+      totalReports: reports.length,
+      totalAdmins: admins.length || 1,
+      totalAudioTracks: audioTracks.length,
+    }));
+  }, [uniqueUsers.length, videos.length, reports.length, admins.length, audioTracks.length]);
+
+  // Filters & Search
   const [userSearch, setUserSearch] = useState('');
   const [videoSearch, setVideoSearch] = useState('');
   const [videoStatusFilter, setVideoStatusFilter] = useState<'approved' | 'rejected' | 'appeals' | 'all'>('approved');
   const [reportFilter, setReportFilter] = useState<'all' | 'video' | 'user'>('all');
   const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'Under Review' | 'Approved' | 'Rejected'>('all');
 
-  // Video Rejection Modal
+  // Audio Tab Filters & State
+  const [audioSearch, setAudioSearch] = useState('');
+  const [audioCategoryFilter, setAudioCategoryFilter] = useState<string>('all');
+  const [audioSourceFilter, setAudioSourceFilter] = useState<'all' | 'curated' | 'video'>('all');
+  const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
+  const [audioPlaybackError, setAudioPlaybackError] = useState<string | null>(null);
+  const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
+
+  // Audio Modal
+  const [showAddAudioModal, setShowAddAudioModal] = useState(false);
+  const [newAudioTitle, setNewAudioTitle] = useState('');
+  const [newAudioArtist, setNewAudioArtist] = useState('');
+  const [newAudioCategory, setNewAudioCategory] = useState('Trending');
+  const [newAudioDuration, setNewAudioDuration] = useState('00:30');
+  const [newAudioUrl, setNewAudioUrl] = useState('');
+  const [newAudioCoverUrl, setNewAudioCoverUrl] = useState('');
+  const [audioSourceMode, setAudioSourceMode] = useState<'file' | 'url' | 'preset'>('file');
+  const [selectedAudioFile, setSelectedAudioFile] = useState<File | null>(null);
+  const [selectedCoverFile, setSelectedCoverFile] = useState<File | null>(null);
+  const [isUploadingAudio, setIsUploadingAudio] = useState(false);
+  const [modalAudioPreviewPlaying, setModalAudioPreviewPlaying] = useState(false);
+  const modalAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Modals for Moderation
+  const [resolvingReportId, setResolvingReportId] = useState<string | null>(null);
+  const [banningUser, setBanningUser] = useState<{ id: string; username: string; displayName: string } | null>(null);
+  const [banCustomReason, setBanCustomReason] = useState('Violation of Community Guidelines');
   const [rejectingVideoId, setRejectingVideoId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('Inappropriate visual content or guidelines violation');
 
-  // Add Admin form modal
+  // Add Admin Modal
   const [showAddAdminModal, setShowAddAdminModal] = useState(false);
   const [newAdminUser, setNewAdminUser] = useState('');
   const [newAdminEmail, setNewAdminEmail] = useState('');
   const [newAdminRole, setNewAdminRole] = useState<'Super Admin' | 'Admin' | 'Content Moderator'>('Admin');
-
-  const supabaseConfig = getSupabaseConfig();
 
   // Filtered lists
   const filteredUsers = uniqueUsers.filter(
@@ -137,92 +209,15 @@ export const AdminDashboardView: React.FC = () => {
       u.email.toLowerCase().includes(userSearch.toLowerCase())
   );
 
-  const loadData = async (force = false) => {
-    setIsRefreshing(true);
-    try {
-      await syncWithSupabase();
-      
-      const testPromise = connectionLatency === null || force
-        ? testSupabaseConnection()
-        : Promise.resolve({ success: true, message: '', latencyMs: connectionLatency });
-
-      const [remoteStats, testRes] = await Promise.all([
-        supabaseDb.fetchSystemStats(force),
-        testPromise,
-      ]);
-
-      if (testRes.latencyMs !== undefined && testRes.latencyMs !== null) {
-        setConnectionLatency(testRes.latencyMs);
-      }
-
-      setStats({
-        totalUsers: uniqueUsers.length,
-        totalVideos: remoteStats.totalVideos || videos.length,
-        totalLikes: remoteStats.totalLikes || videos.reduce((acc, v) => acc + (v.likesCount || 0), 0),
-        totalComments: remoteStats.totalComments || videos.reduce((acc, v) => acc + (v.commentsCount || 0), 0),
-        totalShares: remoteStats.totalShares || videos.reduce((acc, v) => acc + (v.sharesCount || 0), 0),
-        totalReports: remoteStats.totalReports || reports.length,
-        activeLivestreams: remoteStats.activeLivestreams,
-        totalAdmins: remoteStats.totalAdmins || admins.length || 1,
-      });
-    } catch (err) {
-      console.warn('Failed to load admin stats:', err);
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
-
-  useEffect(() => {
-    loadData(false);
-  }, []);
-
-  const handleSyncAll = async () => {
-    setIsSyncAll(true);
-    setSyncStatusMsg(null);
-    try {
-      const res = await syncAllToSupabase();
-      setSyncStatusMsg({
-        type: res.success ? 'success' : 'error',
-        text: res.message,
-      });
-      await loadData();
-    } catch (e: any) {
-      setSyncStatusMsg({
-        type: 'error',
-        text: e?.message || 'Sync failed. Please check Supabase credentials.',
-      });
-    } finally {
-      setIsSyncAll(false);
-    }
-  };
-
-  const handleCreateAdmin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newAdminUser.trim() || !newAdminEmail.trim()) return;
-
-    await addAdmin({
-      username: newAdminUser.trim(),
-      email: newAdminEmail.trim(),
-      role: newAdminRole,
-      permissions:
-        newAdminRole === 'Super Admin'
-          ? ['manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_database']
-          : ['manage_users', 'manage_videos', 'manage_reports'],
-    });
-
-    setNewAdminUser('');
-    setNewAdminEmail('');
-    setShowAddAdminModal(false);
-    await loadData();
-  };
-
-  // Video counts
-  const approvedVideosCount = videos.filter(v => v.status === 'approved' || (!v.status && v.id.startsWith('vid_sample'))).length;
+  const approvedVideosCount = videos.filter(
+    v => v.status === 'approved' || (!v.status && v.id.startsWith('vid_sample'))
+  ).length;
   const rejectedVideosCount = videos.filter(v => v.status === 'rejected').length;
   const pendingAppealsCount = videos.filter(
     v =>
       v.appealStatus === 'pending' ||
-      (v.status === 'rejected' && Boolean(v.appealReason && v.appealStatus !== 'declined' && v.appealStatus !== 'approved'))
+      (v.status === 'rejected' &&
+        Boolean(v.appealReason && v.appealStatus !== 'declined' && v.appealStatus !== 'approved'))
   ).length;
 
   const pendingReportsCount = reports.filter(r => r.status === 'Under Review').length;
@@ -245,7 +240,8 @@ export const AdminDashboardView: React.FC = () => {
     if (videoStatusFilter === 'appeals') {
       return (
         v.appealStatus === 'pending' ||
-        (v.status === 'rejected' && Boolean(v.appealReason && v.appealStatus !== 'declined' && v.appealStatus !== 'approved'))
+        (v.status === 'rejected' &&
+          Boolean(v.appealReason && v.appealStatus !== 'declined' && v.appealStatus !== 'approved'))
       );
     }
     return true;
@@ -257,1207 +253,1744 @@ export const AdminDashboardView: React.FC = () => {
     return true;
   });
 
+  // Filtered audio tracks
+  const filteredAudioTracks = audioTracks.filter(track => {
+    const isVideoSound = Boolean(track.sourceVideoId || track.title.toLowerCase().startsWith('original sound'));
+    if (audioSourceFilter === 'curated' && isVideoSound) return false;
+    if (audioSourceFilter === 'video' && !isVideoSound) return false;
+
+    if (audioCategoryFilter !== 'all') {
+      const cat = (track.category || 'Trending').toLowerCase();
+      if (cat !== audioCategoryFilter.toLowerCase()) return false;
+    }
+
+    if (!audioSearch.trim()) return true;
+    const q = audioSearch.toLowerCase().trim();
+    return (
+      track.title.toLowerCase().includes(q) ||
+      track.artist.toLowerCase().includes(q) ||
+      (track.sourceUsername && track.sourceUsername.toLowerCase().includes(q))
+    );
+  });
+
+  // Audio Playback Preview in Table
+  const togglePlayTrack = (track: AudioTrack) => {
+    if (!audioPlayerRef.current) return;
+    setAudioPlaybackError(null);
+
+    if (playingTrackId === track.id) {
+      audioPlayerRef.current.pause();
+      setPlayingTrackId(null);
+    } else {
+      if (track.audioUrl) {
+        audioPlayerRef.current.src = track.audioUrl;
+        audioPlayerRef.current.currentTime = 0;
+        audioPlayerRef.current
+          .play()
+          .then(() => {
+            setPlayingTrackId(track.id);
+          })
+          .catch(err => {
+            console.warn('Playback error:', err);
+            setPlayingTrackId(track.id);
+          });
+      } else {
+        setPlayingTrackId(track.id);
+      }
+    }
+  };
+
+  // Handle Add Audio Form
+  const handleCreateAudio = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAudioTitle.trim() || !newAudioArtist.trim()) {
+      showToast('Please provide a track title and artist name.', 'error');
+      return;
+    }
+
+    setIsUploadingAudio(true);
+    try {
+      let finalAudioUrl = newAudioUrl.trim();
+      let finalCoverUrl = newAudioCoverUrl.trim();
+
+      // 1. Upload audio file if selected
+      if (audioSourceMode === 'file' && selectedAudioFile) {
+        const uploadRes = await supabaseDb.uploadAudioFile(selectedAudioFile);
+        if (uploadRes.url) {
+          finalAudioUrl = uploadRes.url;
+        } else {
+          // In-browser fallback object URL / Data URL
+          finalAudioUrl = URL.createObjectURL(selectedAudioFile);
+        }
+      }
+
+      // 2. Upload cover image if selected
+      if (selectedCoverFile) {
+        const coverRes = await supabaseDb.uploadAudioCover(selectedCoverFile);
+        if (coverRes.url) {
+          finalCoverUrl = coverRes.url;
+        } else {
+          finalCoverUrl = URL.createObjectURL(selectedCoverFile);
+        }
+      }
+
+      // Fallback default audio URL if none provided
+      if (!finalAudioUrl) {
+        finalAudioUrl = 'https://actions.google.com/sounds/v1/science_fiction/alien_beacon.ogg';
+      }
+
+      // Fallback default cover artwork
+      if (!finalCoverUrl) {
+        finalCoverUrl = 'https://images.unsplash.com/photo-1514525253161-7a46d19cd819?w=300&auto=format&fit=crop';
+      }
+
+      const newTrack: Omit<AudioTrack, 'id'> = {
+        title: newAudioTitle.trim(),
+        artist: newAudioArtist.trim(),
+        category: newAudioCategory,
+        duration: newAudioDuration.trim() || '00:30',
+        audioUrl: finalAudioUrl,
+        coverUrl: finalCoverUrl,
+        useCount: 0,
+      };
+
+      await addAudioTrack(newTrack);
+      showToast(`Audio track "${newAudioTitle.trim()}" published to library!`);
+
+      // Reset form
+      setNewAudioTitle('');
+      setNewAudioArtist('');
+      setNewAudioCategory('Trending');
+      setNewAudioDuration('00:30');
+      setNewAudioUrl('');
+      setNewAudioCoverUrl('');
+      setSelectedAudioFile(null);
+      setSelectedCoverFile(null);
+      setShowAddAudioModal(false);
+      setModalAudioPreviewPlaying(false);
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to save audio track', 'error');
+    } finally {
+      setIsUploadingAudio(false);
+    }
+  };
+
+  const handleDeleteAudio = async (track: AudioTrack) => {
+    const isCurated = audioTracksList.some(t => t.id === track.id);
+    if (!isCurated) {
+      showToast('This sound is extracted from a video and cannot be deleted directly.', 'info');
+      return;
+    }
+
+    const confirmDelete = window.confirm(
+      `Are you sure you want to delete the audio track "${track.title}" by ${track.artist}?\n\nThis will remove it from the sound picker across all users.`
+    );
+    if (!confirmDelete) return;
+
+    if (playingTrackId === track.id && audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      setPlayingTrackId(null);
+    }
+
+    await deleteAudioTrack(track.id);
+    showToast(`Track "${track.title}" deleted.`);
+  };
+
+  const handleAudioFileSelection = (file: File) => {
+    setSelectedAudioFile(file);
+    // Auto-detect duration
+    try {
+      const tempUrl = URL.createObjectURL(file);
+      const audioObj = new Audio(tempUrl);
+      audioObj.onloadedmetadata = () => {
+        const secs = Math.round(audioObj.duration);
+        if (!isNaN(secs) && secs > 0) {
+          const m = Math.floor(secs / 60);
+          const s = secs % 60;
+          setNewAudioDuration(`${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`);
+        }
+      };
+    } catch {
+      // fallback
+    }
+  };
+
+  const handleCreateAdmin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAdminUser.trim() || !newAdminEmail.trim()) return;
+
+    await addAdmin({
+      username: newAdminUser.trim(),
+      email: newAdminEmail.trim(),
+      role: newAdminRole,
+      permissions:
+        newAdminRole === 'Super Admin'
+          ? ['manage_users', 'manage_videos', 'manage_reports', 'manage_admins', 'manage_audio']
+          : ['manage_users', 'manage_videos', 'manage_reports', 'manage_audio'],
+    });
+
+    setNewAdminUser('');
+    setNewAdminEmail('');
+    setShowAddAdminModal(false);
+    showToast(`Administrator @${newAdminUser.trim()} added successfully.`);
+  };
+
+  const audioCategories = [
+    'Trending',
+    'Electronic',
+    'Hip Hop',
+    'Pop',
+    'Lo-Fi',
+    'Rock',
+    'Cinematic',
+    'Meme / Sound FX',
+  ];
+
   return (
-    <div className="min-h-full bg-[#0c0c10] text-white p-4 sm:p-8 space-y-6 select-none max-w-7xl mx-auto">
-      {/* Top Banner Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6 border-b border-neutral-800">
-        <div className="flex items-center gap-3.5">
-          <div className="p-3 rounded-2xl bg-gradient-to-tr from-[#ff007a] to-purple-600 text-white shadow-[0_0_20px_rgba(255,0,122,0.4)]">
-            <Shield className="w-7 h-7" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2.5">
-              <h1 className="text-2xl sm:text-3xl font-extrabold font-brand tracking-tight">
-                Admin Command Center
+    <div className="min-h-full bg-[#0c0c10] text-white selection:bg-[#ff007a] selection:text-white select-none">
+      {/* Hidden audio element for track playback */}
+      <audio
+        ref={audioPlayerRef}
+        onEnded={() => setPlayingTrackId(null)}
+        onError={() => {
+          setAudioPlaybackError('Unable to stream this audio track source');
+          setPlayingTrackId(null);
+        }}
+      />
+
+      {/* Floating Status Notification Toast */}
+      {feedbackToast && (
+        <div className="fixed top-5 right-5 z-50 animate-fadeIn flex items-center gap-2.5 px-4 py-2.5 rounded-xl border shadow-2xl backdrop-blur-md text-xs font-semibold bg-[#181824]/95 border-neutral-700/80 text-white">
+          {feedbackToast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
+          {feedbackToast.type === 'error' && <XCircle className="w-4 h-4 text-red-400 shrink-0" />}
+          {feedbackToast.type === 'info' && <Sparkles className="w-4 h-4 text-[#ff007a] shrink-0" />}
+          <span>{feedbackToast.text}</span>
+        </div>
+      )}
+
+      {/* Top Workspace Header (Enterprise Top Bar Contract) */}
+      <header className="sticky top-0 z-30 bg-[#0c0c10]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 sm:px-8 py-3.5">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* Breadcrumb Navigation & Wordmark */}
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-xl bg-[#ff007a]/15 text-[#ff007a] border border-[#ff007a]/30">
+              <Shield className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 text-xs text-neutral-400">
+                <span className="font-brand font-bold text-neutral-200 tracking-wide">VIRALHUB</span>
+                <span className="text-neutral-600">/</span>
+                <span>Command Center</span>
+                <span className="text-neutral-600">/</span>
+                <span className="text-neutral-200 font-medium capitalize">{activeAdminTab}</span>
+              </div>
+              <h1 className="text-base sm:text-lg font-bold font-brand tracking-tight text-white">
+                Platform Command Console
               </h1>
-              <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-[#ff007a]/20 text-[#ff007a] border border-[#ff007a]/30">
-                System Active
+            </div>
+          </div>
+
+          {/* Admin Profile & Actions */}
+          <div className="flex items-center gap-2.5 self-end md:self-center">
+            {/* Admin identity capsule */}
+            <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-[#14141e] border border-neutral-800">
+              <Avatar
+                src={currentUser?.avatar}
+                alt={currentUser?.displayName || 'Admin'}
+                size="xs"
+              />
+              <div className="text-left hidden sm:block">
+                <div className="text-xs font-bold text-white leading-tight">
+                  {currentUser?.displayName || 'Administrator'}
+                </div>
+                <div className="text-[10px] text-neutral-400 font-mono">
+                  @{currentUser?.username || 'admin'}
+                </div>
+              </div>
+              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                Super Admin
               </span>
             </div>
-            <p className="text-xs sm:text-sm text-neutral-400 mt-1">
-              Real-time synchronization with Supabase PostgreSQL database tables & Vercel deployment
-            </p>
+
+            {/* Switch Account */}
+            <button
+              type="button"
+              onClick={() => setSwitchAccountModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181824] hover:bg-[#202030] text-neutral-200 hover:text-white border border-neutral-800 text-xs font-semibold transition-colors cursor-pointer"
+              title="Switch user accounts"
+            >
+              <ArrowRightLeft className="w-3.5 h-3.5 text-[#ff007a]" />
+              <span className="hidden sm:inline">Switch</span>
+            </button>
+
+            {/* Log Out */}
+            <button
+              type="button"
+              onClick={() => logout()}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/25 text-xs font-semibold transition-colors cursor-pointer"
+              title="End administrative session"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Sign Out</span>
+            </button>
           </div>
         </div>
+      </header>
 
-        {/* Action Controls */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Cloud Sync Status Badge */}
+      {/* Main Content Viewport */}
+      <main className="max-w-7xl mx-auto p-4 sm:p-8 space-y-6">
+        {/* Metric Cards (High-signal platform metrics without Likes/Comments clutter) */}
+        <section aria-label="System Metrics" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+          {/* Registered Users */}
           <div
-            onClick={() => setSupabaseModalOpen(true)}
-            className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#161622] border border-neutral-700/80 cursor-pointer hover:border-neutral-500 transition-colors"
-            title="Click to configure Supabase URL & Anon Key"
+            onClick={() => setActiveAdminTab('users')}
+            className="bg-[#12121a] border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-colors cursor-pointer group"
           >
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${
-                supabaseConfig.isConnected
-                  ? 'bg-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.8)] animate-pulse'
-                  : 'bg-amber-400'
-              }`}
-            />
-            <span className="text-xs font-semibold text-neutral-200">
-              {supabaseConfig.isConnected ? 'Supabase Synced' : 'Offline / Local Persistence'}
-            </span>
-            {connectionLatency !== null && supabaseConfig.isConnected && (
-              <span className="text-[10px] text-emerald-400 font-mono">({connectionLatency}ms)</span>
-            )}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => loadData(true)}
-            disabled={isRefreshing}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 hover:text-white text-xs font-medium transition-colors cursor-pointer disabled:opacity-50"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#ff007a]' : ''}`} />
-            <span>{isRefreshing ? 'Refreshing...' : 'Refresh'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleSyncAll}
-            disabled={isSyncingAll}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white text-xs font-bold shadow-[0_0_15px_rgba(255,0,122,0.3)] transition-all cursor-pointer disabled:opacity-50"
-          >
-            <Activity className={`w-3.5 h-3.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
-            <span>{isSyncingAll ? 'Syncing to Cloud...' : 'Sync All to Supabase'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setSwitchAccountModalOpen(true)}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#1d1d2b] hover:bg-[#252538] text-white border border-neutral-700/80 text-xs font-semibold transition-colors cursor-pointer"
-            title="Switch between Administrator and Client accounts"
-          >
-            <ArrowRightLeft className="w-3.5 h-3.5 text-[#ff007a]" />
-            <span>Switch Account</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => logout()}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-semibold transition-colors cursor-pointer"
-            title="Log out of Administrator Session"
-          >
-            <LogOut className="w-3.5 h-3.5" />
-            <span>Log Out</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Sync Status Banner */}
-      {syncStatusMsg && (
-        <div
-          className={`p-3.5 rounded-2xl border flex items-center justify-between text-xs animate-fadeIn ${
-            syncStatusMsg.type === 'success'
-              ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
-              : 'bg-red-500/10 border-red-500/30 text-red-300'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {syncStatusMsg.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-            ) : (
-              <XCircle className="w-4 h-4 text-red-400 shrink-0" />
-            )}
-            <span>{syncStatusMsg.text}</span>
-          </div>
-          <button
-            onClick={() => setSyncStatusMsg(null)}
-            className="text-neutral-400 hover:text-white text-xs font-bold"
-          >
-            Dismiss
-          </button>
-        </div>
-      )}
-
-      {/* High-Level Stat Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
-        {/* Total Users */}
-        <div className="bg-[#14141e] border border-neutral-800/90 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Users</span>
-            <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400">
-              <Users className="w-4 h-4" />
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Users</span>
+              <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 group-hover:scale-110 transition-transform">
+                <Users className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
+                {stats.totalUsers}
+              </div>
+              <div className="text-[11px] text-neutral-500 mt-0.5">Registered Accounts</div>
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-extrabold text-white font-brand">{stats.totalUsers}</div>
-            <div className="text-[10px] text-neutral-500 mt-0.5">Table: "User"</div>
-          </div>
-        </div>
 
-        {/* Total Videos */}
-        <div className="bg-[#14141e] border border-neutral-800/90 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Videos</span>
-            <div className="p-2 rounded-xl bg-[#ff007a]/10 text-[#ff007a]">
-              <Film className="w-4 h-4" />
+          {/* Community Videos */}
+          <div
+            onClick={() => {
+              setActiveAdminTab('videos');
+              setVideoStatusFilter('approved');
+            }}
+            className="bg-[#12121a] border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-colors cursor-pointer group"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Videos</span>
+              <div className="p-1.5 rounded-lg bg-[#ff007a]/10 text-[#ff007a] group-hover:scale-110 transition-transform">
+                <Film className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
+                {stats.totalVideos}
+              </div>
+              <div className="text-[11px] text-neutral-500 mt-0.5">Media Catalog</div>
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-extrabold text-white font-brand">{stats.totalVideos}</div>
-            <div className="text-[10px] text-neutral-500 mt-0.5">Table: "Video"</div>
-          </div>
-        </div>
 
-        {/* Total Likes */}
-        <div className="bg-[#14141e] border border-neutral-800/90 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Likes</span>
-            <div className="p-2 rounded-xl bg-red-500/10 text-red-400">
-              <Heart className="w-4 h-4" />
+          {/* Audio Library (Requested Feature) */}
+          <div
+            onClick={() => setActiveAdminTab('audio')}
+            className="bg-[#12121a] border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-colors cursor-pointer group"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Audio Tracks</span>
+              <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 group-hover:scale-110 transition-transform">
+                <Music className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
+                {audioTracks.length}
+              </div>
+              <div className="text-[11px] text-neutral-500 mt-0.5">Sound Library</div>
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl font-extrabold text-white font-brand">{stats.totalLikes}</div>
-            <div className="text-[10px] text-neutral-500 mt-0.5">Table: "Like"</div>
-          </div>
-        </div>
 
-        {/* Total Comments */}
-        <div className="bg-[#14141e] border border-neutral-800/90 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Comments</span>
-            <div className="p-2 rounded-xl bg-cyan-500/10 text-cyan-400">
-              <MessageSquare className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl font-extrabold text-white font-brand">{stats.totalComments}</div>
-            <div className="text-[10px] text-neutral-500 mt-0.5">Table: "Comment"</div>
-          </div>
-        </div>
-
-        {/* Moderation Reports */}
-        <div className="bg-[#14141e] border border-neutral-800/90 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Reports</span>
-            <div className="p-2 rounded-xl bg-amber-500/10 text-amber-400">
-              <AlertTriangle className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl font-extrabold text-white font-brand">{stats.totalReports}</div>
-            <div className="text-[10px] text-neutral-500 mt-0.5">ReportVideo / ReportUser</div>
-          </div>
-        </div>
-
-        {/* Admin Team */}
-        <div className="bg-[#14141e] border border-neutral-800/90 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Admins</span>
-            <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400">
-              <Lock className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl font-extrabold text-white font-brand">{stats.totalAdmins}</div>
-            <div className="text-[10px] text-neutral-500 mt-0.5">Table: "Admin"</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Navigation Sub-Tabs */}
-      <div className="flex items-center gap-1.5 border-b border-neutral-800 pb-2 overflow-x-auto no-scrollbar">
-        {[
-          { id: 'overview', label: 'Overview & Health', icon: <Activity className="w-4 h-4" /> },
-          { id: 'users', label: `Users (${uniqueUsers.length})`, icon: <Users className="w-4 h-4" /> },
-          {
-            id: 'videos',
-            label: pendingAppealsCount > 0 ? `Videos (${videos.length}) · ${pendingAppealsCount} Appeal${pendingAppealsCount > 1 ? 's' : ''}` : `Videos (${videos.length})`,
-            icon: <Film className="w-4 h-4" />,
-            highlight: pendingAppealsCount > 0,
-          },
-          {
-            id: 'reports',
-            label: pendingReportsCount > 0 ? `Reports (${reports.length}) · ${pendingReportsCount} Pending` : `Reports (${reports.length})`,
-            icon: <AlertTriangle className="w-4 h-4" />,
-            highlight: pendingReportsCount > 0,
-          },
-          { id: 'admins', label: `Admin Team (${admins.length || 1})`, icon: <Shield className="w-4 h-4" /> },
-        ].map(tab => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveAdminTab(tab.id as any)}
-            className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-              activeAdminTab === tab.id
-                ? 'bg-[#1e1e2c] text-white border border-neutral-700 shadow-sm text-[#ff007a]'
-                : (tab as any).highlight
-                ? 'bg-amber-500/10 text-amber-300 border border-amber-500/25 hover:bg-amber-500/20'
-                : 'text-neutral-400 hover:text-white hover:bg-[#151520]'
+          {/* Moderation Reports */}
+          <div
+            onClick={() => {
+              setActiveAdminTab('reports');
+              setReportStatusFilter('Under Review');
+            }}
+            className={`border rounded-2xl p-4 flex flex-col justify-between transition-colors cursor-pointer group ${
+              pendingReportsCount > 0
+                ? 'bg-amber-500/10 border-amber-500/30 hover:border-amber-500/50'
+                : 'bg-[#12121a] border-neutral-800 hover:border-neutral-700'
             }`}
           >
-            {tab.icon}
-            <span>{tab.label}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* =================================================================== */}
-      {/* TAB 1: OVERVIEW & HEALTH */}
-      {/* =================================================================== */}
-      {activeAdminTab === 'overview' && (
-        <div className="space-y-6">
-          {/* Creator Appeals Alert Banner */}
-          {pendingAppealsCount > 0 && (
-            <div className="p-4 sm:p-5 rounded-3xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg">
-              <div className="flex items-center gap-3.5">
-                <div className="p-3 rounded-2xl bg-amber-500/20 text-amber-400 shrink-0">
-                  <Clock className="w-6 h-6 animate-pulse" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-white font-brand flex items-center gap-2">
-                    <span>{pendingAppealsCount} Creator Appeal{pendingAppealsCount > 1 ? 's' : ''} Awaiting Admin Review</span>
-                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold">
-                      Needs Review
-                    </span>
-                  </h4>
-                  <p className="text-xs text-neutral-300 mt-0.5">
-                    Creators have submitted appeals for revoked videos requesting reinstatement to the public feed.
-                  </p>
-                </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Reports</span>
+              <div
+                className={`p-1.5 rounded-lg ${
+                  pendingReportsCount > 0 ? 'bg-amber-500/20 text-amber-400' : 'bg-neutral-800 text-neutral-400'
+                } group-hover:scale-110 transition-transform`}
+              >
+                <AlertTriangle className="w-4 h-4" />
               </div>
-              <button
-                onClick={() => {
-                  setActiveAdminTab('videos');
-                  setVideoStatusFilter('appeals');
-                }}
-                className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs shrink-0 cursor-pointer shadow-md transition-all flex items-center gap-1.5"
-              >
-                <span>Review Creator Appeals</span>
-                <span>({pendingAppealsCount}) →</span>
-              </button>
             </div>
-          )}
-
-          {/* Pending Reports Alert Banner */}
-          {pendingReportsCount > 0 && (
-            <div className="p-4 sm:p-5 rounded-3xl bg-red-500/10 border border-red-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg">
-              <div className="flex items-center gap-3.5">
-                <div className="p-3 rounded-2xl bg-red-500/20 text-red-400 shrink-0">
-                  <AlertTriangle className="w-6 h-6" />
-                </div>
-                <div>
-                  <h4 className="text-sm font-bold text-white font-brand">
-                    {pendingReportsCount} Community Report{pendingReportsCount > 1 ? 's' : ''} Pending Review
-                  </h4>
-                  <p className="text-xs text-neutral-300 mt-0.5">
-                    User and video reports require administrator review to approve violation or dismiss.
-                  </p>
-                </div>
+            <div className="mt-3">
+              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
+                {reports.length}
               </div>
-              <button
-                onClick={() => {
-                  setActiveAdminTab('reports');
-                  setReportStatusFilter('Under Review');
-                }}
-                className="px-5 py-2.5 rounded-xl bg-red-500 hover:bg-red-400 text-white font-extrabold text-xs shrink-0 cursor-pointer shadow-md transition-all flex items-center gap-1.5"
-              >
-                <span>Review Reports</span>
-                <span>({pendingReportsCount}) →</span>
-              </button>
-            </div>
-          )}
-          {/* Administrative Quick Actions Grid */}
-          <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-6 sm:p-7 space-y-5">
-            <div>
-              <h3 className="text-base sm:text-lg font-bold text-white font-brand mb-1">Administrative Actions</h3>
-              <p className="text-xs text-neutral-400">Manage user accounts, moderate community content, review flags, and manage system moderators.</p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <button
-                onClick={() => setActiveAdminTab('users')}
-                className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-blue-500/40 text-left transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <Users className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-white">Manage Users</div>
-                  <div className="text-xs text-neutral-400 mt-0.5">{uniqueUsers.length} total accounts</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setActiveAdminTab('videos');
-                  setVideoStatusFilter('approved');
-                }}
-                className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-[#ff007a]/40 text-left transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-[#ff007a]/10 text-[#ff007a] flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <Film className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-white">Moderate Content</div>
-                  <div className="text-xs text-neutral-400 mt-0.5">{videos.length} videos · {pendingAppealsCount} appeals</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setActiveAdminTab('reports')}
-                className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-amber-500/40 text-left transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-amber-500/10 text-amber-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <AlertTriangle className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-white">Pending Reports</div>
-                  <div className="text-xs text-neutral-400 mt-0.5">{reports.length} reports · {pendingReportsCount} review</div>
-                </div>
-              </button>
-
-              <button
-                onClick={() => setActiveAdminTab('admins')}
-                className="flex flex-col justify-between p-5 rounded-2xl bg-[#181824] hover:bg-[#202030] border border-neutral-800/80 hover:border-purple-500/40 text-left transition-all cursor-pointer group"
-              >
-                <div className="w-10 h-10 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <Shield className="w-5 h-5" />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-white">Admin Team</div>
-                  <div className="text-xs text-neutral-400 mt-0.5">{admins.length || 1} administrators</div>
-                </div>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* =================================================================== */}
-      {/* TAB 2: USERS MANAGEMENT */}
-      {/* =================================================================== */}
-      {activeAdminTab === 'users' && (
-        <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
-            <div>
-              <h3 className="text-base font-bold text-white font-brand">User Accounts ({filteredUsers.length})</h3>
-              <p className="text-xs text-neutral-400">Users stored in the Supabase "User" table</p>
-            </div>
-            <div className="relative w-full sm:w-72">
-              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Search username, name, email..."
-                value={userSearch}
-                onChange={e => setUserSearch(e.target.value)}
-                className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-10 pr-3.5 py-2 rounded-xl border border-neutral-700 focus:border-[#ff007a] outline-none"
-              />
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-neutral-800 text-neutral-400 text-[11px] uppercase tracking-wider">
-                  <th className="py-3 px-3">User</th>
-                  <th className="py-3 px-3">Email</th>
-                  <th className="py-3 px-3">Role</th>
-                  <th className="py-3 px-3">Status</th>
-                  <th className="py-3 px-3">Followers</th>
-                  <th className="py-3 px-3 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-800/60">
-                {filteredUsers.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-8 text-center text-neutral-500">
-                      No user accounts found matching "{userSearch}".
-                    </td>
-                  </tr>
+              <div className="text-[11px] text-neutral-400 mt-0.5">
+                {pendingReportsCount > 0 ? (
+                  <span className="text-amber-400 font-semibold">{pendingReportsCount} Pending Review</span>
                 ) : (
-                  filteredUsers.map(u => (
-                    <tr key={u.id} className="hover:bg-[#171722] transition-colors">
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-3">
-                          <Avatar src={u.avatar} alt={u.displayName} size="sm" />
-                          <div className="min-w-0">
-                            <div className="font-bold text-white truncate">{u.displayName}</div>
-                            <div className="text-[11px] text-neutral-400 truncate">@{u.username}</div>
-                          </div>
-                        </div>
+                  'All Resolved'
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Creator Appeals */}
+          <div
+            onClick={() => {
+              setActiveAdminTab('videos');
+              setVideoStatusFilter('appeals');
+            }}
+            className={`border rounded-2xl p-4 flex flex-col justify-between transition-colors cursor-pointer group ${
+              pendingAppealsCount > 0
+                ? 'bg-purple-500/10 border-purple-500/30 hover:border-purple-500/50'
+                : 'bg-[#12121a] border-neutral-800 hover:border-neutral-700'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Appeals</span>
+              <div
+                className={`p-1.5 rounded-lg ${
+                  pendingAppealsCount > 0 ? 'bg-purple-500/20 text-purple-400' : 'bg-neutral-800 text-neutral-400'
+                } group-hover:scale-110 transition-transform`}
+              >
+                <Clock className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
+                {pendingAppealsCount}
+              </div>
+              <div className="text-[11px] text-neutral-400 mt-0.5">
+                {pendingAppealsCount > 0 ? (
+                  <span className="text-purple-300 font-semibold">Requires Action</span>
+                ) : (
+                  'Queue Clear'
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Administrator Team */}
+          <div
+            onClick={() => setActiveAdminTab('admins')}
+            className="bg-[#12121a] border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-colors cursor-pointer group"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Admins</span>
+              <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 group-hover:scale-110 transition-transform">
+                <Lock className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
+                {admins.length || 1}
+              </div>
+              <div className="text-[11px] text-neutral-500 mt-0.5">System Roles</div>
+            </div>
+          </div>
+        </section>
+
+        {/* Clean Segmented Navigation Controls */}
+        <nav aria-label="Console Sections" className="flex items-center gap-1.5 p-1 bg-[#12121a] border border-neutral-800/80 rounded-2xl overflow-x-auto no-scrollbar">
+          {[
+            { id: 'overview', label: 'Overview', icon: <Activity className="w-4 h-4" /> },
+            { id: 'users', label: `Users (${uniqueUsers.length})`, icon: <Users className="w-4 h-4" /> },
+            {
+              id: 'videos',
+              label: pendingAppealsCount > 0 ? `Videos (${videos.length}) · ${pendingAppealsCount} Appeal${pendingAppealsCount > 1 ? 's' : ''}` : `Videos (${videos.length})`,
+              icon: <Film className="w-4 h-4" />,
+              badge: pendingAppealsCount > 0,
+            },
+            {
+              id: 'audio',
+              label: `Audio Library (${audioTracks.length})`,
+              icon: <Music className="w-4 h-4" />,
+            },
+            {
+              id: 'reports',
+              label: pendingReportsCount > 0 ? `Reports (${reports.length}) · ${pendingReportsCount} Pending` : `Reports (${reports.length})`,
+              icon: <AlertTriangle className="w-4 h-4" />,
+              badge: pendingReportsCount > 0,
+            },
+            { id: 'admins', label: `Admin Team (${admins.length || 1})`, icon: <Shield className="w-4 h-4" /> },
+          ].map(tab => {
+            const isActive = activeAdminTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveAdminTab(tab.id as any)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                  isActive
+                    ? 'bg-[#1e1e2c] text-white border border-neutral-700/80 shadow-sm'
+                    : tab.badge
+                    ? 'text-amber-300 hover:text-white hover:bg-neutral-800/60'
+                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800/40'
+                }`}
+              >
+                {tab.icon}
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* =================================================================== */}
+        {/* TAB 1: OVERVIEW & QUEUES */}
+        {/* =================================================================== */}
+        {activeAdminTab === 'overview' && (
+          <div className="space-y-6">
+            {/* Urgent Creator Appeals Banner */}
+            {pendingAppealsCount > 0 && (
+              <div className="p-4 sm:p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 shrink-0">
+                    <Clock className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-white font-brand flex items-center gap-2">
+                      <span>{pendingAppealsCount} Creator Appeal{pendingAppealsCount > 1 ? 's' : ''} Awaiting Review</span>
+                    </h2>
+                    <p className="text-xs text-neutral-300 mt-0.5">
+                      Creators submitted appeals for revoked content requesting reinstatement to the feed.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setActiveAdminTab('videos');
+                    setVideoStatusFilter('appeals');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs shrink-0 cursor-pointer shadow-sm transition-all"
+                >
+                  Review Appeals ({pendingAppealsCount}) →
+                </button>
+              </div>
+            )}
+
+            {/* Pending Reports Alert Banner */}
+            {pendingReportsCount > 0 && (
+              <div className="p-4 sm:p-5 rounded-2xl bg-red-500/10 border border-red-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-red-500/20 text-red-400 shrink-0">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-white font-brand">
+                      {pendingReportsCount} Community Report{pendingReportsCount > 1 ? 's' : ''} Pending Action
+                    </h2>
+                    <p className="text-xs text-neutral-300 mt-0.5">
+                      Flagged videos and user accounts require administrator review to enforce guidelines.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setActiveAdminTab('reports');
+                    setReportStatusFilter('Under Review');
+                  }}
+                  className="px-4 py-2 rounded-xl bg-red-500 hover:bg-red-400 text-white font-extrabold text-xs shrink-0 cursor-pointer shadow-sm transition-all"
+                >
+                  Review Reports ({pendingReportsCount}) →
+                </button>
+              </div>
+            )}
+
+            {/* Quick Command Modules Grid */}
+            <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-6 space-y-4">
+              <div>
+                <h2 className="text-base font-bold text-white font-brand">Command Modules</h2>
+                <p className="text-xs text-neutral-400 mt-0.5">
+                  Direct management consoles for community catalog, sound library, and security roles.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Audio Library Card */}
+                <button
+                  onClick={() => setActiveAdminTab('audio')}
+                  className="p-5 rounded-xl bg-[#161622] hover:bg-[#1a1a2a] border border-neutral-800/80 hover:border-cyan-500/40 text-left transition-all cursor-pointer group"
+                >
+                  <div className="w-9 h-9 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                    <Music className="w-5 h-5" />
+                  </div>
+                  <div className="text-sm font-bold text-white">Audio & Soundtracks</div>
+                  <div className="text-xs text-neutral-400 mt-0.5 font-mono tabular-nums">
+                    {audioTracks.length} tracks · Add music
+                  </div>
+                </button>
+
+                {/* Video Moderation Card */}
+                <button
+                  onClick={() => {
+                    setActiveAdminTab('videos');
+                    setVideoStatusFilter('approved');
+                  }}
+                  className="p-5 rounded-xl bg-[#161622] hover:bg-[#1a1a2a] border border-neutral-800/80 hover:border-[#ff007a]/40 text-left transition-all cursor-pointer group"
+                >
+                  <div className="w-9 h-9 rounded-lg bg-[#ff007a]/10 text-[#ff007a] flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                    <Film className="w-5 h-5" />
+                  </div>
+                  <div className="text-sm font-bold text-white">Video Moderation</div>
+                  <div className="text-xs text-neutral-400 mt-0.5 font-mono tabular-nums">
+                    {videos.length} videos · {pendingAppealsCount} appeals
+                  </div>
+                </button>
+
+                {/* User Accounts Card */}
+                <button
+                  onClick={() => setActiveAdminTab('users')}
+                  className="p-5 rounded-xl bg-[#161622] hover:bg-[#1a1a2a] border border-neutral-800/80 hover:border-blue-500/40 text-left transition-all cursor-pointer group"
+                >
+                  <div className="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                    <Users className="w-5 h-5" />
+                  </div>
+                  <div className="text-sm font-bold text-white">User Accounts</div>
+                  <div className="text-xs text-neutral-400 mt-0.5 font-mono tabular-nums">
+                    {uniqueUsers.length} total users
+                  </div>
+                </button>
+
+                {/* Community Reports Card */}
+                <button
+                  onClick={() => setActiveAdminTab('reports')}
+                  className="p-5 rounded-xl bg-[#161622] hover:bg-[#1a1a2a] border border-neutral-800/80 hover:border-amber-500/40 text-left transition-all cursor-pointer group"
+                >
+                  <div className="w-9 h-9 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                    <AlertTriangle className="w-5 h-5" />
+                  </div>
+                  <div className="text-sm font-bold text-white">Reports & Flags</div>
+                  <div className="text-xs text-neutral-400 mt-0.5 font-mono tabular-nums">
+                    {reports.length} reports · {pendingReportsCount} pending
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* TAB 2: AUDIO LIBRARY (NEW & REQUESTED FEATURE) */}
+        {/* =================================================================== */}
+        {activeAdminTab === 'audio' && (
+          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-5">
+            {/* Audio Header & Actions */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <h2 className="text-base sm:text-lg font-bold text-white font-brand">
+                    Audio & Sounds Library
+                  </h2>
+                  <span className="text-[11px] font-mono tabular-nums text-neutral-400 px-2 py-0.5 rounded-md bg-neutral-800/80">
+                    {audioTracks.length} tracks total
+                  </span>
+                </div>
+                <p className="text-xs text-neutral-400 mt-1">
+                  Manage official sound tracks and community sounds available for all users to select when creating videos.
+                </p>
+              </div>
+
+              {/* Top Controls: Search & Add Audio Button */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                <div className="relative w-full sm:w-64">
+                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    placeholder="Search title, artist, sound..."
+                    value={audioSearch}
+                    onChange={e => setAudioSearch(e.target.value)}
+                    className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-9 pr-3.5 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
+                  />
+                </div>
+
+                <button
+                  onClick={() => setShowAddAudioModal(true)}
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all cursor-pointer shadow-sm"
+                >
+                  <Plus className="w-4 h-4 stroke-[2.5]" />
+                  <span>Add New Audio Track</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Tabs */}
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
+              {/* Category selector */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <button
+                  onClick={() => setAudioCategoryFilter('all')}
+                  className={`px-3 py-1.5 rounded-xl font-medium transition-colors cursor-pointer ${
+                    audioCategoryFilter === 'all'
+                      ? 'bg-neutral-700 text-white'
+                      : 'bg-[#181824] text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  All Genres
+                </button>
+                {audioCategories.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setAudioCategoryFilter(cat)}
+                    className={`px-3 py-1.5 rounded-xl font-medium transition-colors cursor-pointer ${
+                      audioCategoryFilter === cat
+                        ? 'bg-[#ff007a] text-white'
+                        : 'bg-[#181824] text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              {/* Source selector (Curated vs Video sounds) */}
+              <div className="flex items-center gap-1 bg-[#181824] p-1 rounded-xl border border-neutral-800">
+                <button
+                  onClick={() => setAudioSourceFilter('all')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+                    audioSourceFilter === 'all' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  All ({audioTracks.length})
+                </button>
+                <button
+                  onClick={() => setAudioSourceFilter('curated')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+                    audioSourceFilter === 'curated' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Library Music ({audioTracksList.length})
+                </button>
+                <button
+                  onClick={() => setAudioSourceFilter('video')}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
+                    audioSourceFilter === 'video' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  Video Sounds ({audioTracks.length - audioTracksList.length})
+                </button>
+              </div>
+            </div>
+
+            {/* Playback Alert if any */}
+            {audioPlaybackError && (
+              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between">
+                <span>{audioPlaybackError}</span>
+                <button onClick={() => setAudioPlaybackError(null)} className="text-amber-400 font-bold">
+                  ✕
+                </button>
+              </div>
+            )}
+
+            {/* Audio Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-neutral-800 text-neutral-400 text-[11px] uppercase tracking-wider">
+                    <th className="py-3 px-3 w-12 text-center">Play</th>
+                    <th className="py-3 px-3">Title & Artist</th>
+                    <th className="py-3 px-3">Genre</th>
+                    <th className="py-3 px-3 font-mono">Duration</th>
+                    <th className="py-3 px-3">Origin</th>
+                    <th className="py-3 px-3">Status</th>
+                    <th className="py-3 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-800/60">
+                  {filteredAudioTracks.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="py-12 text-center text-neutral-500">
+                        <Music className="w-8 h-8 mx-auto text-neutral-600 mb-2" />
+                        <div>No audio tracks matching your search or filter.</div>
+                        <button
+                          onClick={() => setShowAddAudioModal(true)}
+                          className="mt-3 px-3 py-1.5 rounded-xl bg-[#ff007a] text-white text-xs font-bold"
+                        >
+                          + Add First Track
+                        </button>
                       </td>
-                      <td className="py-3 px-3 text-neutral-300 font-mono text-[11px]">{u.email || '—'}</td>
-                      <td className="py-3 px-3">
-                        <div className="flex items-center gap-1.5">
+                    </tr>
+                  ) : (
+                    filteredAudioTracks.map(track => {
+                      const isPlaying = playingTrackId === track.id;
+                      const isCurated = audioTracksList.some(t => t.id === track.id);
+
+                      return (
+                        <tr
+                          key={track.id}
+                          className={`hover:bg-[#161622] transition-colors ${
+                            isPlaying ? 'bg-cyan-950/20' : ''
+                          }`}
+                        >
+                          {/* Play/Pause Button */}
+                          <td className="py-3 px-3 text-center">
+                            <button
+                              onClick={() => togglePlayTrack(track)}
+                              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer ${
+                                isPlaying
+                                  ? 'bg-cyan-500 text-black shadow-[0_0_12px_rgba(6,182,212,0.6)]'
+                                  : 'bg-neutral-800 hover:bg-[#ff007a] text-white'
+                              }`}
+                              title={isPlaying ? 'Pause' : 'Preview track'}
+                            >
+                              {isPlaying ? (
+                                <Pause className="w-3.5 h-3.5 fill-current" />
+                              ) : (
+                                <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                              )}
+                            </button>
+                          </td>
+
+                          {/* Track Details */}
+                          <td className="py-3 px-3">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-xl overflow-hidden bg-neutral-800 shrink-0 border border-neutral-700/60 flex items-center justify-center relative">
+                                {track.coverUrl ? (
+                                  <img
+                                    src={track.coverUrl}
+                                    alt={track.title}
+                                    className="w-full h-full object-cover"
+                                    onError={e => {
+                                      (e.currentTarget as HTMLElement).style.display = 'none';
+                                    }}
+                                  />
+                                ) : (
+                                  <Disc className="w-5 h-5 text-neutral-500" />
+                                )}
+                                {isPlaying && (
+                                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                                    <Volume2 className="w-4 h-4 text-cyan-400 animate-pulse" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-bold text-white truncate flex items-center gap-1.5">
+                                  <span>{track.title}</span>
+                                  {isPlaying && (
+                                    <span className="text-[10px] text-cyan-400 font-mono font-normal">
+                                      · Playing
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-neutral-400 truncate">
+                                  {track.artist}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Genre / Category */}
+                          <td className="py-3 px-3 text-neutral-300">
+                            <span className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-neutral-800 border border-neutral-700/60">
+                              {track.category || 'Trending'}
+                            </span>
+                          </td>
+
+                          {/* Duration */}
+                          <td className="py-3 px-3 text-neutral-400 font-mono tabular-nums">
+                            {track.duration || '00:30'}
+                          </td>
+
+                          {/* Origin */}
+                          <td className="py-3 px-3 text-neutral-400">
+                            {isCurated ? (
+                              <span className="text-emerald-400 font-medium text-[11px]">
+                                Official Library
+                              </span>
+                            ) : (
+                              <span className="text-neutral-400 text-[11px]">
+                                Creator Sound {track.sourceUsername ? `(@${track.sourceUsername})` : ''}
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-3 px-3">
+                            <span className="text-[10px] font-semibold text-emerald-400 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                              <span>Live in Studio</span>
+                            </span>
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-3 px-3 text-right">
+                            {isCurated ? (
+                              <button
+                                onClick={() => handleDeleteAudio(track)}
+                                className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer"
+                                title="Delete Track"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <span className="text-[11px] text-neutral-600">—</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* TAB 3: USER ACCOUNTS */}
+        {/* =================================================================== */}
+        {activeAdminTab === 'users' && (
+          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
+              <div>
+                <h2 className="text-base font-bold text-white font-brand">User Accounts ({filteredUsers.length})</h2>
+                <p className="text-xs text-neutral-400">Users stored in PostgreSQL database</p>
+              </div>
+              <div className="relative w-full sm:w-72">
+                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search username, name, email..."
+                  value={userSearch}
+                  onChange={e => setUserSearch(e.target.value)}
+                  className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-10 pr-3.5 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-neutral-800 text-neutral-400 text-[11px] uppercase tracking-wider">
+                    <th className="py-3 px-3">User</th>
+                    <th className="py-3 px-3">Email</th>
+                    <th className="py-3 px-3">Role</th>
+                    <th className="py-3 px-3">Status</th>
+                    <th className="py-3 px-3 font-mono">Followers</th>
+                    <th className="py-3 px-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-800/60">
+                  {filteredUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-neutral-500">
+                        No user accounts found matching "{userSearch}".
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredUsers.map(u => (
+                      <tr key={u.id} className="hover:bg-[#161622] transition-colors">
+                        <td className="py-3 px-3">
+                          <div className="flex items-center gap-3">
+                            <Avatar src={u.avatar} alt={u.displayName} size="sm" />
+                            <div className="min-w-0">
+                              <div className="font-bold text-white truncate">{u.displayName}</div>
+                              <div className="text-[11px] text-neutral-400 truncate">@{u.username}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-neutral-300 font-mono text-[11px]">{u.email || '—'}</td>
+                        <td className="py-3 px-3">
                           <select
                             value={u.role || 'creator'}
                             onChange={async e => {
                               const newRole = e.target.value as 'creator' | 'admin' | 'moderator';
                               if (u.id === currentUser?.id && newRole !== 'admin') {
                                 const confirmSelf = window.confirm(
-                                  'Are you sure you want to demote your own account from Admin? You will lose access to the Admin Dashboard.'
+                                  'Are you sure you want to demote your own account from Admin?'
                                 );
                                 if (!confirmSelf) return;
                               }
                               await updateUserRoleAdmin(u.id, newRole);
-                              setSyncStatusMsg({
-                                type: 'success',
-                                text: `Role for @${u.username} successfully updated to ${newRole.toUpperCase()}`,
-                              });
-                              setTimeout(() => setSyncStatusMsg(null), 3500);
+                              showToast(`Role for @${u.username} updated to ${newRole}`);
                             }}
-                            className={`text-xs font-bold py-1 px-2.5 rounded-xl border outline-none cursor-pointer transition-all ${
-                              u.role === 'admin'
-                                ? 'bg-purple-950/40 text-purple-300 border-purple-500/50 hover:border-purple-400'
-                                : u.role === 'moderator'
-                                ? 'bg-cyan-950/40 text-cyan-300 border-cyan-500/50 hover:border-cyan-400'
-                                : 'bg-[#181824] text-neutral-300 border-neutral-700/80 hover:border-neutral-500'
-                            }`}
-                            title="Admin: Click to change role"
+                            className="text-xs font-semibold py-1 px-2 rounded-lg bg-[#181824] text-neutral-200 border border-neutral-700/80 outline-none cursor-pointer"
                           >
-                            <option value="creator" className="bg-[#14141e] text-white">
-                              Creator
-                            </option>
-                            <option value="moderator" className="bg-[#14141e] text-cyan-300">
-                              Moderator
-                            </option>
-                            <option value="admin" className="bg-[#14141e] text-purple-300">
-                              Admin
-                            </option>
+                            <option value="creator">Creator</option>
+                            <option value="moderator">Moderator</option>
+                            <option value="admin">Admin</option>
                           </select>
-                        </div>
-                      </td>
-                      <td className="py-3 px-3">
-                        {u.isBanned ? (
-                          <div className="space-y-1.5 min-w-[140px]">
-                            <div className="flex items-center gap-1.5">
-                              <span className="px-2 py-0.5 rounded-full bg-red-500/20 border border-red-500/40 text-red-400 font-bold text-[10px] flex items-center gap-1 w-fit">
+                        </td>
+                        <td className="py-3 px-3">
+                          {u.isBanned ? (
+                            <div className="space-y-1">
+                              <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 font-semibold text-[10px] flex items-center gap-1 w-fit">
                                 <Ban className="w-2.5 h-2.5" />
                                 <span>BANNED</span>
                               </span>
                               {u.appealStatus === 'pending' && (
-                                <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-[10px] animate-pulse flex items-center gap-1 w-fit">
-                                  <Clock className="w-2.5 h-2.5" />
-                                  <span>APPEAL PENDING</span>
-                                </span>
+                                <div className="text-[10px] text-amber-300 font-bold flex items-center gap-1">
+                                  <Clock className="w-2.5 h-2.5" /> Appeal Pending
+                                </div>
                               )}
                             </div>
-                            {u.banReason && (
-                              <div className="text-[10px] text-neutral-400 italic line-clamp-1" title={u.banReason}>
-                                Reason: {u.banReason}
-                              </div>
+                          ) : (
+                            <span className="text-[10px] font-semibold text-emerald-400 flex items-center gap-1">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                              <span>Active</span>
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-neutral-300 font-mono tabular-nums">{u.followersCount}</td>
+                        <td className="py-3 px-3 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              onClick={() => navigateToUserProfile(u.id)}
+                              className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-colors cursor-pointer"
+                              title="View Profile"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+
+                            {u.isBanned ? (
+                              <button
+                                onClick={async () => {
+                                  const confirmUnban = window.confirm(`Unban @${u.username}?`);
+                                  if (!confirmUnban) return;
+                                  await unbanUserAdmin(u.id);
+                                  showToast(`User @${u.username} unbanned.`);
+                                }}
+                                className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-400 transition-colors cursor-pointer"
+                                title="Unban User Account"
+                              >
+                                <UserCheck className="w-3.5 h-3.5" />
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setBanningUser({ id: u.id, username: u.username, displayName: u.displayName });
+                                  setBanCustomReason('Violation of Community Guidelines');
+                                }}
+                                disabled={isSameUser(u.id, currentUser?.id)}
+                                className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 transition-colors cursor-pointer disabled:opacity-30"
+                                title="Ban User"
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                              </button>
                             )}
 
-                            {/* Appeal review card if pending */}
-                            {u.appealStatus === 'pending' && (
-                              <div className="p-2 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-200 text-[11px] space-y-1.5 mt-1">
-                                <div className="font-semibold text-amber-400 flex items-center gap-1 text-[10px]">
-                                  <span>User Appeal:</span>
-                                </div>
-                                <div className="italic text-neutral-200 bg-black/40 p-1.5 rounded-lg border border-amber-500/20 max-w-xs break-words">
-                                  "{u.appealReason || 'No details provided'}"
-                                </div>
-                                <div className="flex items-center gap-1.5 pt-0.5">
-                                  <button
-                                    onClick={async () => {
-                                      await reviewUserAppeal(u.id, 'approved');
-                                      setSyncStatusMsg({
-                                        type: 'success',
-                                        text: `Appeal approved! @${u.username} has been unbanned.`,
-                                      });
-                                      setTimeout(() => setSyncStatusMsg(null), 3500);
-                                    }}
-                                    className="px-2 py-1 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] transition-colors cursor-pointer flex items-center gap-1"
-                                  >
-                                    <Check className="w-2.5 h-2.5" />
-                                    <span>Approve & Unban</span>
-                                  </button>
-                                  <button
-                                    onClick={async () => {
-                                      await reviewUserAppeal(u.id, 'declined');
-                                      setSyncStatusMsg({
-                                        type: 'error',
-                                        text: `Appeal declined for @${u.username}. Account remains banned.`,
-                                      });
-                                      setTimeout(() => setSyncStatusMsg(null), 3500);
-                                    }}
-                                    className="px-2 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold text-[10px] transition-colors cursor-pointer"
-                                  >
-                                    Decline Appeal
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold text-[10px] flex items-center gap-1 w-fit">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                            <span>Active</span>
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-3 text-neutral-300">{u.followersCount}</td>
-                      <td className="py-3 px-3 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => navigateToUserProfile(u.id)}
-                            className="p-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 hover:text-white transition-colors cursor-pointer"
-                            title="View Profile"
-                          >
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Ban / Unban Toggle Button */}
-                          {u.isBanned ? (
                             <button
                               onClick={async () => {
-                                const confirmUnban = window.confirm(`Are you sure you want to unban user @${u.username}?`);
-                                if (!confirmUnban) return;
-                                await unbanUserAdmin(u.id);
-                                setSyncStatusMsg({
-                                  type: 'success',
-                                  text: `User @${u.username} has been unbanned.`,
-                                });
-                                setTimeout(() => setSyncStatusMsg(null), 3500);
-                              }}
-                              className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-400 transition-colors cursor-pointer"
-                              title="Unban User Account"
-                            >
-                              <UserCheck className="w-3.5 h-3.5" />
-                            </button>
-                          ) : (
-                            <button
-                              onClick={() => {
-                                setBanningUser({ id: u.id, username: u.username, displayName: u.displayName });
-                                setBanCustomReason('Violation of Community Guidelines');
+                                const confirmPrompt = window.confirm(`Permanently delete user @${u.username}?`);
+                                if (!confirmPrompt) return;
+                                await deleteUserAdmin(u.id);
+                                showToast(`Account @${u.username} deleted.`);
                               }}
                               disabled={isSameUser(u.id, currentUser?.id)}
-                              className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 transition-colors cursor-pointer disabled:opacity-30"
-                              title={isSameUser(u.id, currentUser?.id) ? 'Cannot ban your own active session' : 'Ban User Account'}
+                              className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer disabled:opacity-30"
+                              title="Delete User"
                             >
-                              <Ban className="w-3.5 h-3.5" />
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
-                          )}
-
-                          <button
-                            onClick={async () => {
-                              const isTargetClientOnThisDevice = (savedAccounts || []).some(
-                                a => isSameUser(a.id, u.id) || (a.email && u.email && a.email.toLowerCase() === u.email.toLowerCase())
-                              );
-                              const confirmPrompt = window.confirm(
-                                `Are you sure you want to permanently delete user @${u.username} (${u.displayName})?\n\n` +
-                                `This will remove the user from Supabase, delete all their uploaded videos from the Supabase Storage bucket, and clean up their account across all devices.` +
-                                (isTargetClientOnThisDevice ? `\n\n(This client account is logged in/saved on this device and will be removed from your saved accounts).` : '')
-                              );
-                              if (!confirmPrompt) return;
-
-                              const res = await deleteUserAdmin(u.id);
-                              if (res) {
-                                setSyncStatusMsg({
-                                  type: 'success',
-                                  text: `Account @${u.username} successfully deleted from Supabase & all devices.`,
-                                });
-                                setTimeout(() => setSyncStatusMsg(null), 4000);
-                                await loadData();
-                              }
-                            }}
-                            disabled={isSameUser(u.id, currentUser?.id)}
-                            className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer disabled:opacity-30"
-                            title={isSameUser(u.id, currentUser?.id) ? 'Cannot delete active Admin session' : 'Permanently Delete User'}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* =================================================================== */}
-      {/* TAB 3: VIDEOS MODERATION & APPROVAL QUEUE */}
-      {/* =================================================================== */}
-      {activeAdminTab === 'videos' && (
-        <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-5">
-          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
-            <div>
-              <div className="flex items-center gap-2.5">
-                <h3 className="text-base font-bold text-white font-brand">
-                  Video Moderation & Appeals
-                </h3>
-                {pendingAppealsCount > 0 && (
-                  <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] font-bold animate-pulse">
-                    {pendingAppealsCount} appeal{pendingAppealsCount > 1 ? 's' : ''} awaiting review
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-neutral-400 mt-0.5">
-                Monitor live community videos, manage guidelines compliance, and review creator moderation appeals.
-              </p>
-            </div>
-
-            {/* Search Input */}
-            <div className="relative w-full sm:w-72">
-              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
-              <input
-                type="text"
-                placeholder="Search caption, creator, hashtag..."
-                value={videoSearch}
-                onChange={e => setVideoSearch(e.target.value)}
-                className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-10 pr-3.5 py-2 rounded-xl border border-neutral-700 focus:border-[#ff007a] outline-none"
-              />
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
+        )}
 
-          {/* Sub-Filter Tabs (Pending Approval removed as requested) */}
-          {pendingAppealsCount > 0 && videoStatusFilter !== 'appeals' && (
-            <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-200 animate-fadeIn">
-              <div className="flex items-center gap-2.5">
-                <Clock className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
-                <span>
-                  <strong>{pendingAppealsCount} creator appeal{pendingAppealsCount > 1 ? 's are' : ' is'} waiting for review.</strong> Re-approve or decline creator requests below.
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setVideoStatusFilter('appeals')}
-                className="py-1 px-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black text-xs font-bold transition-all cursor-pointer shrink-0 shadow-sm"
-              >
-                Review Appeals Now ({pendingAppealsCount}) →
-              </button>
-            </div>
-          )}
-
-          <div className="flex flex-wrap items-center gap-2">
-            {[
-              { id: 'approved', label: `Live & Approved (${approvedVideosCount})` },
-              { id: 'rejected', label: `Declined / Revoked (${rejectedVideosCount})` },
-              { id: 'appeals', label: `Creator Appeals (${pendingAppealsCount})`, isAlert: pendingAppealsCount > 0 },
-              { id: 'all', label: `All Videos (${videos.length})` },
-            ].map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setVideoStatusFilter(tab.id as any)}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  videoStatusFilter === tab.id
-                    ? 'bg-[#ff007a] text-white shadow-sm'
-                    : tab.isAlert
-                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30 hover:bg-amber-500/25'
-                    : 'bg-neutral-800 text-neutral-400 hover:text-white'
-                }`}
-              >
-                <span>{tab.label}</span>
-              </button>
-            ))}
-          </div>
-
-          {/* Video Cards Grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredVideos.length === 0 ? (
-              <div className="col-span-full py-16 text-center text-neutral-400 text-xs space-y-2 bg-[#171724] rounded-2xl border border-neutral-800">
-                <Film className="w-8 h-8 mx-auto text-neutral-600 mb-1" />
-                <div className="font-semibold text-neutral-300 text-sm">No videos found</div>
-                <p className="text-neutral-500 max-w-sm mx-auto">
-                  {videoStatusFilter === 'appeals'
-                    ? 'There are currently no creator appeals awaiting review.'
-                    : `No videos found matching your filter (${videoStatusFilter}).`}
+        {/* =================================================================== */}
+        {/* TAB 4: VIDEOS MODERATION (Likes and Comments removed) */}
+        {/* =================================================================== */}
+        {activeAdminTab === 'videos' && (
+          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-5">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
+              <div>
+                <div className="flex items-center gap-2.5">
+                  <h2 className="text-base font-bold text-white font-brand">
+                    Video Moderation Catalog
+                  </h2>
+                  {pendingAppealsCount > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[11px] font-bold">
+                      {pendingAppealsCount} appeal{pendingAppealsCount > 1 ? 's' : ''} awaiting review
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-neutral-400 mt-0.5">
+                  Review published community videos, manage guidelines compliance, and decide creator moderation appeals.
                 </p>
               </div>
-            ) : (
-              filteredVideos.map(video => (
-                <div
-                  key={video.id}
-                  className={`bg-[#181824] border rounded-2xl overflow-hidden flex flex-col justify-between transition-all group ${
-                    video.appealStatus === 'pending'
-                      ? 'border-amber-500/50 shadow-[0_0_20px_rgba(245,158,11,0.2)] ring-1 ring-amber-500/40'
-                      : video.status === 'rejected'
-                      ? 'border-red-500/30 opacity-90'
-                      : 'border-neutral-800 hover:border-neutral-700'
-                  }`}
-                >
-                  <div className="p-3.5 space-y-2.5">
-                    {/* Header: Creator & Status Badge */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <Avatar src={video.creator.avatar} alt={video.creator.displayName} size="xs" />
-                        <div className="min-w-0">
-                          <span className="text-xs font-bold text-white truncate block">
-                            {video.creator.displayName}
-                          </span>
-                          <span className="text-[10px] text-neutral-400 truncate block">
-                            @{video.creator.username}
-                          </span>
-                        </div>
-                      </div>
 
-                      {/* Status Badges */}
-                      {video.appealStatus === 'pending' ||
-                      (video.status === 'rejected' &&
-                        Boolean(video.appealReason && video.appealStatus !== 'declined' && video.appealStatus !== 'approved')) ? (
-                        <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-bold flex items-center gap-1 shrink-0 animate-pulse">
-                          <Clock className="w-2.5 h-2.5" />
-                          <span>Appeal Pending</span>
-                        </span>
-                      ) : video.status === 'approved' ? (
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-1 shrink-0">
-                          <CheckCircle2 className="w-2.5 h-2.5" />
-                          <span>Approved & Live</span>
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-bold flex items-center gap-1 shrink-0">
-                          <XCircle className="w-2.5 h-2.5" />
-                          <span>Declined / Revoked</span>
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Video Player Preview */}
-                    <div className="aspect-video w-full bg-black rounded-xl overflow-hidden relative border border-neutral-800">
-                      <video
-                        src={video.mediaUrl}
-                        controls
-                        className="w-full h-full object-cover"
-                        poster={video.thumbnailUrl}
-                      />
-                    </div>
-
-                    {/* Caption */}
-                    <p className="text-xs text-neutral-200 line-clamp-2 leading-relaxed">
-                      {video.caption || 'No caption provided'}
-                    </p>
-
-                    {/* Appeal details box if appeal is submitted */}
-                    {(video.appealStatus === 'pending' ||
-                      (video.status === 'rejected' && Boolean(video.appealReason && video.appealStatus !== 'declined'))) && (
-                      <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1">
-                        <div className="font-bold flex items-center gap-1.5 text-amber-300">
-                          <Clock className="w-3.5 h-3.5" />
-                          <span>Creator Submitted Appeal:</span>
-                        </div>
-                        <p className="text-[11px] text-neutral-200 italic">"{video.appealReason}"</p>
-                      </div>
-                    )}
-
-                    {/* Rejection Note if Declined */}
-                    {video.status === 'rejected' && video.rejectionReason && (
-                      <div className="p-2 rounded-xl bg-red-500/10 border border-red-500/20 text-[11px] text-red-300">
-                        <strong>Revocation reason:</strong> {video.rejectionReason}
-                      </div>
-                    )}
-
-                    {/* Hashtags */}
-                    {video.hashtags && video.hashtags.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {video.hashtags.map((tag, idx) => (
-                          <span
-                            key={idx}
-                            className="text-[10px] text-[#ff007a] bg-[#ff007a]/10 px-2 py-0.5 rounded-full font-mono"
-                          >
-                            {tag}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Action Rail & Buttons */}
-                  <div className="p-3 border-t border-neutral-800/80 bg-[#14141e] space-y-2">
-                    <div className="flex items-center justify-between text-[11px] text-neutral-400">
-                      <div className="flex items-center gap-3">
-                        <span className="flex items-center gap-1">
-                          <Heart className="w-3.5 h-3.5 text-red-400" /> {video.likesCount}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <MessageSquare className="w-3.5 h-3.5 text-cyan-400" /> {video.commentsCount}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <Eye className="w-3.5 h-3.5 text-amber-400" /> {video.viewsCount || 0}
-                        </span>
-                      </div>
-                      <span className="text-[10px] text-neutral-500 font-mono">
-                        {video.createdAt ? String(video.createdAt).slice(0, 10) : ''}
-                      </span>
-                    </div>
-
-                    {/* Decision Buttons */}
-                    <div className="flex items-center justify-between gap-2 pt-1 border-t border-neutral-800/40">
-                      {video.appealStatus === 'pending' ||
-                      (video.status === 'rejected' &&
-                        Boolean(video.appealReason && video.appealStatus !== 'declined' && video.appealStatus !== 'approved')) ? (
-                        <>
-                          <button
-                            onClick={() => reviewVideoAppeal(video.id, 'approved')}
-                            className="flex-1 py-1.5 px-3 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold flex items-center justify-center gap-1 shadow cursor-pointer transition-all"
-                          >
-                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                            <span>Approve Appeal</span>
-                          </button>
-                          <button
-                            onClick={() => reviewVideoAppeal(video.id, 'declined')}
-                            className="py-1.5 px-3 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            <span>Decline Appeal</span>
-                          </button>
-                          <button
-                            onClick={() => deleteVideoAdmin(video.id)}
-                            className="p-1.5 rounded-lg bg-neutral-800 hover:bg-red-500/20 text-neutral-400 hover:text-red-400 cursor-pointer"
-                            title="Delete Permanently"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      ) : video.status === 'approved' ? (
-                        <>
-                          <div className="flex items-center gap-1 text-emerald-400 text-xs font-semibold">
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                            <span>Published on Feed</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => {
-                                setRejectingVideoId(video.id);
-                                setRejectReason('Post-publication guidelines violation');
-                              }}
-                              className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-red-500/20 hover:text-red-300 text-neutral-300 text-xs font-medium cursor-pointer transition-colors"
-                            >
-                              Revoke
-                            </button>
-                            <button
-                              onClick={() => deleteVideoAdmin(video.id)}
-                              className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 text-xs cursor-pointer"
-                              title="Delete Video"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex items-center gap-1 text-red-400 text-xs font-semibold">
-                            <XCircle className="w-3.5 h-3.5" />
-                            <span>Declined</span>
-                          </div>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              onClick={() => approveVideoAdmin(video.id)}
-                              className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-xs font-semibold cursor-pointer"
-                            >
-                              Re-Approve
-                            </button>
-                            <button
-                              onClick={() => deleteVideoAdmin(video.id)}
-                              className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 text-xs cursor-pointer"
-                              title="Delete Video"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* =================================================================== */}
-      {/* TAB 4: MODERATION REPORTS */}
-      {/* =================================================================== */}
-      {activeAdminTab === 'reports' && (
-        <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-white font-brand">
-                  Community Reports ({filteredReports.length} shown of {reports.length})
-                </h3>
-                {pendingReportsCount > 0 && (
-                  <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-300 border border-red-500/30 text-[10px] font-bold">
-                    {pendingReportsCount} Pending
-                  </span>
-                )}
+              {/* Search */}
+              <div className="relative w-full sm:w-72">
+                <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search caption, creator, hashtag..."
+                  value={videoSearch}
+                  onChange={e => setVideoSearch(e.target.value)}
+                  className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-10 pr-3.5 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
+                />
               </div>
-              <p className="text-xs text-neutral-400 mt-0.5">
-                Community reports submitted for videos and user accounts. Review violations, revoke content, and decide appeals.
-              </p>
             </div>
 
-            {/* Type Filters */}
-            <div className="flex items-center gap-1.5 flex-wrap">
+            {/* Filter Tabs */}
+            <div className="flex flex-wrap items-center gap-2">
               {[
-                { id: 'all', label: `All Types (${reports.length})` },
-                { id: 'video', label: `Video Reports (${reports.filter(r => r.type === 'video').length})` },
-                { id: 'user', label: `User Reports (${reports.filter(r => r.type === 'user').length})` },
-              ].map(f => (
+                { id: 'approved', label: `Live & Approved (${approvedVideosCount})` },
+                { id: 'rejected', label: `Declined / Revoked (${rejectedVideosCount})` },
+                { id: 'appeals', label: `Creator Appeals (${pendingAppealsCount})`, highlight: pendingAppealsCount > 0 },
+                { id: 'all', label: `All Videos (${videos.length})` },
+              ].map(tab => (
                 <button
-                  key={f.id}
-                  onClick={() => setReportFilter(f.id as any)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold capitalize transition-colors cursor-pointer ${
-                    reportFilter === f.id
+                  key={tab.id}
+                  onClick={() => setVideoStatusFilter(tab.id as any)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
+                    videoStatusFilter === tab.id
                       ? 'bg-[#ff007a] text-white shadow-sm'
+                      : tab.highlight
+                      ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
                       : 'bg-neutral-800 text-neutral-400 hover:text-white'
                   }`}
                 >
-                  {f.label}
+                  {tab.label}
                 </button>
               ))}
             </div>
-          </div>
 
-          {/* Status Sub-Filters */}
-          <div className="flex flex-wrap items-center gap-2">
-            {[
-              { id: 'all', label: `All Reports (${reports.length})` },
-              { id: 'Under Review', label: `Pending / Under Review (${pendingReportsCount})` },
-              { id: 'Approved', label: `Action Taken / Approved (${approvedReportsCount})` },
-              { id: 'Rejected', label: `Dismissed (${rejectedReportsCount})` },
-            ].map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => setReportStatusFilter(tab.id as any)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
-                  reportStatusFilter === tab.id
-                    ? 'bg-purple-600 text-white shadow-sm'
-                    : 'bg-neutral-800/80 text-neutral-400 hover:text-white'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="space-y-3">
-            {filteredReports.length === 0 ? (
-              <div className="py-12 text-center text-neutral-400 text-xs bg-[#171724] rounded-2xl border border-neutral-800 space-y-3 p-6">
-                <AlertTriangle className="w-8 h-8 text-neutral-600 mx-auto" />
-                <div>
-                  <div className="font-bold text-white text-sm">No reports matching current filter</div>
-                  <p className="text-neutral-500 text-xs mt-1">
-                    Filter: {reportFilter} reports · {reportStatusFilter} status ({reports.length} total reports recorded)
-                  </p>
+            {/* Video Cards Grid (Likes and Comments removed) */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredVideos.length === 0 ? (
+                <div className="col-span-full py-16 text-center text-neutral-400 text-xs bg-[#161622] rounded-xl border border-neutral-800">
+                  <Film className="w-8 h-8 mx-auto text-neutral-600 mb-2" />
+                  <div className="font-semibold text-neutral-300 text-sm">No videos found</div>
+                  <p className="text-neutral-500 mt-1">No videos matching filter: {videoStatusFilter}</p>
                 </div>
-                {reports.length > 0 && (
-                  <button
-                    onClick={() => {
-                      setReportFilter('all');
-                      setReportStatusFilter('all');
-                    }}
-                    className="py-1.5 px-4 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-xs cursor-pointer transition-all shadow"
-                  >
-                    View All Reports ({reports.length})
-                  </button>
-                )}
-              </div>
-            ) : (
-              filteredReports.map(report => {
-                const targetVideo = report.type === 'video'
-                  ? videos.find(v => v.id === report.targetId || toUuid(v.id) === toUuid(report.targetId))
-                  : null;
-
-                const hasPendingAppeal = targetVideo && (
-                  targetVideo.appealStatus === 'pending' ||
-                  (targetVideo.status === 'rejected' && Boolean(targetVideo.appealReason && targetVideo.appealStatus !== 'declined' && targetVideo.appealStatus !== 'approved'))
-                );
-
-                return (
+              ) : (
+                filteredVideos.map(video => (
                   <div
-                    key={report.id}
-                    className={`p-4 rounded-2xl bg-[#181824] border flex flex-col gap-3 transition-colors ${
-                      hasPendingAppeal
-                        ? 'border-amber-500/60 shadow-[0_0_15px_rgba(245,158,11,0.15)] ring-1 ring-amber-500/40'
-                        : report.status === 'Approved'
-                        ? 'border-emerald-500/30'
-                        : 'border-neutral-800 hover:border-neutral-700'
-                    }`}
+                    key={video.id}
+                    className="bg-[#161622] border border-neutral-800 rounded-xl overflow-hidden flex flex-col justify-between hover:border-neutral-700 transition-all"
                   >
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div className="space-y-1.5 text-xs flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                              report.type === 'video'
-                                ? 'bg-[#ff007a]/15 text-[#ff007a] border border-[#ff007a]/30'
-                                : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
-                            }`}
-                          >
-                            {report.type} report
-                          </span>
-                          <span className="font-bold text-white text-sm">
-                            {targetVideo ? `${targetVideo.creator?.displayName || 'Creator'}'s video` : report.targetName}
-                          </span>
-                          <span className="text-[11px] text-neutral-400">· {report.timestamp}</span>
-
-                          {/* Current Status */}
-                          <span
-                            className={`font-semibold px-2 py-0.5 rounded-md text-[11px] ${
-                              report.status === 'Approved'
-                                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                                : report.status === 'Rejected'
-                                ? 'bg-red-500/15 text-red-400 border border-red-500/30'
-                                : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                            }`}
-                          >
-                            Status: {report.status === 'Rejected' ? 'Declined / Dismissed' : report.status}
-                          </span>
-
-                          {/* Video state tag */}
-                          {targetVideo && (
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                targetVideo.status === 'rejected'
-                                  ? 'bg-red-500/20 text-red-300 border border-red-500/40'
-                                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                              }`}
-                            >
-                              Video: {targetVideo.status === 'rejected' ? 'Revoked' : 'Live on Feed'}
+                    <div className="p-3.5 space-y-2.5">
+                      {/* Creator Header */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Avatar src={video.creator.avatar} alt={video.creator.displayName} size="xs" />
+                          <div className="min-w-0">
+                            <span className="text-xs font-bold text-white truncate block">
+                              {video.creator.displayName}
                             </span>
-                          )}
-                        </div>
-
-                        <div className="text-neutral-300">
-                          <strong>Violation Reason:</strong> {report.scenario}
-                          {report.description && <span className="text-neutral-400"> — "{report.description}"</span>}
-                        </div>
-
-                        {(report.targetSubtitle || targetVideo?.caption) && (
-                          <div className="text-neutral-400 text-[11px]">
-                            Caption: "{targetVideo?.caption || report.targetSubtitle}"
+                            <span className="text-[10px] text-neutral-400 truncate block">
+                              @{video.creator.username}
+                            </span>
                           </div>
+                        </div>
+
+                        {video.appealStatus === 'pending' ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold">
+                            Appeal Pending
+                          </span>
+                        ) : video.status === 'approved' ? (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-bold">
+                            Live
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 text-[10px] font-bold">
+                            Revoked
+                          </span>
                         )}
                       </div>
 
-                      {/* Admin Resolution Buttons */}
-                      <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        {/* Approve Violation & Revoke Video with Appeal Rights */}
-                        {report.status !== 'Approved' && (
-                          <button
-                            disabled={resolvingReportId === report.id}
-                            onClick={async () => {
-                              if (resolvingReportId === report.id) return;
-                              setResolvingReportId(report.id);
-                              try {
-                                if (report.type === 'video') {
-                                  const violationReason =
-                                    report.description || report.scenario || 'Reported for community guidelines violation';
-                                  await rejectVideoAdmin(report.targetId, violationReason);
-                                  await updateReportStatusAdmin(report.id, report.type, 'Approved');
-                                  setSyncStatusMsg({
-                                    type: 'success',
-                                    text: 'Report approved! Video revoked from feed and creator notified with appeal rights.',
-                                  });
-                                  setTimeout(() => setSyncStatusMsg(null), 4000);
-                                } else if (report.type === 'user') {
-                                  const violationReason =
-                                    report.description || report.scenario || 'Reported for community guidelines violation';
-                                  await banUserAdmin(report.targetId, violationReason);
-                                  await updateReportStatusAdmin(report.id, report.type, 'Approved');
-                                  setSyncStatusMsg({
-                                    type: 'success',
-                                    text: 'Report approved! User account banned and suspended. User notified with appeal rights.',
-                                  });
-                                  setTimeout(() => setSyncStatusMsg(null), 4000);
-                                }
-                              } finally {
-                                setResolvingReportId(null);
-                              }
-                            }}
-                            className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
-                            title={report.type === 'video' ? 'Approve violation & revoke video (creator will be notified to appeal)' : 'Approve & Ban User'}
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>{report.type === 'video' ? 'Approve & Revoke Video' : 'Approve & Ban User'}</span>
-                          </button>
-                        )}
+                      {/* Video Player */}
+                      <div className="aspect-video w-full bg-black rounded-lg overflow-hidden border border-neutral-800">
+                        <video
+                          src={video.mediaUrl}
+                          controls
+                          className="w-full h-full object-cover"
+                          poster={video.thumbnailUrl}
+                        />
+                      </div>
 
-                        {/* Mark Under Review */}
-                        {report.status !== 'Under Review' && (
-                          <button
-                            onClick={() => updateReportStatusAdmin(report.id, report.type, 'Under Review')}
-                            className="px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-medium text-xs transition-colors cursor-pointer flex items-center gap-1"
-                          >
-                            <Clock className="w-3 h-3" />
-                            <span>Under Review</span>
-                          </button>
-                        )}
+                      {/* Caption */}
+                      <p className="text-xs text-neutral-200 line-clamp-2 leading-relaxed">
+                        {video.caption || 'No caption provided'}
+                      </p>
 
-                        {/* Dismiss / Decline Report */}
-                        {report.status !== 'Rejected' && (
-                          <button
-                            onClick={async () => {
-                              await updateReportStatusAdmin(report.id, report.type, 'Rejected');
-                              setSyncStatusMsg({
-                                type: 'success',
-                                text: 'Report dismissed without action.',
-                              });
-                              setTimeout(() => setSyncStatusMsg(null), 3000);
-                            }}
-                            className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 hover:text-white font-semibold text-xs transition-colors cursor-pointer flex items-center gap-1 border border-red-500/30"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            <span>Dismiss Report</span>
-                          </button>
+                      {/* Attached Audio Track if any */}
+                      {video.audioTrack && (
+                        <div className="flex items-center gap-1.5 text-[11px] text-cyan-400 bg-cyan-950/20 px-2 py-1 rounded-md border border-cyan-500/20">
+                          <Music className="w-3 h-3 shrink-0" />
+                          <span className="truncate">{video.audioTrack.title}</span>
+                          <span className="text-neutral-500">·</span>
+                          <span className="text-neutral-400 truncate">{video.audioTrack.artist}</span>
+                        </div>
+                      )}
+
+                      {/* Appeal Note if pending */}
+                      {video.appealStatus === 'pending' && video.appealReason && (
+                        <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1">
+                          <div className="font-bold flex items-center gap-1 text-amber-300">
+                            <Clock className="w-3.5 h-3.5" />
+                            <span>Creator Appeal:</span>
+                          </div>
+                          <p className="text-[11px] text-neutral-200 italic">"{video.appealReason}"</p>
+                        </div>
+                      )}
+
+                      {/* Revocation Reason if revoked */}
+                      {video.status === 'rejected' && video.rejectionReason && (
+                        <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/20 text-[11px] text-red-300">
+                          <strong>Reason:</strong> {video.rejectionReason}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Metadata Rail & Action Buttons (Likes and Comments removed) */}
+                    <div className="p-3 border-t border-neutral-800/80 bg-[#14141e] space-y-2">
+                      <div className="flex items-center justify-between text-[11px] text-neutral-400">
+                        <span className="flex items-center gap-1 font-mono tabular-nums">
+                          <Eye className="w-3.5 h-3.5 text-neutral-400" /> {video.viewsCount || 0} views
+                        </span>
+                        <span className="text-[10px] text-neutral-500 font-mono">
+                          {video.createdAt ? String(video.createdAt).slice(0, 10) : ''}
+                        </span>
+                      </div>
+
+                      {/* Decision Controls */}
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-neutral-800/40">
+                        {video.appealStatus === 'pending' ? (
+                          <>
+                            <button
+                              onClick={() => {
+                                reviewVideoAppeal(video.id, 'approved');
+                                showToast('Appeal approved! Video restored to feed.');
+                              }}
+                              className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black text-xs font-bold flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <Check className="w-3.5 h-3.5 stroke-[3]" />
+                              <span>Approve Appeal</span>
+                            </button>
+                            <button
+                              onClick={() => {
+                                reviewVideoAppeal(video.id, 'declined');
+                                showToast('Appeal declined.');
+                              }}
+                              className="py-1.5 px-3 rounded-lg bg-red-500/20 text-red-300 text-xs font-semibold cursor-pointer"
+                            >
+                              Decline
+                            </button>
+                          </>
+                        ) : video.status === 'approved' ? (
+                          <>
+                            <div className="flex items-center gap-1 text-emerald-400 text-xs font-semibold">
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                              <span>Live on Feed</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => {
+                                  setRejectingVideoId(video.id);
+                                  setRejectReason('Guidelines violation');
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-neutral-800 hover:bg-red-500/20 text-neutral-300 hover:text-red-300 text-xs cursor-pointer"
+                              >
+                                Revoke
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  const confirmPrompt = window.confirm('Delete video permanently?');
+                                  if (!confirmPrompt) return;
+                                  await deleteVideoAdmin(video.id);
+                                  showToast('Video deleted.');
+                                }}
+                                className="p-1 rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 text-xs cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex items-center gap-1 text-red-400 text-xs font-semibold">
+                              <XCircle className="w-3.5 h-3.5" />
+                              <span>Revoked</span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                onClick={() => {
+                                  approveVideoAdmin(video.id);
+                                  showToast('Video re-approved and live.');
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-400 text-xs font-semibold cursor-pointer"
+                              >
+                                Re-Approve
+                              </button>
+                              <button
+                                onClick={() => deleteVideoAdmin(video.id)}
+                                className="p-1 rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 text-xs cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>
-
-                    {/* Integrated Appeal Review Box if Creator has submitted an Appeal for this video */}
-                    {hasPendingAppeal && targetVideo && (
-                      <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-xs text-amber-200 space-y-2.5 mt-1 animate-fadeIn">
-                        <div className="flex items-center justify-between">
-                          <div className="font-bold flex items-center gap-2 text-amber-300">
-                            <Clock className="w-4 h-4 animate-pulse text-amber-400" />
-                            <span>Creator Appeal Pending Review</span>
-                          </div>
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/25 text-amber-200 font-mono font-bold">
-                            Action Required
-                          </span>
-                        </div>
-
-                        <div className="p-3 rounded-xl bg-black/50 border border-amber-500/20 text-neutral-200 text-xs">
-                          <span className="text-neutral-400 block text-[11px] mb-1 font-semibold uppercase tracking-wider">
-                            Creator's Appeal Statement:
-                          </span>
-                          "{targetVideo.appealReason || 'Creator requested review and reinstatement'}"
-                        </div>
-
-                        <div className="flex items-center gap-2 pt-1 flex-wrap">
-                          <button
-                            onClick={async () => {
-                              await reviewVideoAppeal(targetVideo.id, 'approved');
-                              setSyncStatusMsg({
-                                type: 'success',
-                                text: 'Appeal Approved! Video is restored to feed and creator notified.',
-                              });
-                              setTimeout(() => setSyncStatusMsg(null), 4000);
-                            }}
-                            className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs flex items-center gap-1.5 shadow cursor-pointer transition-all"
-                          >
-                            <Check className="w-3.5 h-3.5 stroke-[3]" />
-                            <span>Approve Appeal & Restore Video</span>
-                          </button>
-
-                          <button
-                            onClick={async () => {
-                              await reviewVideoAppeal(targetVideo.id, 'declined');
-                              setSyncStatusMsg({
-                                type: 'success',
-                                text: 'Appeal Declined. Creator has been notified.',
-                              });
-                              setTimeout(() => setSyncStatusMsg(null), 4000);
-                            }}
-                            className="px-3.5 py-2 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all border border-red-500/30"
-                          >
-                            <XCircle className="w-3.5 h-3.5" />
-                            <span>Decline Appeal</span>
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </div>
-                );
-              })
-            )}
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* TAB 5: MODERATION REPORTS */}
+        {/* =================================================================== */}
+        {activeAdminTab === 'reports' && (
+          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
+              <div>
+                <h2 className="text-base font-bold text-white font-brand">Community Reports ({filteredReports.length})</h2>
+                <p className="text-xs text-neutral-400">Reports filed by community members</p>
+              </div>
+
+              {/* Type filter */}
+              <div className="flex items-center gap-1.5">
+                {[
+                  { id: 'all', label: 'All Types' },
+                  { id: 'video', label: 'Video Reports' },
+                  { id: 'user', label: 'User Reports' },
+                ].map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => setReportFilter(f.id as any)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                      reportFilter === f.id ? 'bg-[#ff007a] text-white' : 'bg-[#181824] text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Status filters */}
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                { id: 'all', label: `All (${reports.length})` },
+                { id: 'Under Review', label: `Pending (${pendingReportsCount})` },
+                { id: 'Approved', label: `Action Taken (${approvedReportsCount})` },
+                { id: 'Rejected', label: `Dismissed (${rejectedReportsCount})` },
+              ].map(tab => (
+                <button
+                  key={tab.id}
+                  onClick={() => setReportStatusFilter(tab.id as any)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
+                    reportStatusFilter === tab.id
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-neutral-800 text-neutral-400 hover:text-white'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Reports List */}
+            <div className="space-y-3">
+              {filteredReports.length === 0 ? (
+                <div className="py-12 text-center text-neutral-500 text-xs bg-[#161622] rounded-xl border border-neutral-800">
+                  <AlertTriangle className="w-8 h-8 text-neutral-600 mx-auto mb-2" />
+                  <div>No reports found matching criteria.</div>
+                </div>
+              ) : (
+                filteredReports.map(report => (
+                  <div
+                    key={report.id}
+                    className="p-4 rounded-xl bg-[#161622] border border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1 text-xs">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-neutral-800 text-neutral-300">
+                          {report.type} report
+                        </span>
+                        <span className="font-bold text-white text-sm">{report.targetName}</span>
+                        <span className="text-neutral-500 font-mono text-[11px]">· {report.timestamp}</span>
+                        <span
+                          className={`font-semibold px-2 py-0.5 rounded-md text-[10px] ${
+                            report.status === 'Approved'
+                              ? 'bg-emerald-500/20 text-emerald-400'
+                              : report.status === 'Rejected'
+                              ? 'bg-red-500/15 text-red-400'
+                              : 'bg-amber-500/20 text-amber-300'
+                          }`}
+                        >
+                          {report.status}
+                        </span>
+                      </div>
+                      <div className="text-neutral-300 mt-1">
+                        <strong>Reason:</strong> {report.scenario}
+                        {report.description && <span className="text-neutral-400"> — "{report.description}"</span>}
+                      </div>
+                    </div>
+
+                    {/* Action buttons */}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {report.status !== 'Approved' && (
+                        <button
+                          disabled={resolvingReportId === report.id}
+                          onClick={async () => {
+                            setResolvingReportId(report.id);
+                            try {
+                              if (report.type === 'video') {
+                                await rejectVideoAdmin(report.targetId, report.scenario);
+                              } else {
+                                await banUserAdmin(report.targetId, report.scenario);
+                              }
+                              await updateReportStatusAdmin(report.id, report.type, 'Approved');
+                              showToast(`Report approved & penalty applied.`);
+                            } finally {
+                              setResolvingReportId(null);
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-semibold text-xs cursor-pointer flex items-center gap-1"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Approve & Revoke</span>
+                        </button>
+                      )}
+
+                      {report.status !== 'Rejected' && (
+                        <button
+                          onClick={async () => {
+                            await updateReportStatusAdmin(report.id, report.type, 'Rejected');
+                            showToast(`Report dismissed.`);
+                          }}
+                          className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs cursor-pointer"
+                        >
+                          Dismiss
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* TAB 6: ADMIN TEAM */}
+        {/* =================================================================== */}
+        {activeAdminTab === 'admins' && (
+          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
+              <div>
+                <h2 className="text-base font-bold text-white font-brand">Administrator Roles & Access</h2>
+                <p className="text-xs text-neutral-400">Security personnel with elevated platform permissions</p>
+              </div>
+              <button
+                onClick={() => setShowAddAdminModal(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold cursor-pointer"
+              >
+                <Plus className="w-4 h-4 stroke-[3]" />
+                <span>Add Administrator</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {admins.length === 0 ? (
+                <div className="p-4 rounded-xl bg-[#161622] border border-neutral-800">
+                  <div className="font-bold text-white text-sm">{currentUser?.displayName || 'Primary Admin'}</div>
+                  <div className="text-xs text-neutral-400">{currentUser?.email}</div>
+                  <div className="text-[11px] text-purple-300 font-semibold mt-2">Role: Super Admin</div>
+                </div>
+              ) : (
+                admins.map(adm => (
+                  <div
+                    key={adm.adminId}
+                    className="p-4 rounded-xl bg-[#161622] border border-neutral-800 flex flex-col justify-between space-y-3"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="font-bold text-white text-sm">{adm.username}</div>
+                          <div className="text-xs text-neutral-400 font-mono">{adm.email}</div>
+                        </div>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-500/20 text-purple-300">
+                          {adm.role}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-neutral-400 mt-2">
+                        <strong>Permissions:</strong>{' '}
+                        {Array.isArray(adm.permissions) ? adm.permissions.join(', ') : 'all'}
+                      </div>
+                    </div>
+                    <div className="pt-2 border-t border-neutral-800 flex items-center justify-between text-[11px] text-neutral-500">
+                      <span>Added: {adm.createdAt?.slice(0, 10) || 'Recent'}</span>
+                      <button
+                        onClick={() => removeAdmin(adm.adminId)}
+                        className="text-red-400 hover:text-red-300 cursor-pointer font-semibold"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* =================================================================== */}
+      {/* MODAL: ADD AUDIO TRACK (REQUESTED FEATURE) */}
+      {/* =================================================================== */}
+      {showAddAudioModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
+          {/* Modal Audio preview element */}
+          <audio
+            ref={modalAudioRef}
+            onEnded={() => setModalAudioPreviewPlaying(false)}
+            onError={() => setModalAudioPreviewPlaying(false)}
+          />
+
+          <div className="bg-[#14141e] border border-neutral-800 rounded-3xl p-6 w-full max-w-lg space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-[#ff007a]/15 text-[#ff007a]">
+                  <Music className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white font-brand">Add New Audio Track</h3>
+                  <p className="text-[11px] text-neutral-400">
+                    Publish music or sound effects that all creators can attach to videos
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (modalAudioRef.current) modalAudioRef.current.pause();
+                  setShowAddAudioModal(false);
+                }}
+                className="text-neutral-400 hover:text-white p-1 text-xs"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateAudio} className="space-y-3.5 text-xs">
+              {/* Title & Artist */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-neutral-300 font-semibold block mb-1">Track Title *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Neon Velocity"
+                    value={newAudioTitle}
+                    onChange={e => setNewAudioTitle(e.target.value)}
+                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                  />
+                </div>
+                <div>
+                  <label className="text-neutral-300 font-semibold block mb-1">Artist / Creator *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. ViralHub Studio"
+                    value={newAudioArtist}
+                    onChange={e => setNewAudioArtist(e.target.value)}
+                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                  />
+                </div>
+              </div>
+
+              {/* Genre Category & Duration */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-neutral-300 font-semibold block mb-1">Genre / Category</label>
+                  <select
+                    value={newAudioCategory}
+                    onChange={e => setNewAudioCategory(e.target.value)}
+                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                  >
+                    {audioCategories.map(cat => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-neutral-300 font-semibold block mb-1">Duration (MM:SS)</label>
+                  <input
+                    type="text"
+                    placeholder="00:30"
+                    value={newAudioDuration}
+                    onChange={e => setNewAudioDuration(e.target.value)}
+                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a] font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Audio Source Selector */}
+              <div>
+                <label className="text-neutral-300 font-semibold block mb-1.5">Audio Source</label>
+                <div className="flex items-center gap-1.5 p-1 bg-[#181824] rounded-xl border border-neutral-800 mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setAudioSourceMode('file')}
+                    className={`flex-1 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+                      audioSourceMode === 'file' ? 'bg-[#ff007a] text-white' : 'text-neutral-400'
+                    }`}
+                  >
+                    Upload File (.mp3, .wav)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAudioSourceMode('url')}
+                    className={`flex-1 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+                      audioSourceMode === 'url' ? 'bg-[#ff007a] text-white' : 'text-neutral-400'
+                    }`}
+                  >
+                    Direct Audio URL
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAudioSourceMode('preset')}
+                    className={`flex-1 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+                      audioSourceMode === 'preset' ? 'bg-[#ff007a] text-white' : 'text-neutral-400'
+                    }`}
+                  >
+                    Sound Presets
+                  </button>
+                </div>
+
+                {audioSourceMode === 'file' && (
+                  <div className="p-4 rounded-xl border border-dashed border-neutral-700 bg-[#161622] text-center space-y-2">
+                    <input
+                      type="file"
+                      id="adminAudioUploadInput"
+                      accept="audio/*"
+                      className="hidden"
+                      onChange={e => {
+                        const file = e.target.files?.[0];
+                        if (file) handleAudioFileSelection(file);
+                      }}
+                    />
+                    <label
+                      htmlFor="adminAudioUploadInput"
+                      className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 cursor-pointer font-semibold transition-colors"
+                    >
+                      <Upload className="w-4 h-4 text-[#ff007a]" />
+                      <span>{selectedAudioFile ? selectedAudioFile.name : 'Select Audio File'}</span>
+                    </label>
+                    <p className="text-[11px] text-neutral-400">Supports MP3, WAV, AAC, OGG up to 25MB</p>
+                  </div>
+                )}
+
+                {audioSourceMode === 'url' && (
+                  <input
+                    type="url"
+                    placeholder="https://example.com/audio/track.mp3"
+                    value={newAudioUrl}
+                    onChange={e => setNewAudioUrl(e.target.value)}
+                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                  />
+                )}
+
+                {audioSourceMode === 'preset' && (
+                  <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto pr-1">
+                    {[
+                      {
+                        title: 'Cyber Pulse Beat',
+                        url: 'https://actions.google.com/sounds/v1/science_fiction/alien_beacon.ogg',
+                        artist: 'PulseAudio',
+                      },
+                      {
+                        title: 'Lo-Fi Coffee Shop',
+                        url: 'https://actions.google.com/sounds/v1/ambiences/coffee_shop.ogg',
+                        artist: 'LofiChill',
+                      },
+                      {
+                        title: 'Ticking Tension',
+                        url: 'https://actions.google.com/sounds/v1/household/clock_ticking.ogg',
+                        artist: 'RhythmFX',
+                      },
+                      {
+                        title: 'Arcade Zap Electronic',
+                        url: 'https://actions.google.com/sounds/v1/cartoon/metal_twang.ogg',
+                        artist: 'ArcadeFX',
+                      },
+                    ].map(preset => (
+                      <button
+                        key={preset.title}
+                        type="button"
+                        onClick={() => {
+                          setNewAudioUrl(preset.url);
+                          if (!newAudioTitle) setNewAudioTitle(preset.title);
+                          if (!newAudioArtist) setNewAudioArtist(preset.artist);
+                        }}
+                        className={`p-2 rounded-xl border text-left text-xs transition-colors cursor-pointer ${
+                          newAudioUrl === preset.url
+                            ? 'bg-[#ff007a]/20 border-[#ff007a] text-white'
+                            : 'bg-[#181824] border-neutral-800 text-neutral-300 hover:border-neutral-700'
+                        }`}
+                      >
+                        <div className="font-bold truncate">{preset.title}</div>
+                        <div className="text-[10px] text-neutral-400">{preset.artist}</div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Cover Artwork */}
+              <div>
+                <label className="text-neutral-300 font-semibold block mb-1">Cover Artwork Image (Optional)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    id="adminAudioCoverUpload"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (file) setSelectedCoverFile(file);
+                    }}
+                  />
+                  <label
+                    htmlFor="adminAudioCoverUpload"
+                    className="px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer shrink-0"
+                  >
+                    {selectedCoverFile ? selectedCoverFile.name : 'Choose Cover Image'}
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="or paste image URL"
+                    value={newAudioCoverUrl}
+                    onChange={e => setNewAudioCoverUrl(e.target.value)}
+                    className="flex-1 bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                  />
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-800">
+                <button
+                  type="button"
+                  onClick={() => setShowAddAudioModal(false)}
+                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 hover:text-white font-semibold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUploadingAudio}
+                  className="px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  {isUploadingAudio && <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                  <span>Publish to Audio Library</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -1465,12 +1998,11 @@ export const AdminDashboardView: React.FC = () => {
       {/* Video Rejection Modal */}
       {rejectingVideoId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="absolute inset-0" onClick={() => setRejectingVideoId(null)} />
-          <div className="relative w-full max-w-md bg-[#14141e] border border-neutral-800 rounded-3xl p-6 shadow-2xl z-10 text-left space-y-4">
+          <div className="relative w-full max-w-md bg-[#14141e] border border-neutral-800 rounded-3xl p-6 text-left space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white font-brand flex items-center gap-2">
                 <XCircle className="w-5 h-5 text-red-400" />
-                <span>Decline Video Upload</span>
+                <span>Revoke Video</span>
               </h3>
               <button
                 onClick={() => setRejectingVideoId(null)}
@@ -1481,10 +2013,9 @@ export const AdminDashboardView: React.FC = () => {
             </div>
 
             <p className="text-xs text-neutral-300">
-              Specify the reason for declining this video upload. The creator will see this status on their profile.
+              Revoking this video hides it from community feeds and notifies the creator with appeal rights.
             </p>
 
-            {/* Quick Reason buttons */}
             <div className="space-y-1.5">
               <label className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider block">
                 Quick Reasons:
@@ -1494,7 +2025,6 @@ export const AdminDashboardView: React.FC = () => {
                 'Copyrighted music or intellectual property infringement',
                 'Harassment, bullying, or hate speech',
                 'Spam, misleading, or low-quality content',
-                'Violence or dangerous activities depicted',
               ].map(r => (
                 <button
                   key={r}
@@ -1503,7 +2033,7 @@ export const AdminDashboardView: React.FC = () => {
                   className={`w-full text-left p-2 rounded-xl text-xs transition-colors cursor-pointer border ${
                     rejectReason === r
                       ? 'bg-red-500/15 border-red-500/40 text-red-300 font-semibold'
-                      : 'bg-[#1b1b26] border-neutral-800 text-neutral-300 hover:bg-[#222232]'
+                      : 'bg-[#181824] border-neutral-800 text-neutral-300 hover:bg-[#202030]'
                   }`}
                 >
                   {r}
@@ -1511,23 +2041,10 @@ export const AdminDashboardView: React.FC = () => {
               ))}
             </div>
 
-            <div>
-              <label className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider mb-1 block">
-                Custom Note / Reason:
-              </label>
-              <textarea
-                value={rejectReason}
-                onChange={e => setRejectReason(e.target.value)}
-                rows={2}
-                className="w-full bg-[#1b1b26] border border-neutral-700 rounded-xl p-2.5 text-xs text-white outline-none focus:border-red-500"
-                placeholder="Enter reason for declining..."
-              />
-            </div>
-
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
               <button
                 onClick={() => setRejectingVideoId(null)}
-                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold cursor-pointer"
               >
                 Cancel
               </button>
@@ -1535,163 +2052,50 @@ export const AdminDashboardView: React.FC = () => {
                 onClick={async () => {
                   await rejectVideoAdmin(rejectingVideoId, rejectReason);
                   setRejectingVideoId(null);
+                  showToast('Video revoked from feed.');
                 }}
                 className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold shadow cursor-pointer"
               >
-                Confirm Decline
+                Confirm Revoke
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* =================================================================== */}
-      {/* TAB 5: ADMIN TEAM */}
-      {/* =================================================================== */}
-      {activeAdminTab === 'admins' && (
-        <div className="bg-[#13131c] border border-neutral-800 rounded-3xl p-5 sm:p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
-            <div>
-              <h3 className="text-base font-bold text-white font-brand">Administrator Roles & Privileges</h3>
-              <p className="text-xs text-neutral-400">
-                Team accounts with administrative access stored in Supabase "Admin" table
-              </p>
-            </div>
-            <button
-              onClick={() => setShowAddAdminModal(true)}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-colors cursor-pointer shadow-sm w-fit"
-            >
-              <Plus className="w-4 h-4 stroke-[3]" />
-              <span>Add New Admin</span>
-            </button>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {admins.length === 0 ? (
-              <div className="p-4 rounded-2xl bg-[#181824] border border-neutral-800 space-y-2">
-                <div className="flex items-center gap-3">
-                  <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-400">
-                    <Shield className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="font-bold text-white text-sm">{currentUser?.displayName || 'Primary Admin'}</div>
-                    <div className="text-xs text-neutral-400">{currentUser?.email || 'admin@viralhub.app'}</div>
-                  </div>
-                </div>
-                <div className="text-[11px] text-purple-300 font-semibold pt-1">Role: Super Admin</div>
-                <div className="text-[10px] text-neutral-400">Full system & database permissions</div>
-              </div>
-            ) : (
-              admins.map(adm => (
-                <div
-                  key={adm.adminId}
-                  className="p-4 rounded-2xl bg-[#181824] border border-neutral-800 flex flex-col justify-between space-y-3"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex items-center gap-3">
-                      <div className="p-2.5 rounded-xl bg-purple-500/20 text-purple-400">
-                        <Shield className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <div className="font-bold text-white text-sm">{adm.username}</div>
-                        <div className="text-xs text-neutral-400">{adm.email}</div>
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                      {adm.role}
-                    </span>
-                  </div>
-
-                  <div className="text-[11px] text-neutral-400">
-                    <strong>Permissions:</strong>{' '}
-                    {Array.isArray(adm.permissions) ? adm.permissions.join(', ') : 'all'}
-                  </div>
-
-                  <div className="pt-2 border-t border-neutral-800 flex items-center justify-between text-[11px] text-neutral-500">
-                    <span>Added: {adm.createdAt?.slice(0, 10) || 'Recent'}</span>
-                    <button
-                      onClick={() => removeAdmin(adm.adminId)}
-                      className="text-red-400 hover:text-red-300 font-semibold cursor-pointer"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-
-
-
-      {/* Ban User Modal Dialog */}
+      {/* Ban User Modal */}
       {banningUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
           <div className="bg-[#14141e] border border-red-500/30 rounded-3xl p-6 w-full max-w-md space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-base text-white font-brand flex items-center gap-2">
                 <Ban className="w-4 h-4 text-red-400" />
-                <span>Ban User Account: @{banningUser.username}</span>
+                <span>Ban Account: @{banningUser.username}</span>
               </h3>
-              <button
-                onClick={() => setBanningUser(null)}
-                className="text-neutral-400 hover:text-white cursor-pointer"
-              >
+              <button onClick={() => setBanningUser(null)} className="text-neutral-400 hover:text-white">
                 ✕
               </button>
             </div>
 
             <p className="text-xs text-neutral-300 leading-relaxed">
-              Banning this user will immediately suspend their account, hide their content from public feeds, and display a banned screen with the reason and appeal instructions.
+              Banning this user immediately suspends access, hides their content, and displays the ban reason with appeal instructions.
             </p>
 
             <div className="space-y-2 text-xs">
-              <label className="text-neutral-300 font-semibold block">Select or Enter Reason for Ban</label>
-              <div className="grid grid-cols-1 gap-1.5 max-h-36 overflow-y-auto pr-1">
-                {[
-                  'Harassment, bullying, or intimidation',
-                  'Hate speech or discrimination',
-                  'Inappropriate Profile Info (Bio / Avatar / Name)',
-                  'Pretending to Be Someone',
-                  'Scam, fraud, or spam',
-                  'Exploitation and abuse of people under 18',
-                  'Physical violence and violent threats',
-                  'Animal abuse',
-                  'Violation of Community Guidelines',
-                ].map(r => (
-                  <button
-                    key={r}
-                    type="button"
-                    onClick={() => setBanCustomReason(r)}
-                    className={`text-left px-3 py-1.5 rounded-xl border text-[11px] transition-all cursor-pointer ${
-                      banCustomReason === r
-                        ? 'bg-red-500/20 border-red-500/50 text-white font-semibold'
-                        : 'bg-[#181824] border-neutral-800 text-neutral-400 hover:text-white'
-                    }`}
-                  >
-                    {r}
-                  </button>
-                ))}
-              </div>
-
-              <div className="pt-2">
-                <label className="text-neutral-400 text-[11px] block mb-1">Custom Note / Explanation:</label>
-                <textarea
-                  value={banCustomReason}
-                  onChange={e => setBanCustomReason(e.target.value)}
-                  rows={2}
-                  className="w-full bg-[#181824] p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-red-500 text-xs resize-none"
-                  placeholder="Enter specific ban reason for the user to read..."
-                />
-              </div>
+              <textarea
+                value={banCustomReason}
+                onChange={e => setBanCustomReason(e.target.value)}
+                rows={2}
+                className="w-full bg-[#181824] p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-red-500 text-xs resize-none"
+                placeholder="Enter specific ban reason..."
+              />
             </div>
 
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
               <button
                 type="button"
                 onClick={() => setBanningUser(null)}
-                className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 hover:text-white font-semibold text-xs cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold cursor-pointer"
               >
                 Cancel
               </button>
@@ -1700,14 +2104,10 @@ export const AdminDashboardView: React.FC = () => {
                 onClick={async () => {
                   if (!banningUser) return;
                   await banUserAdmin(banningUser.id, banCustomReason);
-                  setSyncStatusMsg({
-                    type: 'success',
-                    text: `User @${banningUser.username} has been banned and suspended.`,
-                  });
-                  setTimeout(() => setSyncStatusMsg(null), 3500);
+                  showToast(`User @${banningUser.username} banned.`);
                   setBanningUser(null);
                 }}
-                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs cursor-pointer shadow-lg shadow-red-600/30"
+                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs cursor-pointer shadow-lg"
               >
                 Confirm Ban
               </button>
@@ -1723,65 +2123,62 @@ export const AdminDashboardView: React.FC = () => {
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-base text-white font-brand flex items-center gap-2">
                 <Shield className="w-4 h-4 text-[#ff007a]" />
-                <span>Add New Administrator</span>
+                <span>Add Administrator</span>
               </h3>
-              <button
-                onClick={() => setShowAddAdminModal(false)}
-                className="text-neutral-400 hover:text-white"
-              >
+              <button onClick={() => setShowAddAdminModal(false)} className="text-neutral-400 hover:text-white">
                 ✕
               </button>
             </div>
 
             <form onSubmit={handleCreateAdmin} className="space-y-3 text-xs">
               <div>
-                <label className="text-neutral-300 font-semibold block mb-1">Admin Username</label>
+                <label className="text-neutral-300 font-semibold block mb-1">Username</label>
                 <input
                   type="text"
-                  placeholder="e.g. admin_jervin"
+                  required
+                  placeholder="e.g. admin_alex"
                   value={newAdminUser}
                   onChange={e => setNewAdminUser(e.target.value)}
                   className="w-full bg-[#181824] px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
-                  required
                 />
               </div>
 
               <div>
-                <label className="text-neutral-300 font-semibold block mb-1">Admin Email</label>
+                <label className="text-neutral-300 font-semibold block mb-1">Email</label>
                 <input
                   type="email"
-                  placeholder="e.g. admin@viralhub.app"
+                  required
+                  placeholder="e.g. alex@viralhub.app"
                   value={newAdminEmail}
                   onChange={e => setNewAdminEmail(e.target.value)}
                   className="w-full bg-[#181824] px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
-                  required
                 />
               </div>
 
               <div>
-                <label className="text-neutral-300 font-semibold block mb-1">Administrative Role</label>
+                <label className="text-neutral-300 font-semibold block mb-1">Role</label>
                 <select
                   value={newAdminRole}
                   onChange={e => setNewAdminRole(e.target.value as any)}
                   className="w-full bg-[#181824] px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                 >
-                  <option value="Super Admin">Super Admin (All permissions & database)</option>
-                  <option value="Admin">Admin (Users, videos, and reports)</option>
-                  <option value="Content Moderator">Content Moderator (Videos & reports)</option>
+                  <option value="Super Admin">Super Admin</option>
+                  <option value="Admin">Admin</option>
+                  <option value="Content Moderator">Content Moderator</option>
                 </select>
               </div>
 
-              <div className="flex items-center justify-end gap-2 pt-3">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-800">
                 <button
                   type="button"
                   onClick={() => setShowAddAdminModal(false)}
-                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 hover:text-white font-semibold"
+                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold"
+                  className="px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold"
                 >
                   Save Admin
                 </button>
