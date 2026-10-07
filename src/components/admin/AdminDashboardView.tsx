@@ -29,11 +29,8 @@ import {
   Music,
   Play,
   Pause,
-  Volume2,
   Upload,
-  Radio,
   Sparkles,
-  Disc,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -132,7 +129,7 @@ export const AdminDashboardView: React.FC = () => {
         totalAdmins: remoteStats.totalAdmins || admins.length || 1,
         totalAudioTracks: remoteStats.totalAudioTracks || audioTracks.length,
       });
-    } catch (err) {
+    } catch {
       // Quiet background fallback
     } finally {
       isSyncingRef.current = false;
@@ -170,7 +167,6 @@ export const AdminDashboardView: React.FC = () => {
   const [audioCategoryFilter, setAudioCategoryFilter] = useState<string>('all');
   const [audioSourceFilter, setAudioSourceFilter] = useState<'all' | 'curated' | 'video'>('all');
   const [playingTrackId, setPlayingTrackId] = useState<string | null>(null);
-  const [audioPlaybackError, setAudioPlaybackError] = useState<string | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
   // Audio Modal
@@ -185,7 +181,6 @@ export const AdminDashboardView: React.FC = () => {
   const [selectedAudioFile, setSelectedAudioFile] = useState<File | null>(null);
   const [selectedCoverFile, setSelectedCoverFile] = useState<File | null>(null);
   const [isUploadingAudio, setIsUploadingAudio] = useState(false);
-  const [modalAudioPreviewPlaying, setModalAudioPreviewPlaying] = useState(false);
   const modalAudioRef = useRef<HTMLAudioElement | null>(null);
 
   // Modals for Moderation
@@ -273,10 +268,9 @@ export const AdminDashboardView: React.FC = () => {
     );
   });
 
-  // Audio Playback Preview in Table
+  // Audio Playback Preview
   const togglePlayTrack = (track: AudioTrack) => {
     if (!audioPlayerRef.current) return;
-    setAudioPlaybackError(null);
 
     if (playingTrackId === track.id) {
       audioPlayerRef.current.pause();
@@ -287,13 +281,8 @@ export const AdminDashboardView: React.FC = () => {
         audioPlayerRef.current.currentTime = 0;
         audioPlayerRef.current
           .play()
-          .then(() => {
-            setPlayingTrackId(track.id);
-          })
-          .catch(err => {
-            console.warn('Playback error:', err);
-            setPlayingTrackId(track.id);
-          });
+          .then(() => setPlayingTrackId(track.id))
+          .catch(() => setPlayingTrackId(track.id));
       } else {
         setPlayingTrackId(track.id);
       }
@@ -319,7 +308,6 @@ export const AdminDashboardView: React.FC = () => {
         if (uploadRes.url) {
           finalAudioUrl = uploadRes.url;
         } else {
-          // In-browser fallback object URL / Data URL
           finalAudioUrl = URL.createObjectURL(selectedAudioFile);
         }
       }
@@ -367,7 +355,6 @@ export const AdminDashboardView: React.FC = () => {
       setSelectedAudioFile(null);
       setSelectedCoverFile(null);
       setShowAddAudioModal(false);
-      setModalAudioPreviewPlaying(false);
     } catch (err: any) {
       showToast(err?.message || 'Failed to save audio track', 'error');
     } finally {
@@ -398,7 +385,6 @@ export const AdminDashboardView: React.FC = () => {
 
   const handleAudioFileSelection = (file: File) => {
     setSelectedAudioFile(file);
-    // Auto-detect duration
     try {
       const tempUrl = URL.createObjectURL(file);
       const audioObj = new Audio(tempUrl);
@@ -447,20 +433,17 @@ export const AdminDashboardView: React.FC = () => {
   ];
 
   return (
-    <div className="min-h-full bg-[#0c0c10] text-white selection:bg-[#ff007a] selection:text-white select-none">
+    <div className="min-h-full bg-neutral-950 text-white p-4 sm:p-6 lg:p-8 select-none">
       {/* Hidden audio element for track playback */}
       <audio
         ref={audioPlayerRef}
         onEnded={() => setPlayingTrackId(null)}
-        onError={() => {
-          setAudioPlaybackError('Unable to stream this audio track source');
-          setPlayingTrackId(null);
-        }}
+        onError={() => setPlayingTrackId(null)}
       />
 
       {/* Floating Status Notification Toast */}
       {feedbackToast && (
-        <div className="fixed top-5 right-5 z-50 animate-fadeIn flex items-center gap-2.5 px-4 py-2.5 rounded-xl border shadow-2xl backdrop-blur-md text-xs font-semibold bg-[#181824]/95 border-neutral-700/80 text-white">
+        <div className="fixed top-5 right-5 z-50 animate-fadeIn flex items-center gap-2.5 px-4 py-2.5 rounded-xl border shadow-2xl backdrop-blur-md text-xs font-semibold bg-neutral-900/95 border-neutral-700 text-white">
           {feedbackToast.type === 'success' && <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />}
           {feedbackToast.type === 'error' && <XCircle className="w-4 h-4 text-red-400 shrink-0" />}
           {feedbackToast.type === 'info' && <Sparkles className="w-4 h-4 text-[#ff007a] shrink-0" />}
@@ -468,32 +451,28 @@ export const AdminDashboardView: React.FC = () => {
         </div>
       )}
 
-      {/* Top Workspace Header (Enterprise Top Bar Contract) */}
-      <header className="sticky top-0 z-30 bg-[#0c0c10]/95 backdrop-blur-md border-b border-neutral-800/80 px-4 sm:px-8 py-3.5">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
-          {/* Breadcrumb Navigation & Wordmark */}
+      <div className="max-w-7xl mx-auto space-y-6">
+        {/* ================================================================= */}
+        {/* OLD UI HEADER (With 'Supabase Synced' & 'Sync all' removed)       */}
+        {/* ================================================================= */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-xl bg-[#ff007a]/15 text-[#ff007a] border border-[#ff007a]/30">
-              <Shield className="w-5 h-5" />
+            <div className="p-3 rounded-2xl bg-gradient-to-tr from-[#ff007a] to-[#7928ca] text-white shadow-lg shadow-[#ff007a]/20">
+              <Shield className="w-7 h-7" />
             </div>
             <div>
-              <div className="flex items-center gap-2 text-xs text-neutral-400">
-                <span className="font-brand font-bold text-neutral-200 tracking-wide">VIRALHUB</span>
-                <span className="text-neutral-600">/</span>
-                <span>Command Center</span>
-                <span className="text-neutral-600">/</span>
-                <span className="text-neutral-200 font-medium capitalize">{activeAdminTab}</span>
-              </div>
-              <h1 className="text-base sm:text-lg font-bold font-brand tracking-tight text-white">
-                Platform Command Console
+              <h1 className="text-2xl sm:text-3xl font-extrabold font-brand tracking-tight text-white flex items-center gap-2">
+                <span>ADMIN COMMAND CENTER</span>
               </h1>
+              <p className="text-xs text-neutral-400 mt-0.5">
+                Platform moderation, community controls & metrics
+              </p>
             </div>
           </div>
 
-          {/* Admin Profile & Actions */}
-          <div className="flex items-center gap-2.5 self-end md:self-center">
-            {/* Admin identity capsule */}
-            <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-[#14141e] border border-neutral-800">
+          {/* Admin Profile & Quick Actions */}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl bg-neutral-900 border border-neutral-800">
               <Avatar
                 src={currentUser?.avatar}
                 alt={currentUser?.displayName || 'Admin'}
@@ -503,7 +482,7 @@ export const AdminDashboardView: React.FC = () => {
                 <div className="text-xs font-bold text-white leading-tight">
                   {currentUser?.displayName || 'Administrator'}
                 </div>
-                <div className="text-[10px] text-neutral-400 font-mono">
+                <div className="text-[10px] text-neutral-400">
                   @{currentUser?.username || 'admin'}
                 </div>
               </div>
@@ -516,7 +495,7 @@ export const AdminDashboardView: React.FC = () => {
             <button
               type="button"
               onClick={() => setSwitchAccountModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-[#181824] hover:bg-[#202030] text-neutral-200 hover:text-white border border-neutral-800 text-xs font-semibold transition-colors cursor-pointer"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 text-neutral-200 hover:text-white border border-neutral-800 text-xs font-semibold transition-colors cursor-pointer"
               title="Switch user accounts"
             >
               <ArrowRightLeft className="w-3.5 h-3.5 text-[#ff007a]" />
@@ -535,214 +514,176 @@ export const AdminDashboardView: React.FC = () => {
             </button>
           </div>
         </div>
-      </header>
 
-      {/* Main Content Viewport */}
-      <main className="max-w-7xl mx-auto p-4 sm:p-8 space-y-6">
-        {/* Metric Cards (High-signal platform metrics without Likes/Comments clutter) */}
-        <section aria-label="System Metrics" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
-          {/* Registered Users */}
+        {/* ================================================================= */}
+        {/* STATS CARDS (Likes and Comments removed; Audio added)             */}
+        {/* ================================================================= */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+          {/* Total Users */}
           <div
             onClick={() => setActiveAdminTab('users')}
-            className="bg-[#12121a] border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-colors cursor-pointer group"
+            className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-4 sm:p-5 hover:border-neutral-700 transition-all cursor-pointer group"
           >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Users</span>
-              <div className="p-1.5 rounded-lg bg-blue-500/10 text-blue-400 group-hover:scale-110 transition-transform">
-                <Users className="w-4 h-4" />
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Total Users</span>
+              <div className="p-2 rounded-xl bg-blue-500/15 text-blue-400 group-hover:scale-110 transition-transform">
+                <Users className="w-5 h-5" />
               </div>
             </div>
-            <div className="mt-3">
-              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
-                {stats.totalUsers}
-              </div>
-              <div className="text-[11px] text-neutral-500 mt-0.5">Registered Accounts</div>
+            <div className="text-2xl sm:text-3xl font-extrabold text-white font-brand tabular-nums">
+              {stats.totalUsers}
             </div>
+            <div className="text-[11px] text-neutral-500 mt-1">Registered Accounts</div>
           </div>
 
-          {/* Community Videos */}
+          {/* Total Videos */}
           <div
             onClick={() => {
               setActiveAdminTab('videos');
               setVideoStatusFilter('approved');
             }}
-            className="bg-[#12121a] border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-colors cursor-pointer group"
+            className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-4 sm:p-5 hover:border-neutral-700 transition-all cursor-pointer group"
           >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Videos</span>
-              <div className="p-1.5 rounded-lg bg-[#ff007a]/10 text-[#ff007a] group-hover:scale-110 transition-transform">
-                <Film className="w-4 h-4" />
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Total Videos</span>
+              <div className="p-2 rounded-xl bg-[#ff007a]/15 text-[#ff007a] group-hover:scale-110 transition-transform">
+                <Film className="w-5 h-5" />
               </div>
             </div>
-            <div className="mt-3">
-              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
-                {stats.totalVideos}
-              </div>
-              <div className="text-[11px] text-neutral-500 mt-0.5">Media Catalog</div>
+            <div className="text-2xl sm:text-3xl font-extrabold text-white font-brand tabular-nums">
+              {stats.totalVideos}
             </div>
+            <div className="text-[11px] text-neutral-500 mt-1">Catalog Videos</div>
           </div>
 
           {/* Audio Library (Requested Feature) */}
           <div
             onClick={() => setActiveAdminTab('audio')}
-            className="bg-[#12121a] border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-colors cursor-pointer group"
+            className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-4 sm:p-5 hover:border-cyan-500/40 transition-all cursor-pointer group"
           >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Audio Tracks</span>
-              <div className="p-1.5 rounded-lg bg-cyan-500/10 text-cyan-400 group-hover:scale-110 transition-transform">
-                <Music className="w-4 h-4" />
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Audio Tracks</span>
+              <div className="p-2 rounded-xl bg-cyan-500/15 text-cyan-400 group-hover:scale-110 transition-transform">
+                <Music className="w-5 h-5" />
               </div>
             </div>
-            <div className="mt-3">
-              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
-                {audioTracks.length}
-              </div>
-              <div className="text-[11px] text-neutral-500 mt-0.5">Sound Library</div>
+            <div className="text-2xl sm:text-3xl font-extrabold text-white font-brand tabular-nums">
+              {audioTracks.length}
             </div>
+            <div className="text-[11px] text-cyan-400/80 mt-1">Sound Library</div>
           </div>
 
-          {/* Moderation Reports */}
+          {/* Platform Reports */}
           <div
             onClick={() => {
               setActiveAdminTab('reports');
               setReportStatusFilter('Under Review');
             }}
-            className={`border rounded-2xl p-4 flex flex-col justify-between transition-colors cursor-pointer group ${
+            className={`border rounded-2xl p-4 sm:p-5 transition-all cursor-pointer group ${
               pendingReportsCount > 0
-                ? 'bg-amber-500/10 border-amber-500/30 hover:border-amber-500/50'
-                : 'bg-[#12121a] border-neutral-800 hover:border-neutral-700'
+                ? 'bg-amber-500/10 border-amber-500/40 hover:border-amber-500/60'
+                : 'bg-neutral-900/80 border-neutral-800 hover:border-neutral-700'
             }`}
           >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Reports</span>
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Reports</span>
               <div
-                className={`p-1.5 rounded-lg ${
+                className={`p-2 rounded-xl ${
                   pendingReportsCount > 0 ? 'bg-amber-500/20 text-amber-400' : 'bg-neutral-800 text-neutral-400'
                 } group-hover:scale-110 transition-transform`}
               >
-                <AlertTriangle className="w-4 h-4" />
+                <AlertTriangle className="w-5 h-5" />
               </div>
             </div>
-            <div className="mt-3">
-              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
-                {reports.length}
-              </div>
-              <div className="text-[11px] text-neutral-400 mt-0.5">
-                {pendingReportsCount > 0 ? (
-                  <span className="text-amber-400 font-semibold">{pendingReportsCount} Pending Review</span>
-                ) : (
-                  'All Resolved'
-                )}
-              </div>
+            <div className="text-2xl sm:text-3xl font-extrabold text-white font-brand tabular-nums">
+              {reports.length}
+            </div>
+            <div className="text-[11px] text-neutral-400 mt-1">
+              {pendingReportsCount > 0 ? (
+                <span className="text-amber-400 font-semibold">{pendingReportsCount} Pending Review</span>
+              ) : (
+                'All Handled'
+              )}
             </div>
           </div>
 
-          {/* Creator Appeals */}
-          <div
-            onClick={() => {
-              setActiveAdminTab('videos');
-              setVideoStatusFilter('appeals');
-            }}
-            className={`border rounded-2xl p-4 flex flex-col justify-between transition-colors cursor-pointer group ${
-              pendingAppealsCount > 0
-                ? 'bg-purple-500/10 border-purple-500/30 hover:border-purple-500/50'
-                : 'bg-[#12121a] border-neutral-800 hover:border-neutral-700'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Appeals</span>
-              <div
-                className={`p-1.5 rounded-lg ${
-                  pendingAppealsCount > 0 ? 'bg-purple-500/20 text-purple-400' : 'bg-neutral-800 text-neutral-400'
-                } group-hover:scale-110 transition-transform`}
-              >
-                <Clock className="w-4 h-4" />
-              </div>
-            </div>
-            <div className="mt-3">
-              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
-                {pendingAppealsCount}
-              </div>
-              <div className="text-[11px] text-neutral-400 mt-0.5">
-                {pendingAppealsCount > 0 ? (
-                  <span className="text-purple-300 font-semibold">Requires Action</span>
-                ) : (
-                  'Queue Clear'
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Administrator Team */}
+          {/* Platform Admins */}
           <div
             onClick={() => setActiveAdminTab('admins')}
-            className="bg-[#12121a] border border-neutral-800 rounded-2xl p-4 flex flex-col justify-between hover:border-neutral-700 transition-colors cursor-pointer group"
+            className="bg-neutral-900/80 border border-neutral-800 rounded-2xl p-4 sm:p-5 hover:border-neutral-700 transition-all cursor-pointer group"
           >
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Admins</span>
-              <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 group-hover:scale-110 transition-transform">
-                <Lock className="w-4 h-4" />
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-bold text-neutral-400 uppercase tracking-wider">Admins</span>
+              <div className="p-2 rounded-xl bg-purple-500/15 text-purple-400 group-hover:scale-110 transition-transform">
+                <Shield className="w-5 h-5" />
               </div>
             </div>
-            <div className="mt-3">
-              <div className="text-2xl font-extrabold text-white font-brand font-mono tabular-nums">
-                {admins.length || 1}
-              </div>
-              <div className="text-[11px] text-neutral-500 mt-0.5">System Roles</div>
+            <div className="text-2xl sm:text-3xl font-extrabold text-white font-brand tabular-nums">
+              {admins.length || 1}
             </div>
+            <div className="text-[11px] text-neutral-500 mt-1">Active Roles</div>
           </div>
-        </section>
+        </div>
 
-        {/* Clean Segmented Navigation Controls */}
-        <nav aria-label="Console Sections" className="flex items-center gap-1.5 p-1 bg-[#12121a] border border-neutral-800/80 rounded-2xl overflow-x-auto no-scrollbar">
+        {/* ================================================================= */}
+        {/* TABS NAVIGATION (Familiar Old UI Pill Tabs + Audio Tab)           */}
+        {/* ================================================================= */}
+        <div className="flex items-center gap-2 border-b border-neutral-800 pb-3 overflow-x-auto no-scrollbar">
           {[
             { id: 'overview', label: 'Overview', icon: <Activity className="w-4 h-4" /> },
             { id: 'users', label: `Users (${uniqueUsers.length})`, icon: <Users className="w-4 h-4" /> },
             {
               id: 'videos',
-              label: pendingAppealsCount > 0 ? `Videos (${videos.length}) · ${pendingAppealsCount} Appeal${pendingAppealsCount > 1 ? 's' : ''}` : `Videos (${videos.length})`,
+              label: pendingAppealsCount > 0 ? `Videos (${videos.length})` : `Videos (${videos.length})`,
               icon: <Film className="w-4 h-4" />,
-              badge: pendingAppealsCount > 0,
+              badge: pendingAppealsCount > 0 ? `${pendingAppealsCount} Appeal` : undefined,
             },
             {
               id: 'audio',
-              label: `Audio Library (${audioTracks.length})`,
+              label: `Audio (${audioTracks.length})`,
               icon: <Music className="w-4 h-4" />,
             },
             {
               id: 'reports',
-              label: pendingReportsCount > 0 ? `Reports (${reports.length}) · ${pendingReportsCount} Pending` : `Reports (${reports.length})`,
+              label: `Reports (${reports.length})`,
               icon: <AlertTriangle className="w-4 h-4" />,
-              badge: pendingReportsCount > 0,
+              badge: pendingReportsCount > 0 ? `${pendingReportsCount}` : undefined,
             },
-            { id: 'admins', label: `Admin Team (${admins.length || 1})`, icon: <Shield className="w-4 h-4" /> },
+            { id: 'admins', label: `Admins (${admins.length || 1})`, icon: <Shield className="w-4 h-4" /> },
           ].map(tab => {
             const isActive = activeAdminTab === tab.id;
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveAdminTab(tab.id as any)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                className={`px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer ${
                   isActive
-                    ? 'bg-[#1e1e2c] text-white border border-neutral-700/80 shadow-sm'
-                    : tab.badge
-                    ? 'text-amber-300 hover:text-white hover:bg-neutral-800/60'
-                    : 'text-neutral-400 hover:text-white hover:bg-neutral-800/40'
+                    ? 'bg-[#ff007a] text-white shadow-lg shadow-[#ff007a]/25'
+                    : 'bg-neutral-900/80 text-neutral-400 hover:text-white hover:bg-neutral-800 border border-neutral-800'
                 }`}
               >
                 {tab.icon}
                 <span>{tab.label}</span>
+                {tab.badge && (
+                  <span
+                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-extrabold ${
+                      isActive ? 'bg-white text-black' : 'bg-amber-500 text-black'
+                    }`}
+                  >
+                    {tab.badge}
+                  </span>
+                )}
               </button>
             );
           })}
-        </nav>
+        </div>
 
         {/* =================================================================== */}
-        {/* TAB 1: OVERVIEW & QUEUES */}
+        {/* TAB 1: OVERVIEW                                                     */}
         {/* =================================================================== */}
         {activeAdminTab === 'overview' && (
           <div className="space-y-6">
-            {/* Urgent Creator Appeals Banner */}
+            {/* Creator Appeals Banner if pending */}
             {pendingAppealsCount > 0 && (
               <div className="p-4 sm:p-5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -750,8 +691,8 @@ export const AdminDashboardView: React.FC = () => {
                     <Clock className="w-5 h-5 animate-pulse" />
                   </div>
                   <div>
-                    <h2 className="text-sm font-bold text-white font-brand flex items-center gap-2">
-                      <span>{pendingAppealsCount} Creator Appeal{pendingAppealsCount > 1 ? 's' : ''} Awaiting Review</span>
+                    <h2 className="text-sm font-bold text-white font-brand">
+                      {pendingAppealsCount} Creator Appeal{pendingAppealsCount > 1 ? 's' : ''} Awaiting Review
                     </h2>
                     <p className="text-xs text-neutral-300 mt-0.5">
                       Creators submitted appeals for revoked content requesting reinstatement to the feed.
@@ -770,7 +711,7 @@ export const AdminDashboardView: React.FC = () => {
               </div>
             )}
 
-            {/* Pending Reports Alert Banner */}
+            {/* Pending Reports Alert Banner if pending */}
             {pendingReportsCount > 0 && (
               <div className="p-4 sm:p-5 rounded-2xl bg-red-500/10 border border-red-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex items-center gap-3">
@@ -798,71 +739,71 @@ export const AdminDashboardView: React.FC = () => {
               </div>
             )}
 
-            {/* Quick Command Modules Grid */}
-            <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-6 space-y-4">
+            {/* Quick Management Shortcuts Grid */}
+            <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
               <div>
-                <h2 className="text-base font-bold text-white font-brand">Command Modules</h2>
+                <h2 className="text-base font-bold text-white font-brand">Quick Actions & Navigation</h2>
                 <p className="text-xs text-neutral-400 mt-0.5">
-                  Direct management consoles for community catalog, sound library, and security roles.
+                  Direct shortcuts to moderate content, curate audio soundtracks, and manage users.
                 </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Audio Library Card */}
+                {/* Audio Library Shortcut */}
                 <button
                   onClick={() => setActiveAdminTab('audio')}
-                  className="p-5 rounded-xl bg-[#161622] hover:bg-[#1a1a2a] border border-neutral-800/80 hover:border-cyan-500/40 text-left transition-all cursor-pointer group"
+                  className="p-5 rounded-xl bg-neutral-900/90 hover:bg-neutral-800 border border-neutral-800 hover:border-cyan-500/50 text-left transition-all cursor-pointer group"
                 >
-                  <div className="w-9 h-9 rounded-lg bg-cyan-500/10 text-cyan-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                  <div className="w-10 h-10 rounded-xl bg-cyan-500/15 text-cyan-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
                     <Music className="w-5 h-5" />
                   </div>
-                  <div className="text-sm font-bold text-white">Audio & Soundtracks</div>
-                  <div className="text-xs text-neutral-400 mt-0.5 font-mono tabular-nums">
-                    {audioTracks.length} tracks · Add music
+                  <div className="text-sm font-bold text-white">Audio & Music Library</div>
+                  <div className="text-xs text-neutral-400 mt-1">
+                    {audioTracks.length} tracks · Add new audios
                   </div>
                 </button>
 
-                {/* Video Moderation Card */}
+                {/* Video Moderation Shortcut */}
                 <button
                   onClick={() => {
                     setActiveAdminTab('videos');
                     setVideoStatusFilter('approved');
                   }}
-                  className="p-5 rounded-xl bg-[#161622] hover:bg-[#1a1a2a] border border-neutral-800/80 hover:border-[#ff007a]/40 text-left transition-all cursor-pointer group"
+                  className="p-5 rounded-xl bg-neutral-900/90 hover:bg-neutral-800 border border-neutral-800 hover:border-[#ff007a]/50 text-left transition-all cursor-pointer group"
                 >
-                  <div className="w-9 h-9 rounded-lg bg-[#ff007a]/10 text-[#ff007a] flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                  <div className="w-10 h-10 rounded-xl bg-[#ff007a]/15 text-[#ff007a] flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
                     <Film className="w-5 h-5" />
                   </div>
                   <div className="text-sm font-bold text-white">Video Moderation</div>
-                  <div className="text-xs text-neutral-400 mt-0.5 font-mono tabular-nums">
+                  <div className="text-xs text-neutral-400 mt-1">
                     {videos.length} videos · {pendingAppealsCount} appeals
                   </div>
                 </button>
 
-                {/* User Accounts Card */}
+                {/* User Accounts Shortcut */}
                 <button
                   onClick={() => setActiveAdminTab('users')}
-                  className="p-5 rounded-xl bg-[#161622] hover:bg-[#1a1a2a] border border-neutral-800/80 hover:border-blue-500/40 text-left transition-all cursor-pointer group"
+                  className="p-5 rounded-xl bg-neutral-900/90 hover:bg-neutral-800 border border-neutral-800 hover:border-blue-500/50 text-left transition-all cursor-pointer group"
                 >
-                  <div className="w-9 h-9 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                  <div className="w-10 h-10 rounded-xl bg-blue-500/15 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
                     <Users className="w-5 h-5" />
                   </div>
                   <div className="text-sm font-bold text-white">User Accounts</div>
-                  <div className="text-xs text-neutral-400 mt-0.5 font-mono tabular-nums">
-                    {uniqueUsers.length} total users
+                  <div className="text-xs text-neutral-400 mt-1">
+                    {uniqueUsers.length} total registered users
                   </div>
                 </button>
 
-                {/* Community Reports Card */}
+                {/* Reports Shortcut */}
                 <button
                   onClick={() => setActiveAdminTab('reports')}
-                  className="p-5 rounded-xl bg-[#161622] hover:bg-[#1a1a2a] border border-neutral-800/80 hover:border-amber-500/40 text-left transition-all cursor-pointer group"
+                  className="p-5 rounded-xl bg-neutral-900/90 hover:bg-neutral-800 border border-neutral-800 hover:border-amber-500/50 text-left transition-all cursor-pointer group"
                 >
-                  <div className="w-9 h-9 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 text-amber-400 flex items-center justify-center mb-3 group-hover:scale-105 transition-transform">
                     <AlertTriangle className="w-5 h-5" />
                   </div>
                   <div className="text-sm font-bold text-white">Reports & Flags</div>
-                  <div className="text-xs text-neutral-400 mt-0.5 font-mono tabular-nums">
+                  <div className="text-xs text-neutral-400 mt-1">
                     {reports.length} reports · {pendingReportsCount} pending
                   </div>
                 </button>
@@ -872,59 +813,58 @@ export const AdminDashboardView: React.FC = () => {
         )}
 
         {/* =================================================================== */}
-        {/* TAB 2: AUDIO LIBRARY (NEW & REQUESTED FEATURE) */}
+        {/* TAB 2: AUDIO LIBRARY (NEW & REQUESTED FEATURE)                      */}
         {/* =================================================================== */}
         {activeAdminTab === 'audio' && (
-          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-5">
+          <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-5">
             {/* Audio Header & Actions */}
-            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
               <div>
                 <div className="flex items-center gap-2.5">
-                  <h2 className="text-base sm:text-lg font-bold text-white font-brand">
-                    Audio & Sounds Library
+                  <h2 className="text-lg font-bold text-white font-brand">
+                    Audio & Soundtracks Library
                   </h2>
-                  <span className="text-[11px] font-mono tabular-nums text-neutral-400 px-2 py-0.5 rounded-md bg-neutral-800/80">
-                    {audioTracks.length} tracks total
+                  <span className="text-xs font-mono text-neutral-400 px-2 py-0.5 rounded-md bg-neutral-800">
+                    {audioTracks.length} tracks
                   </span>
                 </div>
                 <p className="text-xs text-neutral-400 mt-1">
-                  Manage official sound tracks and community sounds available for all users to select when creating videos.
+                  Add audio tracks that all users can select and use on their videos when creating content.
                 </p>
               </div>
 
-              {/* Top Controls: Search & Add Audio Button */}
+              {/* Add Audio Track Button & Search */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
                 <div className="relative w-full sm:w-64">
                   <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
                   <input
                     type="text"
-                    placeholder="Search title, artist, sound..."
+                    placeholder="Search title, artist..."
                     value={audioSearch}
                     onChange={e => setAudioSearch(e.target.value)}
-                    className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-9 pr-3.5 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
+                    className="w-full bg-neutral-900 text-xs text-white placeholder-neutral-500 pl-9 pr-3.5 py-2 rounded-xl border border-neutral-700 focus:border-[#ff007a] outline-none"
                   />
                 </div>
 
                 <button
                   onClick={() => setShowAddAudioModal(true)}
-                  className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all cursor-pointer shadow-sm"
+                  className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#ff007a] hover:bg-[#e0006c] text-white text-xs font-bold transition-all cursor-pointer shadow-md shadow-[#ff007a]/20"
                 >
                   <Plus className="w-4 h-4 stroke-[2.5]" />
-                  <span>Add New Audio Track</span>
+                  <span>Add Audio</span>
                 </button>
               </div>
             </div>
 
-            {/* Filter Tabs */}
+            {/* Category Filters */}
             <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
-              {/* Category selector */}
               <div className="flex items-center gap-1.5 flex-wrap">
                 <button
                   onClick={() => setAudioCategoryFilter('all')}
                   className={`px-3 py-1.5 rounded-xl font-medium transition-colors cursor-pointer ${
                     audioCategoryFilter === 'all'
-                      ? 'bg-neutral-700 text-white'
-                      : 'bg-[#181824] text-neutral-400 hover:text-white'
+                      ? 'bg-white text-black font-bold'
+                      : 'bg-neutral-800 text-neutral-400 hover:text-white'
                   }`}
                 >
                   All Genres
@@ -935,8 +875,8 @@ export const AdminDashboardView: React.FC = () => {
                     onClick={() => setAudioCategoryFilter(cat)}
                     className={`px-3 py-1.5 rounded-xl font-medium transition-colors cursor-pointer ${
                       audioCategoryFilter === cat
-                        ? 'bg-[#ff007a] text-white'
-                        : 'bg-[#181824] text-neutral-400 hover:text-white'
+                        ? 'bg-[#ff007a] text-white font-bold'
+                        : 'bg-neutral-800 text-neutral-400 hover:text-white'
                     }`}
                   >
                     {cat}
@@ -944,71 +884,54 @@ export const AdminDashboardView: React.FC = () => {
                 ))}
               </div>
 
-              {/* Source selector (Curated vs Video sounds) */}
-              <div className="flex items-center gap-1 bg-[#181824] p-1 rounded-xl border border-neutral-800">
+              {/* Source filter */}
+              <div className="flex items-center gap-1 bg-neutral-900 p-1 rounded-xl border border-neutral-800">
                 <button
                   onClick={() => setAudioSourceFilter('all')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
-                    audioSourceFilter === 'all' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer ${
+                    audioSourceFilter === 'all' ? 'bg-[#ff007a] text-white' : 'text-neutral-400 hover:text-white'
                   }`}
                 >
-                  All ({audioTracks.length})
+                  All
                 </button>
                 <button
                   onClick={() => setAudioSourceFilter('curated')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
-                    audioSourceFilter === 'curated' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer ${
+                    audioSourceFilter === 'curated' ? 'bg-[#ff007a] text-white' : 'text-neutral-400 hover:text-white'
                   }`}
                 >
-                  Library Music ({audioTracksList.length})
+                  Curated
                 </button>
                 <button
                   onClick={() => setAudioSourceFilter('video')}
-                  className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors cursor-pointer ${
-                    audioSourceFilter === 'video' ? 'bg-neutral-700 text-white' : 'text-neutral-400 hover:text-white'
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium cursor-pointer ${
+                    audioSourceFilter === 'video' ? 'bg-[#ff007a] text-white' : 'text-neutral-400 hover:text-white'
                   }`}
                 >
-                  Video Sounds ({audioTracks.length - audioTracksList.length})
+                  Video Sounds
                 </button>
               </div>
             </div>
 
-            {/* Playback Alert if any */}
-            {audioPlaybackError && (
-              <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between">
-                <span>{audioPlaybackError}</span>
-                <button onClick={() => setAudioPlaybackError(null)} className="text-amber-400 font-bold">
-                  ✕
-                </button>
-              </div>
-            )}
-
-            {/* Audio Table */}
+            {/* Audio Tracks List */}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-neutral-800 text-neutral-400 text-[11px] uppercase tracking-wider">
-                    <th className="py-3 px-3 w-12 text-center">Play</th>
-                    <th className="py-3 px-3">Title & Artist</th>
-                    <th className="py-3 px-3">Genre</th>
+                    <th className="py-3 px-3">Track / Preview</th>
+                    <th className="py-3 px-3">Artist</th>
+                    <th className="py-3 px-3">Category</th>
                     <th className="py-3 px-3 font-mono">Duration</th>
-                    <th className="py-3 px-3">Origin</th>
-                    <th className="py-3 px-3">Status</th>
-                    <th className="py-3 px-3 text-right">Actions</th>
+                    <th className="py-3 px-3">Type</th>
+                    <th className="py-3 px-3 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-neutral-800/60">
                   {filteredAudioTracks.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="py-12 text-center text-neutral-500">
+                      <td colSpan={6} className="py-12 text-center text-neutral-500">
                         <Music className="w-8 h-8 mx-auto text-neutral-600 mb-2" />
-                        <div>No audio tracks matching your search or filter.</div>
-                        <button
-                          onClick={() => setShowAddAudioModal(true)}
-                          className="mt-3 px-3 py-1.5 rounded-xl bg-[#ff007a] text-white text-xs font-bold"
-                        >
-                          + Add First Track
-                        </button>
+                        <div>No audio tracks found. Click "Add Audio" above to publish one.</div>
                       </td>
                     </tr>
                   ) : (
@@ -1017,103 +940,82 @@ export const AdminDashboardView: React.FC = () => {
                       const isCurated = audioTracksList.some(t => t.id === track.id);
 
                       return (
-                        <tr
-                          key={track.id}
-                          className={`hover:bg-[#161622] transition-colors ${
-                            isPlaying ? 'bg-cyan-950/20' : ''
-                          }`}
-                        >
-                          {/* Play/Pause Button */}
-                          <td className="py-3 px-3 text-center">
-                            <button
-                              onClick={() => togglePlayTrack(track)}
-                              className={`w-8 h-8 rounded-full flex items-center justify-center transition-all cursor-pointer ${
-                                isPlaying
-                                  ? 'bg-cyan-500 text-black shadow-[0_0_12px_rgba(6,182,212,0.6)]'
-                                  : 'bg-neutral-800 hover:bg-[#ff007a] text-white'
-                              }`}
-                              title={isPlaying ? 'Pause' : 'Preview track'}
-                            >
-                              {isPlaying ? (
-                                <Pause className="w-3.5 h-3.5 fill-current" />
-                              ) : (
-                                <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
-                              )}
-                            </button>
-                          </td>
-
-                          {/* Track Details */}
+                        <tr key={track.id} className="hover:bg-neutral-800/40 transition-colors">
+                          {/* Track Title with Cover & Play Button */}
                           <td className="py-3 px-3">
                             <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-xl overflow-hidden bg-neutral-800 shrink-0 border border-neutral-700/60 flex items-center justify-center relative">
+                              <div className="relative w-10 h-10 rounded-xl overflow-hidden bg-neutral-800 shrink-0 border border-neutral-700/80 group">
                                 {track.coverUrl ? (
                                   <img
                                     src={track.coverUrl}
                                     alt={track.title}
                                     className="w-full h-full object-cover"
-                                    onError={e => {
-                                      (e.currentTarget as HTMLElement).style.display = 'none';
-                                    }}
                                   />
                                 ) : (
-                                  <Disc className="w-5 h-5 text-neutral-500" />
-                                )}
-                                {isPlaying && (
-                                  <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                                    <Volume2 className="w-4 h-4 text-cyan-400 animate-pulse" />
+                                  <div className="w-full h-full flex items-center justify-center bg-gradient-to-tr from-cyan-900 to-purple-900">
+                                    <Music className="w-4 h-4 text-cyan-300" />
                                   </div>
                                 )}
+                                <button
+                                  onClick={() => togglePlayTrack(track)}
+                                  className={`absolute inset-0 flex items-center justify-center bg-black/50 transition-opacity cursor-pointer ${
+                                    isPlaying ? 'opacity-100 text-[#ff007a]' : 'opacity-0 group-hover:opacity-100 text-white'
+                                  }`}
+                                  title={isPlaying ? 'Pause' : 'Play Preview'}
+                                >
+                                  {isPlaying ? (
+                                    <Pause className="w-4 h-4 fill-current" />
+                                  ) : (
+                                    <Play className="w-4 h-4 fill-current ml-0.5" />
+                                  )}
+                                </button>
                               </div>
+
                               <div className="min-w-0">
                                 <div className="font-bold text-white truncate flex items-center gap-1.5">
                                   <span>{track.title}</span>
                                   {isPlaying && (
-                                    <span className="text-[10px] text-cyan-400 font-mono font-normal">
-                                      · Playing
+                                    <span className="flex items-center gap-0.5">
+                                      <span className="w-1 h-3 bg-[#ff007a] rounded-full animate-pulse" />
+                                      <span className="w-1 h-4 bg-[#ff007a] rounded-full animate-pulse delay-75" />
+                                      <span className="w-1 h-2 bg-[#ff007a] rounded-full animate-pulse delay-150" />
                                     </span>
                                   )}
                                 </div>
                                 <div className="text-[11px] text-neutral-400 truncate">
-                                  {track.artist}
+                                  {track.useCount ? `Used in ${track.useCount} videos` : 'Available to all users'}
                                 </div>
                               </div>
                             </div>
                           </td>
 
-                          {/* Genre / Category */}
-                          <td className="py-3 px-3 text-neutral-300">
-                            <span className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-neutral-800 border border-neutral-700/60">
+                          {/* Artist */}
+                          <td className="py-3 px-3 text-neutral-300 font-medium">{track.artist}</td>
+
+                          {/* Category */}
+                          <td className="py-3 px-3">
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-neutral-800 text-neutral-300 border border-neutral-700/60">
                               {track.category || 'Trending'}
                             </span>
                           </td>
 
                           {/* Duration */}
-                          <td className="py-3 px-3 text-neutral-400 font-mono tabular-nums">
-                            {track.duration || '00:30'}
-                          </td>
+                          <td className="py-3 px-3 text-neutral-300 font-mono">{track.duration}</td>
 
-                          {/* Origin */}
-                          <td className="py-3 px-3 text-neutral-400">
+                          {/* Source / Type */}
+                          <td className="py-3 px-3">
                             {isCurated ? (
-                              <span className="text-emerald-400 font-medium text-[11px]">
-                                Official Library
+                              <span className="text-[10px] font-semibold text-cyan-400 bg-cyan-950/40 px-2 py-0.5 rounded border border-cyan-800/40">
+                                Curated Soundtrack
                               </span>
                             ) : (
-                              <span className="text-neutral-400 text-[11px]">
-                                Creator Sound {track.sourceUsername ? `(@${track.sourceUsername})` : ''}
+                              <span className="text-[10px] font-semibold text-neutral-400 bg-neutral-800/60 px-2 py-0.5 rounded">
+                                User Video Sound
                               </span>
                             )}
                           </td>
 
-                          {/* Status */}
-                          <td className="py-3 px-3">
-                            <span className="text-[10px] font-semibold text-emerald-400 flex items-center gap-1">
-                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                              <span>Live in Studio</span>
-                            </span>
-                          </td>
-
-                          {/* Actions */}
+                          {/* Action */}
                           <td className="py-3 px-3 text-right">
                             {isCurated ? (
                               <button
@@ -1138,14 +1040,14 @@ export const AdminDashboardView: React.FC = () => {
         )}
 
         {/* =================================================================== */}
-        {/* TAB 3: USER ACCOUNTS */}
+        {/* TAB 3: USER ACCOUNTS                                                */}
         {/* =================================================================== */}
         {activeAdminTab === 'users' && (
-          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
+          <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
               <div>
                 <h2 className="text-base font-bold text-white font-brand">User Accounts ({filteredUsers.length})</h2>
-                <p className="text-xs text-neutral-400">Users stored in PostgreSQL database</p>
+                <p className="text-xs text-neutral-400">Manage user roles, bans, and profiles</p>
               </div>
               <div className="relative w-full sm:w-72">
                 <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-neutral-400 pointer-events-none" />
@@ -1154,7 +1056,7 @@ export const AdminDashboardView: React.FC = () => {
                   placeholder="Search username, name, email..."
                   value={userSearch}
                   onChange={e => setUserSearch(e.target.value)}
-                  className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-10 pr-3.5 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
+                  className="w-full bg-neutral-900 text-xs text-white placeholder-neutral-500 pl-10 pr-3.5 py-2 rounded-xl border border-neutral-700 focus:border-[#ff007a] outline-none"
                 />
               </div>
             </div>
@@ -1180,7 +1082,7 @@ export const AdminDashboardView: React.FC = () => {
                     </tr>
                   ) : (
                     filteredUsers.map(u => (
-                      <tr key={u.id} className="hover:bg-[#161622] transition-colors">
+                      <tr key={u.id} className="hover:bg-neutral-800/40 transition-colors">
                         <td className="py-3 px-3">
                           <div className="flex items-center gap-3">
                             <Avatar src={u.avatar} alt={u.displayName} size="sm" />
@@ -1205,7 +1107,7 @@ export const AdminDashboardView: React.FC = () => {
                               await updateUserRoleAdmin(u.id, newRole);
                               showToast(`Role for @${u.username} updated to ${newRole}`);
                             }}
-                            className="text-xs font-semibold py-1 px-2 rounded-lg bg-[#181824] text-neutral-200 border border-neutral-700/80 outline-none cursor-pointer"
+                            className="text-xs font-semibold py-1 px-2 rounded-lg bg-neutral-900 text-neutral-200 border border-neutral-700 outline-none cursor-pointer"
                           >
                             <option value="creator">Creator</option>
                             <option value="moderator">Moderator</option>
@@ -1295,10 +1197,10 @@ export const AdminDashboardView: React.FC = () => {
         )}
 
         {/* =================================================================== */}
-        {/* TAB 4: VIDEOS MODERATION (Likes and Comments removed) */}
+        {/* TAB 4: VIDEOS MODERATION (Likes and Comments removed)               */}
         {/* =================================================================== */}
         {activeAdminTab === 'videos' && (
-          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-5">
+          <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-5">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-neutral-800">
               <div>
                 <div className="flex items-center gap-2.5">
@@ -1312,7 +1214,7 @@ export const AdminDashboardView: React.FC = () => {
                   )}
                 </div>
                 <p className="text-xs text-neutral-400 mt-0.5">
-                  Review published community videos, manage guidelines compliance, and decide creator moderation appeals.
+                  Review published videos, manage feed visibility, and resolve appeals.
                 </p>
               </div>
 
@@ -1324,7 +1226,7 @@ export const AdminDashboardView: React.FC = () => {
                   placeholder="Search caption, creator, hashtag..."
                   value={videoSearch}
                   onChange={e => setVideoSearch(e.target.value)}
-                  className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-10 pr-3.5 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
+                  className="w-full bg-neutral-900 text-xs text-white placeholder-neutral-500 pl-10 pr-3.5 py-2 rounded-xl border border-neutral-700 focus:border-[#ff007a] outline-none"
                 />
               </div>
             </div>
@@ -1353,10 +1255,10 @@ export const AdminDashboardView: React.FC = () => {
               ))}
             </div>
 
-            {/* Video Cards Grid (Likes and Comments removed) */}
+            {/* Video Cards Grid (Likes and Comments completely removed) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredVideos.length === 0 ? (
-                <div className="col-span-full py-16 text-center text-neutral-400 text-xs bg-[#161622] rounded-xl border border-neutral-800">
+                <div className="col-span-full py-16 text-center text-neutral-400 text-xs bg-neutral-900/40 rounded-xl border border-neutral-800">
                   <Film className="w-8 h-8 mx-auto text-neutral-600 mb-2" />
                   <div className="font-semibold text-neutral-300 text-sm">No videos found</div>
                   <p className="text-neutral-500 mt-1">No videos matching filter: {videoStatusFilter}</p>
@@ -1365,7 +1267,7 @@ export const AdminDashboardView: React.FC = () => {
                 filteredVideos.map(video => (
                   <div
                     key={video.id}
-                    className="bg-[#161622] border border-neutral-800 rounded-xl overflow-hidden flex flex-col justify-between hover:border-neutral-700 transition-all"
+                    className="bg-neutral-900/90 border border-neutral-800 rounded-xl overflow-hidden flex flex-col justify-between hover:border-neutral-700 transition-all"
                   >
                     <div className="p-3.5 space-y-2.5">
                       {/* Creator Header */}
@@ -1442,7 +1344,7 @@ export const AdminDashboardView: React.FC = () => {
                     </div>
 
                     {/* Metadata Rail & Action Buttons (Likes and Comments removed) */}
-                    <div className="p-3 border-t border-neutral-800/80 bg-[#14141e] space-y-2">
+                    <div className="p-3 border-t border-neutral-800 bg-neutral-900/60 space-y-2">
                       <div className="flex items-center justify-between text-[11px] text-neutral-400">
                         <span className="flex items-center gap-1 font-mono tabular-nums">
                           <Eye className="w-3.5 h-3.5 text-neutral-400" /> {video.viewsCount || 0} views
@@ -1453,7 +1355,7 @@ export const AdminDashboardView: React.FC = () => {
                       </div>
 
                       {/* Decision Controls */}
-                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-neutral-800/40">
+                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-neutral-800">
                         {video.appealStatus === 'pending' ? (
                           <>
                             <button
@@ -1540,10 +1442,10 @@ export const AdminDashboardView: React.FC = () => {
         )}
 
         {/* =================================================================== */}
-        {/* TAB 5: MODERATION REPORTS */}
+        {/* TAB 5: MODERATION REPORTS                                           */}
         {/* =================================================================== */}
         {activeAdminTab === 'reports' && (
-          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
+          <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
               <div>
                 <h2 className="text-base font-bold text-white font-brand">Community Reports ({filteredReports.length})</h2>
@@ -1561,7 +1463,7 @@ export const AdminDashboardView: React.FC = () => {
                     key={f.id}
                     onClick={() => setReportFilter(f.id as any)}
                     className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
-                      reportFilter === f.id ? 'bg-[#ff007a] text-white' : 'bg-[#181824] text-neutral-400 hover:text-white'
+                      reportFilter === f.id ? 'bg-[#ff007a] text-white' : 'bg-neutral-900 text-neutral-400 hover:text-white'
                     }`}
                   >
                     {f.label}
@@ -1595,7 +1497,7 @@ export const AdminDashboardView: React.FC = () => {
             {/* Reports List */}
             <div className="space-y-3">
               {filteredReports.length === 0 ? (
-                <div className="py-12 text-center text-neutral-500 text-xs bg-[#161622] rounded-xl border border-neutral-800">
+                <div className="py-12 text-center text-neutral-500 text-xs bg-neutral-900/40 rounded-xl border border-neutral-800">
                   <AlertTriangle className="w-8 h-8 text-neutral-600 mx-auto mb-2" />
                   <div>No reports found matching criteria.</div>
                 </div>
@@ -1603,7 +1505,7 @@ export const AdminDashboardView: React.FC = () => {
                 filteredReports.map(report => (
                   <div
                     key={report.id}
-                    className="p-4 rounded-xl bg-[#161622] border border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-4"
+                    className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-4"
                   >
                     <div className="space-y-1 text-xs">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -1676,10 +1578,10 @@ export const AdminDashboardView: React.FC = () => {
         )}
 
         {/* =================================================================== */}
-        {/* TAB 6: ADMIN TEAM */}
+        {/* TAB 6: ADMIN TEAM                                                   */}
         {/* =================================================================== */}
         {activeAdminTab === 'admins' && (
-          <div className="bg-[#12121a] border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
+          <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-5 sm:p-6 space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-neutral-800">
               <div>
                 <h2 className="text-base font-bold text-white font-brand">Administrator Roles & Access</h2>
@@ -1696,7 +1598,7 @@ export const AdminDashboardView: React.FC = () => {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {admins.length === 0 ? (
-                <div className="p-4 rounded-xl bg-[#161622] border border-neutral-800">
+                <div className="p-4 rounded-xl bg-neutral-900 border border-neutral-800">
                   <div className="font-bold text-white text-sm">{currentUser?.displayName || 'Primary Admin'}</div>
                   <div className="text-xs text-neutral-400">{currentUser?.email}</div>
                   <div className="text-[11px] text-purple-300 font-semibold mt-2">Role: Super Admin</div>
@@ -1705,7 +1607,7 @@ export const AdminDashboardView: React.FC = () => {
                 admins.map(adm => (
                   <div
                     key={adm.adminId}
-                    className="p-4 rounded-xl bg-[#161622] border border-neutral-800 flex flex-col justify-between space-y-3"
+                    className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 flex flex-col justify-between space-y-3"
                   >
                     <div>
                       <div className="flex items-start justify-between">
@@ -1737,30 +1639,25 @@ export const AdminDashboardView: React.FC = () => {
             </div>
           </div>
         )}
-      </main>
+      </div>
 
       {/* =================================================================== */}
-      {/* MODAL: ADD AUDIO TRACK (REQUESTED FEATURE) */}
+      {/* MODAL: ADD AUDIO TRACK                                              */}
       {/* =================================================================== */}
       {showAddAudioModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          {/* Modal Audio preview element */}
-          <audio
-            ref={modalAudioRef}
-            onEnded={() => setModalAudioPreviewPlaying(false)}
-            onError={() => setModalAudioPreviewPlaying(false)}
-          />
+          <audio ref={modalAudioRef} />
 
-          <div className="bg-[#14141e] border border-neutral-800 rounded-3xl p-6 w-full max-w-lg space-y-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 w-full max-w-lg space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
               <div className="flex items-center gap-2.5">
                 <div className="p-2 rounded-xl bg-[#ff007a]/15 text-[#ff007a]">
-                  <Music className="w-4 h-4" />
+                  <Music className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-base text-white font-brand">Add New Audio Track</h3>
+                  <h3 className="font-bold text-base text-white font-brand">Add Audio Track</h3>
                   <p className="text-[11px] text-neutral-400">
-                    Publish music or sound effects that all creators can attach to videos
+                    Add music or sounds that creators can select when uploading videos
                   </p>
                 </div>
               </div>
@@ -1769,7 +1666,7 @@ export const AdminDashboardView: React.FC = () => {
                   if (modalAudioRef.current) modalAudioRef.current.pause();
                   setShowAddAudioModal(false);
                 }}
-                className="text-neutral-400 hover:text-white p-1 text-xs"
+                className="text-neutral-400 hover:text-white p-1 text-sm cursor-pointer"
               >
                 ✕
               </button>
@@ -1783,10 +1680,10 @@ export const AdminDashboardView: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. Neon Velocity"
+                    placeholder="e.g. Midnight Beats"
                     value={newAudioTitle}
                     onChange={e => setNewAudioTitle(e.target.value)}
-                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                    className="w-full bg-neutral-950 px-3 py-2 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                   />
                 </div>
                 <div>
@@ -1794,10 +1691,10 @@ export const AdminDashboardView: React.FC = () => {
                   <input
                     type="text"
                     required
-                    placeholder="e.g. ViralHub Studio"
+                    placeholder="e.g. ViralHub Music"
                     value={newAudioArtist}
                     onChange={e => setNewAudioArtist(e.target.value)}
-                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                    className="w-full bg-neutral-950 px-3 py-2 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                   />
                 </div>
               </div>
@@ -1809,7 +1706,7 @@ export const AdminDashboardView: React.FC = () => {
                   <select
                     value={newAudioCategory}
                     onChange={e => setNewAudioCategory(e.target.value)}
-                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                    className="w-full bg-neutral-950 px-3 py-2 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                   >
                     {audioCategories.map(cat => (
                       <option key={cat} value={cat}>
@@ -1825,7 +1722,7 @@ export const AdminDashboardView: React.FC = () => {
                     placeholder="00:30"
                     value={newAudioDuration}
                     onChange={e => setNewAudioDuration(e.target.value)}
-                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a] font-mono"
+                    className="w-full bg-neutral-950 px-3 py-2 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a] font-mono"
                   />
                 </div>
               </div>
@@ -1833,7 +1730,7 @@ export const AdminDashboardView: React.FC = () => {
               {/* Audio Source Selector */}
               <div>
                 <label className="text-neutral-300 font-semibold block mb-1.5">Audio Source</label>
-                <div className="flex items-center gap-1.5 p-1 bg-[#181824] rounded-xl border border-neutral-800 mb-2">
+                <div className="flex items-center gap-1.5 p-1 bg-neutral-950 rounded-xl border border-neutral-800 mb-2">
                   <button
                     type="button"
                     onClick={() => setAudioSourceMode('file')}
@@ -1859,12 +1756,12 @@ export const AdminDashboardView: React.FC = () => {
                       audioSourceMode === 'preset' ? 'bg-[#ff007a] text-white' : 'text-neutral-400'
                     }`}
                   >
-                    Sound Presets
+                    Presets
                   </button>
                 </div>
 
                 {audioSourceMode === 'file' && (
-                  <div className="p-4 rounded-xl border border-dashed border-neutral-700 bg-[#161622] text-center space-y-2">
+                  <div className="p-4 rounded-xl border border-dashed border-neutral-700 bg-neutral-950 text-center space-y-2">
                     <input
                       type="file"
                       id="adminAudioUploadInput"
@@ -1877,7 +1774,7 @@ export const AdminDashboardView: React.FC = () => {
                     />
                     <label
                       htmlFor="adminAudioUploadInput"
-                      className="inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 cursor-pointer font-semibold transition-colors"
+                      className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 cursor-pointer font-semibold transition-colors"
                     >
                       <Upload className="w-4 h-4 text-[#ff007a]" />
                       <span>{selectedAudioFile ? selectedAudioFile.name : 'Select Audio File'}</span>
@@ -1892,7 +1789,7 @@ export const AdminDashboardView: React.FC = () => {
                     placeholder="https://example.com/audio/track.mp3"
                     value={newAudioUrl}
                     onChange={e => setNewAudioUrl(e.target.value)}
-                    className="w-full bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                    className="w-full bg-neutral-950 px-3 py-2 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                   />
                 )}
 
@@ -1931,7 +1828,7 @@ export const AdminDashboardView: React.FC = () => {
                         className={`p-2 rounded-xl border text-left text-xs transition-colors cursor-pointer ${
                           newAudioUrl === preset.url
                             ? 'bg-[#ff007a]/20 border-[#ff007a] text-white'
-                            : 'bg-[#181824] border-neutral-800 text-neutral-300 hover:border-neutral-700'
+                            : 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:border-neutral-700'
                         }`}
                       >
                         <div className="font-bold truncate">{preset.title}</div>
@@ -1967,7 +1864,7 @@ export const AdminDashboardView: React.FC = () => {
                     placeholder="or paste image URL"
                     value={newAudioCoverUrl}
                     onChange={e => setNewAudioCoverUrl(e.target.value)}
-                    className="flex-1 bg-[#181824] px-3 py-2 rounded-xl border border-neutral-700/80 text-white outline-none focus:border-[#ff007a]"
+                    className="flex-1 bg-neutral-950 px-3 py-2 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                   />
                 </div>
               </div>
@@ -1984,10 +1881,10 @@ export const AdminDashboardView: React.FC = () => {
                 <button
                   type="submit"
                   disabled={isUploadingAudio}
-                  className="px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                  className="px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#e0006c] text-white font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
                 >
                   {isUploadingAudio && <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
-                  <span>Publish to Audio Library</span>
+                  <span>Save Audio Track</span>
                 </button>
               </div>
             </form>
@@ -1998,7 +1895,7 @@ export const AdminDashboardView: React.FC = () => {
       {/* Video Rejection Modal */}
       {rejectingVideoId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="relative w-full max-w-md bg-[#14141e] border border-neutral-800 rounded-3xl p-6 text-left space-y-4">
+          <div className="relative w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-2xl p-6 text-left space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-base font-bold text-white font-brand flex items-center gap-2">
                 <XCircle className="w-5 h-5 text-red-400" />
@@ -2006,7 +1903,7 @@ export const AdminDashboardView: React.FC = () => {
               </h3>
               <button
                 onClick={() => setRejectingVideoId(null)}
-                className="text-neutral-400 hover:text-white p-1 text-xs"
+                className="text-neutral-400 hover:text-white p-1 text-xs cursor-pointer"
               >
                 ✕
               </button>
@@ -2033,7 +1930,7 @@ export const AdminDashboardView: React.FC = () => {
                   className={`w-full text-left p-2 rounded-xl text-xs transition-colors cursor-pointer border ${
                     rejectReason === r
                       ? 'bg-red-500/15 border-red-500/40 text-red-300 font-semibold'
-                      : 'bg-[#181824] border-neutral-800 text-neutral-300 hover:bg-[#202030]'
+                      : 'bg-neutral-950 border-neutral-800 text-neutral-300 hover:bg-neutral-800'
                   }`}
                 >
                   {r}
@@ -2066,19 +1963,19 @@ export const AdminDashboardView: React.FC = () => {
       {/* Ban User Modal */}
       {banningUser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-[#14141e] border border-red-500/30 rounded-3xl p-6 w-full max-w-md space-y-4">
+          <div className="bg-neutral-900 border border-red-500/30 rounded-2xl p-6 w-full max-w-md space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-base text-white font-brand flex items-center gap-2">
                 <Ban className="w-4 h-4 text-red-400" />
                 <span>Ban Account: @{banningUser.username}</span>
               </h3>
-              <button onClick={() => setBanningUser(null)} className="text-neutral-400 hover:text-white">
+              <button onClick={() => setBanningUser(null)} className="text-neutral-400 hover:text-white cursor-pointer">
                 ✕
               </button>
             </div>
 
             <p className="text-xs text-neutral-300 leading-relaxed">
-              Banning this user immediately suspends access, hides their content, and displays the ban reason with appeal instructions.
+              Banning this user suspends their access, hides their content, and sends guidelines violation details.
             </p>
 
             <div className="space-y-2 text-xs">
@@ -2086,7 +1983,7 @@ export const AdminDashboardView: React.FC = () => {
                 value={banCustomReason}
                 onChange={e => setBanCustomReason(e.target.value)}
                 rows={2}
-                className="w-full bg-[#181824] p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-red-500 text-xs resize-none"
+                className="w-full bg-neutral-950 p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-red-500 text-xs resize-none"
                 placeholder="Enter specific ban reason..."
               />
             </div>
@@ -2119,13 +2016,13 @@ export const AdminDashboardView: React.FC = () => {
       {/* Add Admin Modal */}
       {showAddAdminModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-[#14141e] border border-neutral-800 rounded-3xl p-6 w-full max-w-md space-y-4">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-6 w-full max-w-md space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-base text-white font-brand flex items-center gap-2">
                 <Shield className="w-4 h-4 text-[#ff007a]" />
                 <span>Add Administrator</span>
               </h3>
-              <button onClick={() => setShowAddAdminModal(false)} className="text-neutral-400 hover:text-white">
+              <button onClick={() => setShowAddAdminModal(false)} className="text-neutral-400 hover:text-white cursor-pointer">
                 ✕
               </button>
             </div>
@@ -2139,7 +2036,7 @@ export const AdminDashboardView: React.FC = () => {
                   placeholder="e.g. admin_alex"
                   value={newAdminUser}
                   onChange={e => setNewAdminUser(e.target.value)}
-                  className="w-full bg-[#181824] px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
+                  className="w-full bg-neutral-950 px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                 />
               </div>
 
@@ -2151,7 +2048,7 @@ export const AdminDashboardView: React.FC = () => {
                   placeholder="e.g. alex@viralhub.app"
                   value={newAdminEmail}
                   onChange={e => setNewAdminEmail(e.target.value)}
-                  className="w-full bg-[#181824] px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
+                  className="w-full bg-neutral-950 px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                 />
               </div>
 
@@ -2160,7 +2057,7 @@ export const AdminDashboardView: React.FC = () => {
                 <select
                   value={newAdminRole}
                   onChange={e => setNewAdminRole(e.target.value as any)}
-                  className="w-full bg-[#181824] px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
+                  className="w-full bg-neutral-950 px-3.5 py-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-[#ff007a]"
                 >
                   <option value="Super Admin">Super Admin</option>
                   <option value="Admin">Admin</option>
@@ -2172,13 +2069,13 @@ export const AdminDashboardView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowAddAdminModal(false)}
-                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold"
+                  className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold"
+                  className="px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#e0006c] text-white text-xs font-bold cursor-pointer"
                 >
                   Save Admin
                 </button>
