@@ -192,14 +192,30 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
             </span>
           </div>
 
-          {/* Optional Message Input */}
-          <input
-            type="text"
-            placeholder="Add an optional message..."
-            value={personalNote}
-            onChange={e => setPersonalNote(e.target.value)}
-            className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 px-3.5 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
-          />
+          {/* Optional Message Input (200 characters limit) */}
+          <div className="relative">
+            <input
+              type="text"
+              maxLength={200}
+              placeholder="Add an optional message..."
+              value={personalNote}
+              onChange={e => setPersonalNote(e.target.value.slice(0, 200))}
+              className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 pl-3.5 pr-14 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none"
+            />
+            {personalNote.length > 0 && (
+              <span
+                className={`absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono pointer-events-none transition-colors ${
+                  personalNote.length >= 200
+                    ? 'text-red-400 font-bold'
+                    : personalNote.length >= 180
+                    ? 'text-amber-400 font-medium'
+                    : 'text-neutral-500'
+                }`}
+              >
+                {personalNote.length}/200
+              </span>
+            )}
+          </div>
 
           {/* Search bar */}
           <div className="relative flex items-center">

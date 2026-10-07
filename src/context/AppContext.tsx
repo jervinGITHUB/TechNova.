@@ -56,7 +56,7 @@ import {
   markAccountLoggedOutOnDevice,
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
-import { toTimestampMillis } from '../utils/time';
+import { toTimestampMillis, getConversationLastActivityTime, formatConversationTime, formatMessageTime } from '../utils/time';
 import { liveBroadcastService } from '../services/liveBroadcastService';
 
 /**
@@ -252,7 +252,8 @@ export const deduplicateConversations = (
     }
   }
 
-  return Array.from(partnerMap.values());
+  const list = Array.from(partnerMap.values());
+  return list.sort((a, b) => getConversationLastActivityTime(b) - getConversationLastActivityTime(a));
 };
 
 export const getConversationClearedTimestamp = (convId: string, userId?: string | null): number => {
@@ -2307,14 +2308,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               const convId = payload.conversationId;
               const senderId = payload.senderId;
-              const nowTimeStr = 'Today, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
               const incomingMsg: Message = {
                 id: payload.messageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
                 conversationId: convId,
                 senderId: senderId,
                 text: payload.text,
-                timestamp: payload.timestamp || nowTimeStr,
+                timestamp: 'Just now',
                 sentAt: payload.sentAt || new Date().toISOString(),
                 isMine: false,
                 status: 'read',
@@ -2324,79 +2323,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               };
 
               setConversations(prev => {
-                let matched = false;
-                const updated = prev.map(c => {
-                  const isThisConv =
-                    c.id === convId ||
-                    toUuid(c.id) === toUuid(convId) ||
-                    (c.participantIds && c.participantIds.some(id => isSameUser(id, senderId))) ||
-                    (c.participant && isSameUser(c.participant.id, senderId));
+                const matchedConv = prev.find(c =>
+                  c.id === convId ||
+                  toUuid(c.id) === toUuid(convId) ||
+                  (c.participantIds && c.participantIds.some(id => isSameUser(id, senderId))) ||
+                  (c.participant && isSameUser(c.participant.id, senderId))
+                );
+                const others = prev.filter(c => c !== matchedConv);
 
-                  if (isThisConv) {
-                    matched = true;
-                    const inVidId = incomingMsg.sharedVideoId || incomingMsg.sharedVideo?.id;
-                    const exists = c.messages.some(
-                      m =>
-                        m.id === incomingMsg.id ||
-                        toUuid(m.id) === toUuid(incomingMsg.id) ||
-                        (inVidId && (m.sharedVideoId || m.sharedVideo?.id) === inVidId && isSameUser(m.senderId, incomingMsg.senderId)) ||
-                        (m.text.trim() === incomingMsg.text.trim() && isSameUser(m.senderId, incomingMsg.senderId))
-                    );
-                    const newMessages = exists ? c.messages : deduplicateMessages([...c.messages, incomingMsg]);
-                    const curUnread = c.unreadCounts?.[currentUser.id] || 0;
+                if (matchedConv) {
+                  const inVidId = incomingMsg.sharedVideoId || incomingMsg.sharedVideo?.id;
+                  const exists = matchedConv.messages.some(
+                    (m: Message) =>
+                      m.id === incomingMsg.id ||
+                      toUuid(m.id) === toUuid(incomingMsg.id) ||
+                      (inVidId && (m.sharedVideoId || m.sharedVideo?.id) === inVidId && isSameUser(m.senderId, incomingMsg.senderId)) ||
+                      (m.text.trim() === incomingMsg.text.trim() && isSameUser(m.senderId, incomingMsg.senderId))
+                  );
+                  const newMessages = exists ? matchedConv.messages : deduplicateMessages([...matchedConv.messages, incomingMsg]);
+                  const curUnread = matchedConv.unreadCounts?.[currentUser.id] || 0;
 
-                    return {
-                      ...c,
-                      lastMessage: payload.text,
-                      lastMessageTime: incomingMsg.timestamp,
-                      messages: newMessages,
-                      // Automatically unhide conversation for recipient!
-                      deletedForUserIds: (c.deletedForUserIds || []).filter(id => !isSameUser(id, currentUser.id)),
-                      unreadCounts: {
-                        ...(c.unreadCounts || {}),
-                        [currentUser.id]: curUnread + 1,
-                      },
-                      unreadCount: curUnread + 1,
-                    };
-                  }
-                  return c;
-                });
-
-                if (!matched) {
-                  const senderUser = users.find(u => isSameUser(u.id, senderId)) || payload.sender || {
-                    id: senderId,
-                    username: `user_${String(senderId).slice(0, 6)}`,
-                    displayName: 'User',
-                    avatar: '',
-                    email: '',
-                    bio: '',
-                    followingCount: 0,
-                    followersCount: 0,
-                    likesCount: '0',
-                    isPrivate: false,
-                    role: 'creator',
-                  };
-
-                  const newConv: Conversation = {
-                    id: convId,
-                    participantIds: [currentUser.id, senderId],
-                    participant: senderUser,
+                  const updatedConv: Conversation = {
+                    ...matchedConv,
                     lastMessage: payload.text,
-                    lastMessageTime: incomingMsg.timestamp,
-                    unreadCount: 1,
-                    unreadCounts: { [currentUser.id]: 1, [senderId]: 0 },
-                    messages: [incomingMsg],
-                    isOnline: true,
-                    deletedForUserIds: [],
+                    lastMessageTime: 'Just now',
+                    messages: newMessages,
+                    // Automatically unhide conversation for recipient!
+                    deletedForUserIds: (matchedConv.deletedForUserIds || []).filter((id: string) => !isSameUser(id, currentUser.id)),
+                    unreadCounts: {
+                      ...(matchedConv.unreadCounts || {}),
+                      [currentUser.id]: curUnread + 1,
+                    },
+                    unreadCount: curUnread + 1,
                   };
-                  const next = deduplicateConversations([newConv, ...updated], currentUser.id);
+
+                  const next = deduplicateConversations([updatedConv, ...others], currentUser.id);
                   storage.set('conversations', next);
                   return next;
                 }
 
-                const deduped = deduplicateConversations(updated, currentUser.id);
-                storage.set('conversations', deduped);
-                return deduped;
+                const senderUser = users.find(u => isSameUser(u.id, senderId)) || payload.sender || {
+                  id: senderId,
+                  username: `user_${String(senderId).slice(0, 6)}`,
+                  displayName: 'User',
+                  avatar: '',
+                  email: '',
+                  bio: '',
+                  followingCount: 0,
+                  followersCount: 0,
+                  likesCount: '0',
+                  isPrivate: false,
+                  role: 'creator',
+                };
+
+                const newConv: Conversation = {
+                  id: convId,
+                  participantIds: [currentUser.id, senderId],
+                  participant: senderUser,
+                  lastMessage: payload.text,
+                  lastMessageTime: 'Just now',
+                  unreadCount: 1,
+                  unreadCounts: { [currentUser.id]: 1, [senderId]: 0 },
+                  messages: [incomingMsg],
+                  isOnline: true,
+                  deletedForUserIds: [],
+                };
+                const next = deduplicateConversations([newConv, ...others], currentUser.id);
+                storage.set('conversations', next);
+                return next;
               });
 
               // Trigger in-app notification popup for new message only if user is not currently viewing this conversation
@@ -4391,26 +4385,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (existing) {
       if (existing.deletedForUserIds?.some(id => isSameUser(id, currentUser.id))) {
         setConversations(prev => {
-          const next = prev.map(c => {
-            if (c.id === existing.id || toUuid(c.id) === toUuid(existing.id)) {
-              // Mark all prior messages as deleted for currentUser so past messages never show up
-              const updatedMessages = (c.messages || []).map(m => {
-                const mDeleted = m.deletedForUserIds || [];
-                return mDeleted.some(id => isSameUser(id, currentUser.id))
-                  ? m
-                  : { ...m, deletedForUserIds: [...mDeleted, currentUser.id] };
-              });
-
-              return {
-                ...c,
-                deletedForUserIds: (c.deletedForUserIds || []).filter(id => !isSameUser(id, currentUser.id)),
-                messages: updatedMessages,
-                lastMessage: 'Started a new conversation',
-                lastMessageTime: 'Just now',
-              };
-            }
-            return c;
+          const others = prev.filter(c => !(c.id === existing.id || toUuid(c.id) === toUuid(existing.id)));
+          const updatedMessages = (existing.messages || []).map(m => {
+            const mDeleted = m.deletedForUserIds || [];
+            return mDeleted.some(id => isSameUser(id, currentUser.id))
+              ? m
+              : { ...m, deletedForUserIds: [...mDeleted, currentUser.id] };
           });
+
+          const unhiddenConv: Conversation = {
+            ...existing,
+            deletedForUserIds: (existing.deletedForUserIds || []).filter(id => !isSameUser(id, currentUser.id)),
+            messages: updatedMessages,
+            lastMessage: 'Started a new conversation',
+            lastMessageTime: 'Just now',
+          };
+          const next = deduplicateConversations([unhiddenConv, ...others], currentUser.id);
+          storage.set('conversations', next);
+          return next;
+        });
+      } else {
+        // Move this existing conversation to the top when selected/opened
+        setConversations(prev => {
+          const others = prev.filter(c => !(c.id === existing.id || toUuid(c.id) === toUuid(existing.id)));
+          const next = deduplicateConversations([existing, ...others], currentUser.id);
           storage.set('conversations', next);
           return next;
         });
@@ -4457,7 +4455,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sharedVideo?: Video
   ) => {
     if (!currentUser && !sharedVideo) return;
-    if (!text.trim() && !sharedVideo) return;
+    const cleanText = text.trim().slice(0, 200);
+    if (!cleanText && !sharedVideo) return;
 
     const conv = conversations.find(c => c.id === convId || toUuid(c.id) === toUuid(convId));
     const recipientId =
@@ -4476,13 +4475,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : convId;
 
     const nowIso = new Date().toISOString();
-    const displayText = text.trim() || (sharedVideo ? `Shared a video: "${sharedVideo.caption}"` : '');
+    const displayText = cleanText || (sharedVideo ? `Shared a video: "${sharedVideo.caption}"` : '');
     const newMsg: Message = {
       id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       conversationId: canonicalConvId,
       senderId: currentUser ? currentUser.id : 'unknown',
       text: displayText,
-      timestamp: 'Today, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: 'Just now',
       sentAt: nowIso,
       isMine: true,
       status: 'sent',
@@ -4493,28 +4492,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setConversations(prev => {
-      const updated = prev.map(c => {
-        if (c.id === convId || toUuid(c.id) === toUuid(convId) || c.id === canonicalConvId) {
-          const currentRecipientUnread = c.unreadCounts?.[recipientId] || 0;
-          return {
-            ...c,
-            id: canonicalConvId,
-            lastMessage: sharedVideo ? `🎥 Shared a video: "${sharedVideo.caption.slice(0, 25)}"` : text.trim(),
-            lastMessageTime: 'Today, ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            messages: deduplicateMessages([...c.messages, newMsg]),
-            deletedForUserIds: (c.deletedForUserIds || []).filter(
-              id => !isSameUser(id, currentUser?.id) && !isSameUser(id, recipientId)
-            ),
-            unreadCounts: {
-              ...(c.unreadCounts || {}),
-              [currentUser ? currentUser.id : 'me']: 0,
-              [recipientId]: currentRecipientUnread + 1,
-            },
-          };
-        }
-        return c;
-      });
-      const deduped = deduplicateConversations(updated, currentUser?.id);
+      const targetConv = prev.find(c =>
+        c.id === convId || toUuid(c.id) === toUuid(convId) || c.id === canonicalConvId
+      );
+      const others = prev.filter(c => c !== targetConv);
+
+      const currentRecipientUnread = targetConv?.unreadCounts?.[recipientId] || 0;
+      const updatedConv: Conversation = {
+        ...(targetConv || {
+          id: canonicalConvId,
+          participantIds: [currentUser ? currentUser.id : '', recipientId],
+          participant: recipientUser || {
+            id: recipientId,
+            username: 'user',
+            displayName: 'User',
+            email: '',
+            avatar: '',
+            bio: '',
+            followingCount: 0,
+            followersCount: 0,
+            likesCount: '0',
+            isPrivate: false,
+            role: 'creator' as const,
+          },
+          unreadCount: 0,
+          messages: [],
+        }),
+        id: canonicalConvId,
+        lastMessage: sharedVideo ? `🎥 Shared a video: "${sharedVideo.caption.slice(0, 25)}"` : cleanText,
+        lastMessageTime: 'Just now',
+        messages: deduplicateMessages([...(targetConv ? targetConv.messages : []), newMsg]),
+        deletedForUserIds: ((targetConv && targetConv.deletedForUserIds) ? targetConv.deletedForUserIds : []).filter(
+          (id: string) => !isSameUser(id, currentUser?.id) && !isSameUser(id, recipientId)
+        ),
+        unreadCounts: {
+          ...(targetConv ? targetConv.unreadCounts : {}),
+          [currentUser ? currentUser.id : 'me']: 0,
+          [recipientId]: currentRecipientUnread + 1,
+        },
+      };
+
+      // Put the updated conversation at the top, and sort
+      const combined = [updatedConv, ...others];
+      const deduped = deduplicateConversations(combined, currentUser?.id);
       storage.set('conversations', deduped);
       return deduped;
     });
@@ -4524,8 +4544,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const remotePayload = sharedVideo
-      ? `[VIDEO_SHARE:${sharedVideo.id}] ${text.trim()}`
-      : text.trim();
+      ? `[VIDEO_SHARE:${sharedVideo.id}] ${cleanText}`
+      : cleanText;
 
     if (currentUser) {
       supabaseDb.insertMessage(canonicalConvId, currentUser.id, recipientId, remotePayload);

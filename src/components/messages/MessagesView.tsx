@@ -1,10 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp, deduplicateConversations, getConversationClearedTimestamp, deduplicateMessages } from '../../context/AppContext';
 import { Conversation, User, MessageReplyInfo, Message, Video } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { MessageVideoCard } from './MessageVideoCard';
 import { toUuid, isSameUser, checkIsUserBanned } from '../../lib/supabase';
-import { toTimestampMillis } from '../../utils/time';
+import { toTimestampMillis, getConversationLastActivityTime, formatConversationTime, formatMessageTime } from '../../utils/time';
 import {
   Search,
   Send,
@@ -185,7 +185,14 @@ export const MessagesView: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<MessageReplyInfo | null>(null);
   const [newChatModalOpen, setNewChatModalOpen] = useState(false);
 
-  // Filter and deduplicate conversations specifically for currentUser
+  // Live 30-second interval ticker for live relative timestamps ("Just now" -> "1m ago" -> "1h ago")
+  const [, setTimeTick] = useState<number>(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setTimeTick(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Filter and deduplicate conversations specifically for currentUser (sorted latest activity first!)
   const accountConversations = useMemo(() => {
     if (!currentUser) return [];
     const valid = conversations.filter(conv => {
@@ -222,7 +229,10 @@ export const MessagesView: React.FC = () => {
       return true;
     });
 
-    return deduplicateConversations(valid, currentUser.id);
+    const deduped = deduplicateConversations(valid, currentUser.id);
+    return deduped.sort(
+      (a, b) => getConversationLastActivityTime(b) - getConversationLastActivityTime(a)
+    );
   }, [conversations, currentUser]);
 
   // Determine the other participant in a conversation based on currentUser
@@ -287,8 +297,9 @@ export const MessagesView: React.FC = () => {
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || !activeConv) return;
-    sendMessage(activeConv.id, inputText.trim(), replyingTo || undefined);
+    const clean = inputText.trim().slice(0, 200);
+    if (!clean || !activeConv) return;
+    sendMessage(activeConv.id, clean, replyingTo || undefined);
     setInputText('');
     setReplyingTo(null);
   };
@@ -464,7 +475,9 @@ export const MessagesView: React.FC = () => {
               const displayLastMessage = lastVisible
                 ? (lastVisible.sharedVideo ? `🎥 Shared a video` : lastVisible.text)
                 : 'Started a new conversation';
-              const displayLastTime = lastVisible ? lastVisible.timestamp : conv.lastMessageTime;
+              const lastTimeRaw = lastVisible?.sentAt || lastVisible?.timestamp || conv.lastMessageTime;
+              const displayLastTime = formatConversationTime(lastTimeRaw);
+              const convTimeTooltip = lastTimeRaw ? (new Date(toTimestampMillis(lastTimeRaw)).toLocaleString() || undefined) : undefined;
 
               return (
                 <div
@@ -501,7 +514,7 @@ export const MessagesView: React.FC = () => {
 
                   {/* Right side: Timestamp, Unread Badge, and Delete Conversation */}
                   <div className="flex flex-col items-end shrink-0 ml-2">
-                    <div className="text-[10px] text-neutral-500 font-medium">
+                    <div className="text-[10px] text-neutral-500 font-medium" title={convTimeTooltip}>
                       {displayLastTime}
                     </div>
 
@@ -815,9 +828,16 @@ export const MessagesView: React.FC = () => {
                           isMe ? 'flex-row' : 'flex-row'
                         }`}
                       >
-                        <span className="text-[10px] text-neutral-500">
-                          {msg.timestamp}
-                        </span>
+                        {(() => {
+                          const msgTimeRaw = msg.sentAt || msg.timestamp;
+                          const formattedMsgTime = formatMessageTime(msgTimeRaw);
+                          const msgTooltip = msgTimeRaw ? (new Date(toTimestampMillis(msgTimeRaw)).toLocaleString() || undefined) : undefined;
+                          return (
+                            <span className="text-[10px] text-neutral-500" title={msgTooltip}>
+                              {formattedMsgTime}
+                            </span>
+                          );
+                        })()}
                         {isMe && <CheckCheck className="w-3 h-3 text-pink-400" />}
 
                         {/* Reply and Delete Buttons on every message */}
@@ -891,6 +911,7 @@ export const MessagesView: React.FC = () => {
               <div className="flex items-center gap-2 bg-[#181824] rounded-2xl px-4 py-2.5 border border-neutral-700/80 focus-within:border-[#ff007a] transition-all">
                 <input
                   type="text"
+                  maxLength={200}
                   disabled={Boolean(activeParticipant && !canMessageUser(activeParticipant.id))}
                   placeholder={
                     activeParticipant && !canMessageUser(activeParticipant.id)
@@ -900,9 +921,20 @@ export const MessagesView: React.FC = () => {
                       : `Message ${activeParticipant.displayName}...`
                   }
                   value={inputText}
-                  onChange={e => setInputText(e.target.value)}
+                  onChange={e => setInputText(e.target.value.slice(0, 200))}
                   className="flex-1 bg-transparent text-xs sm:text-sm text-white placeholder-neutral-500 outline-none disabled:cursor-not-allowed"
                 />
+                <span
+                  className={`text-[10px] font-mono select-none shrink-0 transition-colors ${
+                    inputText.length >= 200
+                      ? 'text-red-400 font-bold'
+                      : inputText.length >= 180
+                      ? 'text-amber-400 font-medium'
+                      : 'text-neutral-500'
+                  }`}
+                >
+                  {inputText.length}/200
+                </span>
                 <button
                   type="submit"
                   disabled={!inputText.trim() || Boolean(activeParticipant && !canMessageUser(activeParticipant.id))}
