@@ -17,7 +17,6 @@ import {
   ArrowRightLeft,
   Shield,
   ShieldAlert,
-  Database,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -37,7 +36,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
     logout,
     navigateToUserProfile,
     setSwitchAccountModalOpen,
-    setSupabaseModalOpen,
     refreshFeed,
     loginWithGoogle,
     setAuthView,
@@ -224,18 +222,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
                   >
                     <ShieldAlert className="w-4 h-4 text-amber-400" />
                     <span>Report History</span>
-                  </button>
-
-                  <button
-                    onClick={() => {
-                      setProfileMenuOpen(false);
-                      setSupabaseModalOpen(true);
-                      onNavigate?.();
-                    }}
-                    className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-emerald-400 hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
-                  >
-                    <Database className="w-4 h-4 text-emerald-400" />
-                    <span>Supabase Connection</span>
                   </button>
 
                   <div className="h-px bg-neutral-800 my-1" />
