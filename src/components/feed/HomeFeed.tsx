@@ -5,6 +5,7 @@ import { isSameUser, checkIsUserBanned } from '../../lib/supabase';
 import { formatRealtimeAgo } from '../../utils/time';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { AudienceSettingsModal } from '../modals/AudienceSettingsModal';
+import { VideoCaptionWithTags } from './VideoCaptionWithTags';
 import { Avatar } from '../common/Avatar';
 import {
   Heart,
@@ -60,7 +61,6 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   const [videoSrc, setVideoSrc] = useState(video.mediaUrl);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [isCaptionExpanded, setIsCaptionExpanded] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -581,64 +581,14 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           )}
         </button>
 
-        {/* Caption with "see more.." for expanded 250 characters */}
-        {video.caption && (
-          <div className="mt-1">
-            <p className="text-xs sm:text-sm text-neutral-100 leading-snug drop-shadow-md">
-              {video.caption.length > 75 && !isCaptionExpanded ? (
-                <>
-                  <span>{video.caption.slice(0, 75)}...</span>
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation();
-                      setIsCaptionExpanded(true);
-                    }}
-                    className="text-neutral-300 hover:text-white font-bold ml-1 cursor-pointer underline text-xs"
-                  >
-                    see more..
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span>{video.caption}</span>
-                  {video.caption.length > 75 && (
-                    <button
-                      type="button"
-                      onClick={e => {
-                        e.stopPropagation();
-                        setIsCaptionExpanded(false);
-                      }}
-                      className="text-neutral-400 hover:text-white font-semibold ml-1 cursor-pointer text-xs"
-                    >
-                      see less
-                    </button>
-                  )}
-                </>
-              )}
-            </p>
-          </div>
-        )}
+        {/* Unified Caption & Hashtags with TikTok-style "... more" and "less" */}
+        <VideoCaptionWithTags
+          caption={video.caption}
+          hashtags={video.hashtags}
+          maxChars={60}
+        />
 
-        {/* Hashtags */}
-        {video.hashtags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
-            {video.hashtags.map((tag, idx) => (
-              <button
-                key={idx}
-                onClick={() => {
-                  setSearchQuery(tag);
-                  setActiveTab('explore');
-                }}
-                className="text-xs font-semibold text-[#ff007a] hover:underline cursor-pointer drop-shadow"
-              >
-                {tag}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Timestamp: how long ago video was posted (placed below hashtags) */}
+        {/* Timestamp: how long ago video was posted */}
         {video.createdAt && (
           <div className="flex items-center gap-1.5 text-[11px] text-neutral-300 font-medium mt-1 drop-shadow">
             <Clock className="w-3 h-3 text-neutral-400 shrink-0" />

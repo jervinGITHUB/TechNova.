@@ -3,6 +3,7 @@ import { useApp } from '../../context/AppContext';
 import { Video } from '../../types';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { AudienceSettingsModal } from '../modals/AudienceSettingsModal';
+import { VideoCaptionWithTags } from '../feed/VideoCaptionWithTags';
 import { Avatar } from '../common/Avatar';
 import { DEFAULT_USER } from '../../services/storage';
 import {
@@ -1228,9 +1229,11 @@ export const ProfileView: React.FC = () => {
               <div className="text-sm font-bold text-white">
                 @{selectedVideoModal.creator.username}
               </div>
-              <p className="text-xs text-neutral-200 mt-1 line-clamp-2">
-                {selectedVideoModal.caption}
-              </p>
+              <VideoCaptionWithTags
+                caption={selectedVideoModal.caption}
+                hashtags={selectedVideoModal.hashtags}
+                maxChars={60}
+              />
             </div>
           </div>
         </div>
