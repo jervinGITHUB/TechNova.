@@ -51,6 +51,7 @@ import {
   Gamepad2,
   Check,
   Move,
+  UserPlus,
 } from 'lucide-react';
 
 interface LiveStreamHostStudioProps {
@@ -79,6 +80,8 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     }
   }, [initialMode]);
 
+  const [broadcastViewersCount, setBroadcastViewersCount] = useState<number>(0);
+
   useEffect(() => {
     const unsub = liveBroadcastService.subscribe(bState => {
       if (bState.cameraStream !== cameraRealStream) {
@@ -92,6 +95,9 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
       }
       if (bState.gameSource !== gameSource) {
         setGameSource(bState.gameSource);
+      }
+      if (bState.viewersCount !== undefined) {
+        setBroadcastViewersCount(bState.viewersCount);
       }
     });
     return unsub;
@@ -574,29 +580,72 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
 
   const handleProceedToGoLive = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    const isMobile = isMobileViewport;
+    const finalAspectRatio = isMobile ? '9:16' : canvasAspectRatio;
+
     liveBroadcastService.updateStudioConfig({
       title: streamTitle,
       topic: streamTopic,
       aboutMe: streamAbout,
-      aspectRatio: canvasAspectRatio,
-      cameraTransform,
-      screenTransform,
-      goalConfig: goalWidgetConfig,
-      cameraEnabled,
+      aspectRatio: finalAspectRatio,
+      isMobileStream: isMobile,
+      cameraTransform: isMobile
+        ? {
+            id: 'camera',
+            name: 'Device Camera',
+            type: 'camera',
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            zIndex: 10,
+            visible: true,
+            locked: true,
+            mirrored: mobileFacingMode === 'user',
+            borderRadius: 0,
+            borderStyle: 'none',
+            opacity: 1,
+          }
+        : cameraTransform,
+      screenTransform: isMobile
+        ? {
+            ...screenTransform,
+            visible: false,
+          }
+        : screenTransform,
+      goalConfig: isMobile
+        ? {
+            ...goalWidgetConfig,
+            enabled: false,
+          }
+        : goalWidgetConfig,
+      cameraEnabled: true,
       micEnabled: micActive,
-      screenShareEnabled: true,
+      screenShareEnabled: !isMobile,
     });
     if (cameraRealStream) {
       liveBroadcastService.setCameraStream(cameraRealStream, cameraSource);
+    } else if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({
+        video: { facingMode: isMobile ? mobileFacingMode : 'user' },
+        audio: micActive,
+      }).then(stream => {
+        setCameraRealStream(stream);
+        setCameraSource('webcam');
+        liveBroadcastService.setCameraStream(stream, 'webcam');
+      }).catch(() => {});
     }
-    if (gameCustomStream) {
+    if (gameCustomStream && !isMobile) {
       liveBroadcastService.setScreenStream(gameCustomStream, gameSource);
     }
     const streamId = generateUuid();
     if (currentUser) {
       liveBroadcastService.startBroadcasting(streamId, currentUser);
     }
-    startHostLiveStream(streamTitle, streamTopic, streamAbout, streamId);
+    startHostLiveStream(streamTitle, streamTopic, streamAbout, streamId, {
+      aspectRatio: finalAspectRatio,
+      isMobileStream: isMobile,
+    });
     setMode('active');
   };
 
@@ -1447,7 +1496,13 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         <div className="absolute inset-0 z-0 bg-neutral-900 overflow-hidden">
           {cameraSource === 'webcam' && cameraRealStream ? (
             <video
-              ref={mobileVideoRef}
+              ref={el => {
+                mobileVideoRef.current = el;
+                if (el && cameraRealStream && el.srcObject !== cameraRealStream) {
+                  el.srcObject = cameraRealStream;
+                  el.play().catch(() => {});
+                }
+              }}
               autoPlay
               playsInline
               muted
@@ -1827,7 +1882,13 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         <div className="absolute inset-0 z-0 bg-neutral-950 overflow-hidden">
           {cameraSource === 'webcam' && cameraRealStream ? (
             <video
-              ref={mobileVideoRef}
+              ref={el => {
+                mobileVideoRef.current = el;
+                if (el && cameraRealStream && el.srcObject !== cameraRealStream) {
+                  el.srcObject = cameraRealStream;
+                  el.play().catch(() => {});
+                }
+              }}
               autoPlay
               playsInline
               muted
@@ -1906,7 +1967,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1.5 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 text-white text-xs font-bold">
               <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse" />
-              <span>{currentLiveStream.viewers.length}</span>
+              <span>{Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, broadcastViewersCount)}</span>
             </div>
 
             {/* End Button */}
@@ -1935,8 +1996,38 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         {/* Floating Semi-Transparent Live Comments Stream */}
         <div className="relative z-20 px-3 pb-2 flex flex-col justify-end min-h-0 flex-1">
           <div className="max-h-56 overflow-y-auto space-y-1.5 pr-2 max-w-[85%] text-left pointer-events-auto scrollbar-none">
-            {currentLiveStream.messages.slice(-12).map(msg => {
+            {currentLiveStream.messages.slice(-16).map(msg => {
               if (msg.isSystemEvent) {
+                if (msg.isLikeEvent) {
+                  return (
+                    <div
+                      key={msg.id}
+                      className="bg-black/55 backdrop-blur-md text-[11px] text-[#ff007a] font-semibold px-2.5 py-1 rounded-xl w-fit shadow-md flex items-center gap-1.5 border border-pink-500/20"
+                    >
+                      <Heart className="w-3 h-3 text-[#ff007a] fill-[#ff007a] shrink-0" />
+                      <span>
+                        <span className="font-bold text-white">@{msg.username || msg.displayName} </span>
+                        liked your stream
+                      </span>
+                    </div>
+                  );
+                }
+
+                if (msg.isJoinEvent) {
+                  return (
+                    <div
+                      key={msg.id}
+                      className="bg-black/55 backdrop-blur-md text-[11px] text-cyan-300 font-semibold px-2.5 py-1 rounded-xl w-fit shadow-md flex items-center gap-1.5 border border-cyan-500/20"
+                    >
+                      <UserPlus className="w-3 h-3 text-cyan-400 shrink-0" />
+                      <span>
+                        <span className="font-bold text-white">@{msg.username || msg.displayName} </span>
+                        joined
+                      </span>
+                    </div>
+                  );
+                }
+
                 return (
                   <div
                     key={msg.id}
@@ -1944,7 +2035,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   >
                     <Sparkles className="w-3 h-3 text-[#ff007a] shrink-0" />
                     <span>
-                      <span className="font-bold text-white">{msg.displayName} </span>
+                      <span className="font-bold text-white">@{msg.username || msg.displayName} </span>
                       {msg.text}
                     </span>
                   </div>
@@ -2294,7 +2385,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 className={`w-full relative transition-all duration-300 ${
                   canvasAspectRatio === '16:9'
                     ? 'aspect-video max-h-[460px]'
-                    : 'aspect-[9/15] sm:aspect-[9/14] max-h-[580px]'
+                    : 'aspect-[9/16] max-h-[620px]'
                 }`}
               >
                 <LiveStreamCanvas
@@ -2717,7 +2808,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           {/* Viewers Counter Badge */}
           <div className="flex items-center gap-1.5 bg-[#181824] px-3 py-1.5 rounded-xl border border-neutral-800 font-bold text-white text-xs">
             <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse" />
-            <span>{currentLiveStream.viewers.length} Viewers</span>
+            <span>{Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, broadcastViewersCount)} Viewers</span>
           </div>
 
           {/* End Live Button */}
@@ -2757,7 +2848,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               className={`w-full relative transition-all duration-300 my-auto ${
                 canvasAspectRatio === '16:9'
                   ? 'aspect-video max-h-[480px]'
-                  : 'aspect-[9/15] sm:aspect-[9/14] max-h-[580px]'
+                  : 'aspect-[9/16] max-h-[620px]'
               }`}
             >
               <LiveStreamCanvas
@@ -2859,7 +2950,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                 }`}
               >
                 <Users className="w-3.5 h-3.5" />
-                <span>Viewers ({currentLiveStream.viewers.length})</span>
+                <span>Viewers ({Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, broadcastViewersCount)})</span>
               </button>
             </div>
 
@@ -2875,6 +2966,36 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   ) : (
                     currentLiveStream.messages.map(msg => {
                       if (msg.isSystemEvent) {
+                        if (msg.isLikeEvent) {
+                          return (
+                            <div
+                              key={msg.id}
+                              className="py-1 px-3 rounded-full bg-pink-500/10 border border-pink-500/30 text-[#ff007a] text-[11px] font-semibold flex items-center gap-1.5 shadow-sm"
+                            >
+                              <Heart className="w-3.5 h-3.5 text-[#ff007a] fill-[#ff007a] shrink-0" />
+                              <span className="truncate">
+                                <span className="font-bold text-white">@{msg.username || msg.displayName} </span>
+                                liked your stream
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        if (msg.isJoinEvent) {
+                          return (
+                            <div
+                              key={msg.id}
+                              className="py-1 px-3 rounded-full bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-[11px] font-semibold flex items-center gap-1.5 shadow-sm"
+                            >
+                              <UserPlus className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                              <span className="truncate">
+                                <span className="font-bold text-white">@{msg.username || msg.displayName} </span>
+                                joined
+                              </span>
+                            </div>
+                          );
+                        }
+
                         return (
                           <div
                             key={msg.id}
@@ -2882,7 +3003,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                           >
                             <Sparkles className="w-3 h-3 text-[#ff007a] shrink-0" />
                             <span className="truncate">
-                              <span className="font-bold text-white">{msg.displayName} </span>
+                              <span className="font-bold text-white">@{msg.username || msg.displayName} </span>
                               {msg.text}
                             </span>
                           </div>

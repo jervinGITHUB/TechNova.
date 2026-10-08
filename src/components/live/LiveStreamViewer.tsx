@@ -17,6 +17,7 @@ import {
 
 export const LiveStreamViewer: React.FC = () => {
   const {
+    currentUser,
     currentLiveStream,
     sendLiveComment,
     sendLiveLike,
@@ -38,13 +39,27 @@ export const LiveStreamViewer: React.FC = () => {
 
   const hostUser = users.find(u => u.id === currentLiveStream.host.id) || currentLiveStream.host;
   const isFollowingHost = !!hostUser.isFollowing;
-  const [streamAspectRatio, setStreamAspectRatio] = useState<'9:16' | '16:9'>('9:16');
+  const [streamAspectRatio, setStreamAspectRatio] = useState<'9:16' | '16:9'>(() => {
+    return currentLiveStream.isMobileStream || currentLiveStream.aspectRatio === '9:16' ? '9:16' : '16:9';
+  });
 
   useEffect(() => {
     if (!currentLiveStream.id) return;
     let hasReceivedSignalOrStream = false;
 
+    if (currentLiveStream.isMobileStream || currentLiveStream.aspectRatio === '9:16') {
+      setStreamAspectRatio('9:16');
+    }
+
     const cleanup = createLiveViewerSession(currentLiveStream.id, {
+      viewerUser: currentUser
+        ? {
+            id: currentUser.id,
+            username: (currentUser.username || 'viewer').replace(/^@/, ''),
+            displayName: currentUser.displayName || currentUser.username || 'Viewer',
+            avatar: currentUser.avatar || '',
+          }
+        : undefined,
       onRemoteStream: stream => {
         hasReceivedSignalOrStream = true;
         setRemoteStream(stream);
@@ -58,6 +73,11 @@ export const LiveStreamViewer: React.FC = () => {
       onAspectRatio: ratio => {
         if (ratio) {
           setStreamAspectRatio(ratio);
+        }
+      },
+      onMobileStream: isMobile => {
+        if (isMobile) {
+          setStreamAspectRatio('9:16');
         }
       },
       onStreamEnded: () => {
@@ -146,8 +166,8 @@ export const LiveStreamViewer: React.FC = () => {
       </div>
 
       <div className="flex-1 flex flex-col lg:flex-row gap-4 lg:gap-6 min-h-0">
-        {/* Left Video Container: Fills full height on mobile with transparent overlay comments */}
-        <div className="flex-1 bg-black rounded-2xl sm:rounded-3xl overflow-hidden border border-neutral-800 relative flex flex-col justify-between shadow-2xl min-h-0">
+        {/* Left Video Container: Centers portrait streams cleanly on desktop */}
+        <div className="flex-1 bg-black/95 rounded-2xl sm:rounded-3xl overflow-hidden border border-neutral-800 relative flex items-center justify-center shadow-2xl min-h-0">
           {isLiveEnded ? (
             /* Screenshot 2 bottom right: "Live Ended" POV of Viewer */
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0d0d12] p-8 text-center animate-fadeIn">
@@ -186,8 +206,14 @@ export const LiveStreamViewer: React.FC = () => {
               </button>
             </div>
           ) : (
-            /* Active Live Stream Video Display: Split Camera & Game Canvas */
-            <div className="relative w-full h-full flex flex-col justify-between overflow-hidden items-center bg-black">
+            /* Active Live Stream Video Display: Focused Portrait Card on Desktop */
+            <div
+              className={`relative h-full flex flex-col justify-between overflow-hidden items-center bg-black transition-all ${
+                streamAspectRatio === '9:16' || currentLiveStream.isMobileStream
+                  ? 'w-full max-w-[430px] aspect-[9/16] rounded-2xl border border-white/10 shadow-[0_0_50px_rgba(0,0,0,0.9)] my-auto'
+                  : 'w-full'
+              }`}
+            >
               <LiveStreamCanvas
                 compositeStream={remoteStream}
                 snapshotUrl={snapshotUrl}
@@ -197,6 +223,7 @@ export const LiveStreamViewer: React.FC = () => {
                 showOverlays={true}
                 showHostTag={false}
                 canvasAspectRatio={streamAspectRatio}
+                isMobileStream={currentLiveStream.isMobileStream || streamAspectRatio === '9:16'}
                 showMusicBanner={false}
                 showGoalBar={false}
                 hostName={hostUser.displayName || 'Host'}
@@ -282,7 +309,7 @@ export const LiveStreamViewer: React.FC = () => {
               {/* Mobile Viewers Badge (Top Right) */}
               <div className="lg:hidden absolute top-3 right-3 z-40 flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-white text-[11px] font-bold shadow-md">
                 <Radio className="w-3 h-3 text-[#ff007a] animate-pulse" />
-                <span>{currentLiveStream.viewersCount}</span>
+                <span>{Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)}</span>
               </div>
 
               {/* Floating hearts container on like */}
@@ -310,50 +337,65 @@ export const LiveStreamViewer: React.FC = () => {
 
               {/* ========================================================================= */}
               {/* MOBILE VIEW: Transparent Background Comments Stream Over Live Video       */}
-              {/* "if the user joined in live , the user can see the comments on the live   */}
-              {/*  and has transparent background so the user can view/watch the live       */}
-              {/*  while viewing the comments and can send a comment."                      */}
               {/* ========================================================================= */}
               <div className="lg:hidden absolute left-3 right-3 bottom-14 z-30 max-h-48 overflow-y-auto space-y-1.5 pr-1 pointer-events-auto flex flex-col justify-end text-left">
-                {currentLiveStream.messages.slice(-8).map(msg => {
-                  if (msg.isSystemEvent) {
+                {currentLiveStream.messages
+                  .filter(m => !m.isJoinEvent)
+                  .slice(-10)
+                  .map(msg => {
+                    if (msg.isSystemEvent) {
+                      if (msg.isLikeEvent) {
+                        return (
+                          <div
+                            key={msg.id}
+                            className="bg-black/55 backdrop-blur-md text-[11px] text-[#ff007a] font-semibold px-2.5 py-1 rounded-xl w-fit shadow-md flex items-center gap-1.5 border border-pink-500/20"
+                          >
+                            <Heart className="w-3 h-3 text-[#ff007a] fill-[#ff007a] shrink-0" />
+                            <span>
+                              <span className="font-bold text-white">@{msg.username || msg.displayName} </span>
+                              liked the stream
+                            </span>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={msg.id}
+                          className="bg-black/40 backdrop-blur-xs text-[11px] text-amber-300 font-medium px-2.5 py-0.5 rounded-xl w-fit max-w-[90%] shadow-sm"
+                        >
+                          <span className="font-bold">@{msg.username || msg.displayName} </span>
+                          <span className="italic">{msg.text}</span>
+                        </div>
+                      );
+                    }
+
+                    const author = users.find(u => isSameUser(u.id, msg.userId));
+                    const authorName = (msg.displayName && msg.displayName !== 'Viewer') ? msg.displayName : (author?.displayName || author?.username || 'User');
+                    const authorAvatar = msg.avatar || author?.avatar || '';
+
                     return (
                       <div
                         key={msg.id}
-                        className="bg-black/40 backdrop-blur-xs text-[11px] text-amber-300 font-medium px-2.5 py-0.5 rounded-xl w-fit max-w-[90%] shadow-sm"
+                        className="bg-black/45 backdrop-blur-md text-white rounded-2xl px-3 py-1 border border-white/10 flex items-start gap-2 max-w-[85%] shadow-md"
                       >
-                        <span className="font-bold">{msg.displayName} </span>
-                        <span className="italic">{msg.text}</span>
+                        <Avatar
+                          src={authorAvatar}
+                          alt={authorName}
+                          size="xs"
+                          className="mt-0.5"
+                        />
+                        <div className="min-w-0 text-left">
+                          <span className="text-[11px] font-bold text-[#ff007a] drop-shadow-sm mr-1">
+                            {authorName}
+                          </span>
+                          <span className="text-xs text-white drop-shadow-sm">
+                            {msg.text}
+                          </span>
+                        </div>
                       </div>
                     );
-                  }
-
-                  const author = users.find(u => isSameUser(u.id, msg.userId));
-                  const authorName = (msg.displayName && msg.displayName !== 'Viewer') ? msg.displayName : (author?.displayName || author?.username || 'User');
-                  const authorAvatar = msg.avatar || author?.avatar || '';
-
-                  return (
-                    <div
-                      key={msg.id}
-                      className="bg-black/45 backdrop-blur-md text-white rounded-2xl px-3 py-1 border border-white/10 flex items-start gap-2 max-w-[85%] shadow-md"
-                    >
-                      <Avatar
-                        src={authorAvatar}
-                        alt={authorName}
-                        size="xs"
-                        className="mt-0.5"
-                      />
-                      <div className="min-w-0 text-left">
-                        <span className="text-[11px] font-bold text-[#ff007a] drop-shadow-sm mr-1">
-                          {authorName}
-                        </span>
-                        <span className="text-xs text-white drop-shadow-sm">
-                          {msg.text}
-                        </span>
-                      </div>
-                    </div>
-                  );
-                })}
+                  })}
               </div>
 
               {/* MOBILE VIEW: Bottom Semi-Transparent Floating Comment Input & Like Bar */}
@@ -391,12 +433,12 @@ export const LiveStreamViewer: React.FC = () => {
 
         {/* Right Chat Panel: Desktop Only (Screenshot 2 top right) */}
         <div className="hidden lg:flex w-80 shrink-0 bg-[#13131a] rounded-3xl border border-neutral-800 p-4 flex-col justify-between shadow-xl">
-          {/* Chat Header: Viewers 67 + Close */}
+          {/* Chat Header: Viewers count + Close */}
           <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
             <div className="flex items-center gap-2">
               <Radio className="w-4 h-4 text-[#ff007a] animate-pulse" />
               <span className="text-sm font-bold text-white font-brand">
-                Viewers {currentLiveStream.viewersCount}
+                Viewers {Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)}
               </span>
             </div>
             <button
@@ -409,34 +451,51 @@ export const LiveStreamViewer: React.FC = () => {
 
           {/* Chat Comments & Event Feed matching Screenshot */}
           <div className="flex-1 overflow-y-auto py-3 space-y-3 pr-1 text-left text-xs">
-            {currentLiveStream.messages.map(msg => {
-              if (msg.isSystemEvent) {
+            {currentLiveStream.messages
+              .filter(m => !m.isJoinEvent)
+              .map(msg => {
+                if (msg.isSystemEvent) {
+                  if (msg.isLikeEvent) {
+                    return (
+                      <div
+                        key={msg.id}
+                        className="py-1 px-3 rounded-full bg-pink-500/10 border border-pink-500/30 text-[#ff007a] text-[11px] font-semibold flex items-center gap-1.5 shadow-sm w-fit"
+                      >
+                        <Heart className="w-3.5 h-3.5 text-[#ff007a] fill-[#ff007a] shrink-0" />
+                        <span className="truncate">
+                          <span className="font-bold text-white">@{msg.username || msg.displayName} </span>
+                          liked the stream
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={msg.id} className="text-[11px] text-neutral-400 py-0.5">
+                      <span className="font-bold text-neutral-200">@{msg.username || msg.displayName} </span>
+                      <span className="italic">{msg.text}</span>
+                    </div>
+                  );
+                }
+
+                const author = users.find(u => isSameUser(u.id, msg.userId));
+                const authorName = (msg.displayName && msg.displayName !== 'Viewer') ? msg.displayName : (author?.displayName || author?.username || 'User');
+                const authorAvatar = msg.avatar || author?.avatar || '';
+
                 return (
-                  <div key={msg.id} className="text-[11px] text-neutral-400 py-0.5">
-                    <span className="font-bold text-neutral-200">{msg.displayName} </span>
-                    <span className="italic">{msg.text}</span>
+                  <div key={msg.id} className="flex items-start gap-2.5">
+                    <Avatar
+                      src={authorAvatar}
+                      alt={authorName}
+                      size="sm"
+                    />
+                    <div className="min-w-0">
+                      <div className="font-bold text-white text-[11px]">{authorName}</div>
+                      <div className="text-neutral-300 text-xs mt-0.5">{msg.text}</div>
+                    </div>
                   </div>
                 );
-              }
-
-              const author = users.find(u => isSameUser(u.id, msg.userId));
-              const authorName = (msg.displayName && msg.displayName !== 'Viewer') ? msg.displayName : (author?.displayName || author?.username || 'User');
-              const authorAvatar = msg.avatar || author?.avatar || '';
-
-              return (
-                <div key={msg.id} className="flex items-start gap-2.5">
-                  <Avatar
-                    src={authorAvatar}
-                    alt={authorName}
-                    size="sm"
-                  />
-                  <div className="min-w-0">
-                    <div className="font-bold text-white text-[11px]">{authorName}</div>
-                    <div className="text-neutral-300 text-xs mt-0.5">{msg.text}</div>
-                  </div>
-                </div>
-              );
-            })}
+              })}
           </div>
 
           {/* Chat Input Form matching Screenshot: "Type chat message" + pink send button */}

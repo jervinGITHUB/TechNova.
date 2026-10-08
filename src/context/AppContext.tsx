@@ -15,6 +15,7 @@ import {
   FollowStatus,
   AdminRecord,
   CommentEntry,
+  LiveViewer,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -505,7 +506,7 @@ interface AppContextType {
   sendLiveLike: () => void;
   liveHeartTrigger: number;
   removeActiveLiveStream: (streamId: string) => void;
-  startHostLiveStream: (title: string, topic: string, aboutMe: string, customStreamId?: string) => void;
+  startHostLiveStream: (title: string, topic: string, aboutMe: string, customStreamId?: string, options?: { aspectRatio?: '9:16' | '16:9'; isMobileStream?: boolean }) => void;
   endHostLiveStream: () => void;
   toggleLiveSource: (source: 'camera' | 'mic' | 'screen') => void;
 
@@ -837,6 +838,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const globalLiveStreamsChannelRef = useRef<any>(null);
   const globalLiveBroadcastChannelRef = useRef<BroadcastChannel | null>(null);
   const [liveHeartTrigger, setLiveHeartTrigger] = useState<number>(0);
+  const streamLikedUsersRef = useRef<Set<string>>(new Set());
 
   // Per-User Likes storage map: { [userId: string]: string[] (videoIds) }
   const [userLikes, setUserLikes] = useState<Record<string, string[]>>(() =>
@@ -5034,6 +5036,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     };
 
+    const handleViewerJoined = (viewer: LiveViewer) => {
+      if (!viewer || !viewer.id) return;
+      const isHostUser = Boolean(
+        (currentUser && isSameUser(currentUser.id, currentLiveStream.host?.id)) ||
+        activeTab === 'live_host_active'
+      );
+
+      setCurrentLiveStream(prev => {
+        const alreadyExists = prev.viewers?.some(v => isSameUser(v.id, viewer.id));
+        const nextViewers = alreadyExists
+          ? (prev.viewers || [])
+          : [...(prev.viewers || []), viewer];
+        const nextCount = Math.max(nextViewers.length, prev.viewersCount, 1);
+
+        // Automatic Notifier: (@user joined) in comment section on HOST VIEW ONLY!
+        if (isHostUser && !alreadyExists && !isSameUser(viewer.id, prev.host?.id)) {
+          const cleanUser = (viewer.username || `user_${String(viewer.id).slice(0, 5)}`).replace(/^@/, '');
+          const joinMsg: LiveStreamMessage = {
+            id: `sys_join_${viewer.id}_${Date.now()}`,
+            userId: viewer.id,
+            username: cleanUser,
+            displayName: viewer.displayName || cleanUser,
+            avatar: viewer.avatar || '',
+            text: 'joined',
+            timestamp: 'Just now',
+            isSystemEvent: true,
+            isJoinEvent: true,
+          };
+          return {
+            ...prev,
+            viewers: nextViewers,
+            viewersCount: nextCount,
+            messages: [...prev.messages, joinMsg],
+          };
+        }
+
+        return {
+          ...prev,
+          viewers: nextViewers,
+          viewersCount: nextCount,
+        };
+      });
+    };
+
+    const handleViewerLeft = (viewerId: string) => {
+      if (!viewerId) return;
+      setCurrentLiveStream(prev => {
+        const nextViewers = (prev.viewers || []).filter(v => !isSameUser(v.id, viewerId));
+        return {
+          ...prev,
+          viewers: nextViewers,
+          viewersCount: nextViewers.length,
+        };
+      });
+    };
+
+    const handleFirstLike = (msg: LiveStreamMessage) => {
+      if (!msg || !msg.userId) return;
+      const likeKey = `${currentLiveStream.id}_${msg.userId}`;
+      if (streamLikedUsersRef.current.has(likeKey)) return;
+      streamLikedUsersRef.current.add(likeKey);
+
+      setCurrentLiveStream(prev => {
+        if (prev.messages.some(m => m.id === msg.id || (m.isLikeEvent && isSameUser(m.userId, msg.userId)))) {
+          return prev;
+        }
+        return {
+          ...prev,
+          messages: [...prev.messages, msg],
+        };
+      });
+    };
+
     // 2. Setup local BroadcastChannel for same-device cross-tab testing
     try {
       const bc = new BroadcastChannel(`live_chat_${streamId}`);
@@ -5044,6 +5119,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           handleIncomingComment(data.payload);
         } else if (data.type === 'like') {
           setLiveHeartTrigger(Date.now());
+        } else if (data.type === 'first_like' && data.payload) {
+          handleFirstLike(data.payload);
+        } else if (data.type === 'viewer_joined' && data.payload) {
+          handleViewerJoined(data.payload);
+        } else if (data.type === 'viewer_left' && data.payload) {
+          handleViewerLeft(data.payload.userId || data.payload);
         } else if (data.type === 'stream_ended') {
           setCurrentLiveStream(prev => ({ ...prev, isLive: false }));
         }
@@ -5071,17 +5152,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .on('broadcast', { event: 'like' }, () => {
             setLiveHeartTrigger(Date.now());
           })
+          .on('broadcast', { event: 'first_like' }, ({ payload }: { payload: LiveStreamMessage }) => {
+            if (payload) {
+              handleFirstLike(payload);
+            }
+          })
+          .on('broadcast', { event: 'viewer_joined' }, ({ payload }: { payload: LiveViewer }) => {
+            if (payload) {
+              handleViewerJoined(payload);
+            }
+          })
+          .on('broadcast', { event: 'viewer_left' }, ({ payload }: { payload: any }) => {
+            if (payload) {
+              handleViewerLeft(payload.userId || payload);
+            }
+          })
           .on('broadcast', { event: 'stream_ended' }, () => {
             setCurrentLiveStream(prev => ({ ...prev, isLive: false }));
           })
           .on('presence', { event: 'sync' }, () => {
             const state = chan.presenceState();
-            const totalViewers = Object.keys(state).length;
-            if (totalViewers > 0) {
-              setCurrentLiveStream(prev => ({
-                ...prev,
-                viewersCount: Math.max(1, totalViewers),
-              }));
+            const rawPresences = Object.values(state).flat() as any[];
+            const hostId = currentLiveStream.host?.id;
+            const viewerMap = new Map<string, LiveViewer>();
+
+            for (const p of rawPresences) {
+              if (p && !p.is_host && p.user_id && (!hostId || !isSameUser(p.user_id, hostId))) {
+                if (!viewerMap.has(p.user_id)) {
+                  viewerMap.set(p.user_id, {
+                    id: p.user_id,
+                    username: (p.username || `user_${String(p.user_id).slice(0, 5)}`).replace(/^@/, ''),
+                    displayName: p.displayName || p.username || 'Viewer',
+                    avatar: p.avatar || '',
+                    joinedAt: p.online_at || new Date().toISOString(),
+                  });
+                }
+              }
+            }
+
+            const activePresViewers = Array.from(viewerMap.values());
+            if (activePresViewers.length > 0) {
+              setCurrentLiveStream(prev => {
+                const mergedMap = new Map<string, LiveViewer>();
+                (prev.viewers || []).forEach(v => mergedMap.set(v.id, v));
+                activePresViewers.forEach(v => mergedMap.set(v.id, v));
+                const allViewers = Array.from(mergedMap.values());
+                return {
+                  ...prev,
+                  viewers: allViewers,
+                  viewersCount: Math.max(allViewers.length, prev.viewersCount, 1),
+                };
+              });
             }
           })
           .subscribe((status: string) => {
@@ -5090,9 +5211,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 user_id: currentUser?.id,
                 username: currentUser?.username,
                 displayName: currentUser?.displayName,
+                avatar: currentUser?.avatar || '',
                 online_at: new Date().toISOString(),
-                is_host: activeTab === 'live_host_active',
+                is_host: activeTab === 'live_host_active' || isSameUser(currentUser?.id, currentLiveStream.host?.id),
               });
+
+              // If joining as a viewer, announce join over realtime broadcast (<50ms, 0 disk IO!)
+              if (!isSameUser(currentUser?.id, currentLiveStream.host?.id) && activeTab !== 'live_host_active') {
+                const myViewerObj: LiveViewer = {
+                  id: currentUser?.id || `viewer_${Date.now()}`,
+                  username: (currentUser?.username || 'viewer').replace(/^@/, ''),
+                  displayName: currentUser?.displayName || currentUser?.username || 'Viewer',
+                  avatar: currentUser?.avatar || '',
+                  joinedAt: new Date().toISOString(),
+                };
+                chan.send({
+                  type: 'broadcast',
+                  event: 'viewer_joined',
+                  payload: myViewerObj,
+                });
+              }
             }
           });
 
@@ -5102,7 +5240,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    // Connect host WebRTC join listener directly to viewer tracking
+    liveBroadcastService.setOnViewerJoined((vUser) => {
+      if (vUser && vUser.id) {
+        handleViewerJoined({
+          id: vUser.id,
+          username: (vUser.username || `user_${String(vUser.id).slice(0, 5)}`).replace(/^@/, ''),
+          displayName: vUser.displayName || vUser.username || 'Viewer',
+          avatar: vUser.avatar || '',
+          joinedAt: new Date().toISOString(),
+        });
+      }
+    });
+
     return () => {
+      liveBroadcastService.setOnViewerJoined(null);
       if (liveStreamChannelRef.current) {
         try { liveStreamChannelRef.current.unsubscribe(); } catch {}
         liveStreamChannelRef.current = null;
@@ -5116,9 +5268,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const openLiveStreamAsViewer = (streamId: string) => {
     const target = activeLiveStreams.find(s => s.id === streamId || toUuid(s.id) === toUuid(streamId));
+    const viewerObj: LiveViewer = {
+      id: currentUser?.id || `viewer_${Date.now()}`,
+      username: (currentUser?.username || 'viewer').replace(/^@/, ''),
+      displayName: currentUser?.displayName || currentUser?.username || 'Viewer',
+      avatar: currentUser?.avatar || '',
+      joinedAt: new Date().toISOString(),
+    };
+
     if (target) {
+      const existingViewers = target.viewers || [];
+      const hasMe = existingViewers.some(v => isSameUser(v.id, viewerObj.id));
+      const nextViewers = hasMe ? existingViewers : [...existingViewers, viewerObj];
       setCurrentLiveStream({
         ...target,
+        viewers: nextViewers,
+        viewersCount: Math.max(nextViewers.length, target.viewersCount, 1),
         messages: target.messages || [],
       });
     } else {
@@ -5126,9 +5291,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...prev,
         id: streamId,
         isLive: true,
+        viewers: [viewerObj],
+        viewersCount: Math.max(1, prev.viewersCount),
         messages: [],
       }));
     }
+
+    // Announce viewer joined to host over Realtime and local BroadcastChannel (<50ms, 0 disk IO!)
+    try {
+      const quickBc = new BroadcastChannel(`live_chat_${streamId}`);
+      quickBc.postMessage({ type: 'viewer_joined', payload: viewerObj });
+      setTimeout(() => {
+        try { quickBc.postMessage({ type: 'viewer_joined', payload: viewerObj }); } catch {}
+        try { quickBc.close(); } catch {}
+      }, 600);
+    } catch {}
+
+    setTimeout(() => {
+      try {
+        if (liveStreamChannelRef.current) {
+          liveStreamChannelRef.current.send({
+            type: 'broadcast',
+            event: 'viewer_joined',
+            payload: viewerObj,
+          });
+        }
+      } catch {}
+      try {
+        if (liveStreamBroadcastChannelRef.current) {
+          liveStreamBroadcastChannelRef.current.postMessage({
+            type: 'viewer_joined',
+            payload: viewerObj,
+          });
+        }
+      } catch {}
+    }, 250);
+
     setActiveTab('live_viewer');
   };
 
@@ -5187,8 +5385,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const sendLiveLike = () => {
-    if (!currentLiveStream.id) return;
+    if (!currentLiveStream.id || !currentUser) return;
     setLiveHeartTrigger(Date.now());
+
+    // Single notifier per user even if they spam like
+    const userLikeKey = `${currentLiveStream.id}_${currentUser.id}`;
+    const isFirstLike = !streamLikedUsersRef.current.has(userLikeKey);
+
+    if (isFirstLike) {
+      streamLikedUsersRef.current.add(userLikeKey);
+      const cleanUser = (currentUser.username || 'user').replace(/^@/, '');
+      const likeMsg: LiveStreamMessage = {
+        id: `sys_like_${currentUser.id}_${Date.now()}`,
+        userId: currentUser.id,
+        username: cleanUser,
+        displayName: currentUser.displayName || cleanUser,
+        avatar: currentUser.avatar || '',
+        text: 'liked the stream',
+        timestamp: 'Just now',
+        isSystemEvent: true,
+        isLikeEvent: true,
+      };
+
+      // Add locally for the sender
+      setCurrentLiveStream(prev => ({
+        ...prev,
+        messages: [...prev.messages, likeMsg],
+      }));
+
+      // Broadcast single like comment to both host and other viewers (0 Disk IO!)
+      try {
+        if (liveStreamChannelRef.current) {
+          liveStreamChannelRef.current.send({
+            type: 'broadcast',
+            event: 'first_like',
+            payload: likeMsg,
+          });
+        }
+      } catch {}
+      try {
+        if (liveStreamBroadcastChannelRef.current) {
+          liveStreamBroadcastChannelRef.current.postMessage({
+            type: 'first_like',
+            payload: likeMsg,
+          });
+        }
+      } catch {}
+    }
+
+    // Always broadcast like heart event for floating animations
     try {
       if (liveStreamChannelRef.current) {
         liveStreamChannelRef.current.send({
@@ -5208,8 +5453,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {}
   };
 
-  const startHostLiveStream = (title: string, topic: string, aboutMe: string, customStreamId?: string) => {
+  const startHostLiveStream = (
+    title: string,
+    topic: string,
+    aboutMe: string,
+    customStreamId?: string,
+    options?: { aspectRatio?: '9:16' | '16:9'; isMobileStream?: boolean }
+  ) => {
     if (!currentUser) return;
+    streamLikedUsersRef.current.clear();
     // Always generate a clean standard UUID v4 for the stream so IDs NEVER diverge!
     const streamId = customStreamId || generateUuid();
     const newStream: LiveStream = {
@@ -5221,8 +5473,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       aboutMe: aboutMe || 'Welcome to my stream!',
       isLive: true,
       timerSeconds: 0,
-      viewersCount: 1,
+      viewersCount: 0,
+      viewers: [],
       messages: [],
+      aspectRatio: options?.aspectRatio || '9:16',
+      isMobileStream: options?.isMobileStream || false,
     };
     setCurrentLiveStream(newStream);
     setActiveLiveStreams(prev => {

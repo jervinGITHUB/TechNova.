@@ -237,6 +237,8 @@ export interface LiveStreamMessage {
   text: string;
   timestamp: string;
   isSystemEvent?: boolean;
+  isJoinEvent?: boolean;
+  isLikeEvent?: boolean;
 }
 
 export interface CanvasSourceTransform {
@@ -275,4 +277,6 @@ export interface LiveStream {
   cameraEnabled: boolean;
   micEnabled: boolean;
   screenShareEnabled: boolean;
+  aspectRatio?: '9:16' | '16:9';
+  isMobileStream?: boolean;
 }

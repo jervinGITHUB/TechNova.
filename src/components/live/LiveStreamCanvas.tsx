@@ -15,6 +15,7 @@ import {
   VolumeX,
 } from 'lucide-react';
 import { CanvasSourceTransform } from '../../types';
+import { liveBroadcastService } from '../../services/liveBroadcastService';
 
 export type LayoutMode = 'split' | 'pip' | 'game_only' | 'camera_only' | 'custom';
 export type GamePreset = 'genshin' | 'valorant' | 'cyberpunk' | 'custom_screen';
@@ -55,6 +56,7 @@ export interface LiveStreamCanvasProps {
   // Interactive Studio Setup Props
   isInteractive?: boolean;
   canvasAspectRatio?: '9:16' | '16:9';
+  isMobileStream?: boolean;
   cameraTransform?: CanvasSourceTransform;
   screenTransform?: CanvasSourceTransform;
   selectedSourceId?: 'camera' | 'screen' | 'goal_bar' | null;
@@ -93,6 +95,7 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
   isLive = true,
   isInteractive = false,
   canvasAspectRatio = '9:16',
+  isMobileStream = false,
   cameraTransform,
   screenTransform,
   selectedSourceId = null,
@@ -124,12 +127,14 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
     initialTransform: CanvasSourceTransform;
   } | null>(null);
 
+  const activeCameraStream = cameraRealStream || (typeof window !== 'undefined' ? liveBroadcastService.getState().cameraStream : null);
+
   // Hook up real camera stream if provided
   useEffect(() => {
-    if (cameraVideoRef.current && cameraRealStream) {
-      cameraVideoRef.current.srcObject = cameraRealStream;
+    if (cameraVideoRef.current && activeCameraStream) {
+      cameraVideoRef.current.srcObject = activeCameraStream;
     }
-  }, [cameraRealStream]);
+  }, [activeCameraStream]);
 
   // Hook up real screen capture if provided
   useEffect(() => {
@@ -310,23 +315,26 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
       );
     }
 
-    if ((cameraSource === 'webcam' || cameraRealStream) && cameraRealStream) {
+    if (activeCameraStream) {
       return (
-        <video
-          ref={el => {
-            if (el) {
-              cameraVideoRef.current = el;
-              if (cameraRealStream && el.srcObject !== cameraRealStream) {
-                el.srcObject = cameraRealStream;
-                el.play().catch(() => {});
+        <div className="w-full h-full relative overflow-hidden bg-black flex items-center justify-center">
+          <video
+            ref={el => {
+              if (el) {
+                cameraVideoRef.current = el;
+                if (el.srcObject !== activeCameraStream) {
+                  el.srcObject = activeCameraStream;
+                  el.play().catch(() => {});
+                }
               }
-            }
-          }}
-          autoPlay
-          playsInline
-          muted
-          className={`w-full h-full object-cover select-none ${isMirrored ? 'scale-x-[-1]' : ''}`}
-        />
+            }}
+            autoPlay
+            playsInline
+            muted
+            className={`w-full h-full object-cover select-none absolute inset-0 block ${isMirrored ? 'scale-x-[-1]' : ''}`}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        </div>
       );
     }
 
@@ -542,14 +550,20 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
               width: `${scr.width}%`,
               height: `${scr.height}%`,
               zIndex: scr.zIndex,
-              borderRadius: scr.borderRadius ? `${scr.borderRadius}px` : undefined,
               opacity: scr.opacity ?? 1,
             }}
-            className={`absolute overflow-hidden transition-shadow ${
+            className={`absolute transition-shadow ${
               isInteractive && !scr.locked ? 'cursor-move' : ''
-            } ${getBorderStyle(scr.borderStyle, isInteractive && selectedSourceId === 'screen')}`}
+            }`}
           >
-            {renderGameFeed()}
+            <div
+              className={`w-full h-full relative overflow-hidden ${getBorderStyle(scr.borderStyle, isInteractive && selectedSourceId === 'screen')}`}
+              style={{
+                borderRadius: scr.borderRadius ? `${scr.borderRadius}px` : undefined,
+              }}
+            >
+              {renderGameFeed()}
+            </div>
             {renderInteractiveHandles('screen', scr)}
           </div>
         )}
@@ -581,14 +595,20 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
               width: `${cam.width}%`,
               height: `${cam.height}%`,
               zIndex: cam.zIndex,
-              borderRadius: cam.borderRadius ? `${cam.borderRadius}px` : undefined,
               opacity: cam.opacity ?? 1,
             }}
-            className={`absolute overflow-hidden transition-shadow ${
+            className={`absolute transition-shadow ${
               isInteractive && !cam.locked ? 'cursor-move' : ''
-            } ${getBorderStyle(cam.borderStyle, isInteractive && selectedSourceId === 'camera')}`}
+            }`}
           >
-            {renderCameraFeed(cam.mirrored)}
+            <div
+              className={`w-full h-full relative overflow-hidden ${getBorderStyle(cam.borderStyle, isInteractive && selectedSourceId === 'camera')}`}
+              style={{
+                borderRadius: cam.borderRadius ? `${cam.borderRadius}px` : undefined,
+              }}
+            >
+              {renderCameraFeed(cam.mirrored)}
+            </div>
             {renderInteractiveHandles('camera', cam)}
           </div>
         )}
@@ -742,7 +762,8 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
             autoPlay
             playsInline
             muted={isStreamMuted}
-            className="w-full h-full max-w-full max-h-full object-contain select-none bg-black"
+            className="w-full h-full object-cover select-none bg-black block"
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
 
           {/* Floating Audio Unmute/Mute Toggle Indicator */}
@@ -779,8 +800,13 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
           <img
             src={snapshotUrl}
             alt="Live Stream Broadcast"
-            className="w-full h-full object-contain select-none animate-fadeIn bg-black"
+            className="w-full h-full object-cover select-none animate-fadeIn bg-black block"
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
+        </div>
+      ) : (!isInteractive && (isMobileStream || (canvasAspectRatio === '9:16' && (!screenTransform || !screenTransform.visible)))) ? (
+        <div className="w-full h-full relative overflow-hidden bg-black flex items-center justify-center">
+          {renderCameraFeed(cameraTransform?.mirrored)}
         </div>
       ) : isCustomMode ? (
         renderCustomStudioLayout()
