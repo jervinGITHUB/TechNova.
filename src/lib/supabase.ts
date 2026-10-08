@@ -1658,6 +1658,24 @@ export const supabaseDb = {
         // ignore
       }
 
+      // Fetch share counts (targeted by videoIds)
+      let sharesCountMap = new Map<string, number>();
+      try {
+        if (videoIds.length > 0) {
+          const { data: shares } = await client
+            .from('Share')
+            .select('VideoID')
+            .in('VideoID', videoIds);
+          if (shares) {
+            shares.forEach((s: any) => {
+              sharesCountMap.set(s.VideoID, (sharesCountMap.get(s.VideoID) || 0) + 1);
+            });
+          }
+        }
+      } catch {
+        // ignore
+      }
+
       // Scoped fallback for any videos missing from VideoStats (NEVER download the whole Like table)
       const missingLikeIds = videoIds.filter(id => !likesCountMap.has(id));
       if (missingLikeIds.length > 0 && missingLikeIds.length <= 40) {
@@ -1694,6 +1712,20 @@ export const supabaseDb = {
         const hashtags = hashtagsMap.get(row.VideoID) || ['#viral', '#fyp'];
         const likesCount = likesCountMap.get(row.VideoID) || 0;
         const commentsCount = 0; // Comments count is fetched on-demand inside the comment drawer
+
+        // Compute authoritative shares count from database and local storage persistence
+        const dbShares = sharesCountMap.get(row.VideoID) || row.SharesCount || row.shares_count || row.ShareCount || 0;
+        let localShares = 0;
+        try {
+          if (typeof localStorage !== 'undefined') {
+            const rawStoredShares = localStorage.getItem('viralhub_video_shares_v1');
+            if (rawStoredShares) {
+              const parsedShares = JSON.parse(rawStoredShares);
+              localShares = parsedShares[row.VideoID] || parsedShares[toUuid(row.VideoID)] || 0;
+            }
+          }
+        } catch {}
+        const finalSharesCount = Math.max(dbShares, localShares);
 
         // If mediaUrl is a local blob (which is invalid across devices or after refresh),
         // provide a high-performance streaming video fallback so it never renders as a black box!
@@ -1735,7 +1767,7 @@ export const supabaseDb = {
           thumbnailUrl: safeThumbnailUrl,
           likesCount,
           commentsCount,
-          sharesCount: 0,
+          sharesCount: finalSharesCount,
           viewsCount: String(row.ViewCount || 0),
           isLiked: false,
           createdAt: row.PublishedAt || new Date().toISOString(),
@@ -3033,20 +3065,41 @@ export const supabaseDb = {
   // 5. Share Table (VideoID, UserID, SharedAt)
   // -----------------------------------------------------------------------
   async insertShare(videoId: string, userId: string): Promise<boolean> {
+    const vUuid = toUuid(videoId);
+    // 1. Immediately record in persistent localStorage so share count never resets on page refresh or offline
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem('viralhub_video_shares_v1') || '{}';
+        const parsed = JSON.parse(raw);
+        const nextVal = (parsed[videoId] || parsed[vUuid] || 0) + 1;
+        parsed[videoId] = nextVal;
+        parsed[vUuid] = nextVal;
+        localStorage.setItem('viralhub_video_shares_v1', JSON.stringify(parsed));
+      }
+    } catch {}
+
     const client = getSupabaseClient();
-    if (!client) return false;
+    if (!client) return true;
 
     try {
-      const vUuid = toUuid(videoId);
       const uUuid = toUuid(userId);
 
-      const { error } = await client.from('Share').insert({
+      // Insert record into Share table
+      await client.from('Share').insert({
         VideoID: vUuid,
         UserID: uUuid,
         SharedAt: new Date().toISOString(),
       });
 
-      return !error;
+      // Also attempt to increment SharesCount directly in Video table if column exists
+      try {
+        const { data: vRow } = await client.from('Video').select('SharesCount').eq('VideoID', vUuid).maybeSingle();
+        if (vRow && vRow.SharesCount !== undefined) {
+          await client.from('Video').update({ SharesCount: (vRow.SharesCount || 0) + 1 }).eq('VideoID', vUuid);
+        }
+      } catch {}
+
+      return true;
     } catch (e) {
       console.warn('Supabase insertShare fallback:', e);
       return false;

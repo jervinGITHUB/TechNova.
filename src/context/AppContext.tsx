@@ -1399,17 +1399,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return !isUserIdDeleted(cId, cEmail);
           });
           const storedAppeals = storage.get<Record<string, any>>('video_appeals_v2', {});
+          const storedShares = storage.get<Record<string, number>>('video_shares_v1', {});
+          const existingVideosMap = new Map((storage.get<Video[]>('videos', []) || []).map(v => [v.id, v]));
+
           const patchedRemote = activeVideos.map(v => {
             const appeal = storedAppeals[v.id] || storedAppeals[toUuid(v.id)];
+            const preservedShares = Math.max(
+              v.sharesCount || 0,
+              existingVideosMap.get(v.id)?.sharesCount || 0,
+              existingVideosMap.get(toUuid(v.id))?.sharesCount || 0,
+              storedShares[v.id] || 0,
+              storedShares[toUuid(v.id)] || 0
+            );
+
+            const baseVideo = {
+              ...v,
+              sharesCount: preservedShares,
+            };
+
             if (appeal) {
               return {
-                ...v,
+                ...baseVideo,
                 appealStatus: appeal.status || v.appealStatus,
                 appealReason: appeal.reason || v.appealReason,
                 status: appeal.status === 'approved' ? 'approved' : v.status,
               };
             }
-            return v;
+            return baseVideo;
           });
 
           const merged = deduplicateVideos(patchedRemote);
@@ -4165,18 +4181,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Share Video (BR-019, BR-020, BR-023)
   const shareVideo = (videoId: string) => {
-    if (currentUser) {
-      supabaseDb.insertShare(videoId, currentUser.id);
-    }
+    const actorId = currentUser ? currentUser.id : 'guest';
+    supabaseDb.insertShare(videoId, actorId);
 
-    setVideos(prev =>
-      prev.map(v => {
-        if (v.id === videoId) {
-          return { ...v, sharesCount: v.sharesCount + 1 };
+    setVideos(prev => {
+      const next = prev.map(v => {
+        if (v.id === videoId || toUuid(v.id) === toUuid(videoId)) {
+          const nextShares = (v.sharesCount || 0) + 1;
+          const storedShares = storage.get<Record<string, number>>('video_shares_v1', {});
+          storedShares[v.id] = nextShares;
+          storedShares[toUuid(v.id)] = nextShares;
+          storage.set('video_shares_v1', storedShares);
+          return { ...v, sharesCount: nextShares };
         }
         return v;
-      })
-    );
+      });
+      storage.set('videos', next);
+      return next;
+    });
 
     // Trigger notification to the VIDEO CREATOR (NOT currentUser)
     const video = videos.find(v => v.id === videoId);

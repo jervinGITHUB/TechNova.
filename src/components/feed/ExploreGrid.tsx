@@ -25,6 +25,10 @@ import {
   ArrowRight,
   Sparkles,
   Hash,
+  MoreVertical,
+  Copy,
+  Download,
+  Flag,
 } from 'lucide-react';
 
 const formatCount = (count?: number | string): string => {
@@ -59,6 +63,61 @@ export const ExploreGrid: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const modalVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [modalMenuOpen, setModalMenuOpen] = useState(false);
+  const [modalCopyFeedback, setModalCopyFeedback] = useState(false);
+  const [modalDownloading, setModalDownloading] = useState(false);
+  const modalMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!modalMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (modalMenuRef.current && !modalMenuRef.current.contains(e.target as Node)) {
+        setModalMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [modalMenuOpen]);
+
+  const handleCopyModalLink = (vidId: string) => {
+    const videoUrl = typeof window !== 'undefined'
+      ? `${window.location.origin}/video/${vidId}`
+      : `https://viralhub.app/video/${vidId}`;
+    navigator.clipboard?.writeText(videoUrl);
+    setModalCopyFeedback(true);
+    setTimeout(() => {
+      setModalCopyFeedback(false);
+      setModalMenuOpen(false);
+    }, 1800);
+  };
+
+  const handleDownloadModalVideo = async (url: string, caption?: string) => {
+    setModalDownloading(true);
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      const safeCaption = (caption?.slice(0, 20) || 'viralhub_video').replace(/[^a-zA-Z0-9_-]/g, '_');
+      link.download = `${safeCaption}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch {
+      const link = document.createElement('a');
+      link.href = url;
+      link.target = '_blank';
+      link.download = 'video.mp4';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      setModalDownloading(false);
+      setModalMenuOpen(false);
+    }
+  };
 
   // Extract 100% dynamic trending hashtags from real videos in memory (0 random/fake fallback tags)
   // If someone uses a hashtag in a video's hashtags or caption, it automatically shows up here!
@@ -713,24 +772,79 @@ export const ExploreGrid: React.FC = () => {
                 </span>
               </div>
 
-              {/* Report Video */}
-              <div className="flex flex-col items-center">
+              {/* 3 Dots Options Button (Copy Link, Download Video, Report Video) */}
+              <div className="relative flex flex-col items-center" ref={modalMenuRef}>
                 <button
                   type="button"
-                  onClick={() =>
-                    openReportModal({
-                      type: 'video',
-                      targetId: activeModalVideo.id,
-                      targetName: `${activeModalVideo.creator.displayName || 'Creator'}'s video`,
-                      targetSubtitle: activeModalVideo.caption.slice(0, 35),
-                      targetThumbnail: activeModalVideo.thumbnailUrl,
-                    })
-                  }
-                  className="p-3 rounded-full bg-black/50 hover:bg-black/70 backdrop-blur-md text-white hover:text-red-400 transition-all cursor-pointer"
-                  title="Report Video"
+                  onClick={e => {
+                    e.stopPropagation();
+                    setModalMenuOpen(prev => !prev);
+                  }}
+                  className={`p-3 rounded-full backdrop-blur-md transition-all cursor-pointer ${
+                    modalMenuOpen
+                      ? 'bg-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.6)]'
+                      : 'bg-black/50 hover:bg-black/70 text-white hover:text-[#ff007a]'
+                  }`}
+                  title="More Options"
                 >
-                  <AlertTriangle className="w-5 h-5" />
+                  <MoreVertical className="w-5 h-5" />
                 </button>
+
+                {/* 3 Dots Context Menu */}
+                {modalMenuOpen && (
+                  <div
+                    onClick={e => e.stopPropagation()}
+                    className="absolute right-14 bottom-0 z-50 w-44 bg-[#14141e]/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => handleCopyModalLink(activeModalVideo.id)}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                    >
+                      {modalCopyFeedback ? (
+                        <>
+                          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                          <span className="text-emerald-400 font-bold">Copied!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4 text-neutral-400 shrink-0" />
+                          <span>Copy Link</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadModalVideo(activeModalVideo.mediaUrl, activeModalVideo.caption)}
+                      disabled={modalDownloading}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      <Download className="w-4 h-4 text-cyan-400 shrink-0" />
+                      <span>{modalDownloading ? 'Downloading...' : 'Download Video'}</span>
+                    </button>
+
+                    <div className="h-px bg-neutral-800 my-0.5" />
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setModalMenuOpen(false);
+                        openReportModal({
+                          type: 'video',
+                          targetId: activeModalVideo.id,
+                          targetName: `${activeModalVideo.creator.displayName || 'Creator'}'s video`,
+                          targetSubtitle: activeModalVideo.caption.slice(0, 35),
+                          targetThumbnail: activeModalVideo.thumbnailUrl,
+                        });
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+                    >
+                      <Flag className="w-4 h-4 text-red-400 shrink-0" />
+                      <span>Report</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -1135,8 +1135,8 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
                       : 'text-[#ff007a]'
                   }`}
                 >
-                  {(goalWidgetConfig?.current ?? 4083).toLocaleString()} /{' '}
-                  {(goalWidgetConfig?.target ?? 4100).toLocaleString()}
+                  {(goalWidgetConfig?.current ?? 0).toLocaleString()} /{' '}
+                  {Math.min(999999, Math.max(1, goalWidgetConfig?.target ?? 100)).toLocaleString()}
                 </span>
               </div>
               <div className="w-full h-2 bg-neutral-800/80 rounded-full overflow-hidden p-0.5 border border-white/5 select-none pointer-events-none">
@@ -1146,7 +1146,8 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
                       100,
                       Math.max(
                         0,
-                        ((goalWidgetConfig?.current ?? 4083) / (goalWidgetConfig?.target ?? 4100)) *
+                        ((goalWidgetConfig?.current ?? 0) /
+                          Math.min(999999, Math.max(1, goalWidgetConfig?.target ?? 100))) *
                           100
                       )
                     )}%`,

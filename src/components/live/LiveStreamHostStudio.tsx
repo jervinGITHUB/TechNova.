@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import {
   LiveStreamCanvas,
@@ -142,17 +142,29 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   // Adjustable Goal Bar Widget State
   const [goalWidgetConfig, setGoalWidgetConfig] = useState<GoalWidgetConfig>(() => {
     const init = initialBroadcast.goalWidgetConfig || {};
+    const autoFollowers = currentUser?.followersCount || 0;
     return {
       enabled: init.enabled ?? true,
       title: init.title || 'Follower Goal',
-      current: init.current ?? 4083,
-      target: init.target ?? 4100,
+      current: autoFollowers,
+      target: Math.min(999999, Math.max(1, init.target ?? 100)),
       posX: init.posX ?? 22,
       posY: init.posY ?? 13,
       widthPercent: init.widthPercent && init.widthPercent <= 85 ? init.widthPercent : 56,
       theme: init.theme || 'pink',
     };
   });
+
+  // Automatically keep current follower count updated from host's profile
+  useEffect(() => {
+    const autoFollowers = currentUser?.followersCount || 0;
+    setGoalWidgetConfig(prev => {
+      if (prev.current === autoFollowers) return prev;
+      const next = { ...prev, current: autoFollowers };
+      liveBroadcastService.updateStudioConfig({ goalConfig: next });
+      return next;
+    });
+  }, [currentUser?.followersCount]);
 
   const [selectedSourceId, setSelectedSourceId] = useState<'camera' | 'screen' | 'goal_bar' | null>('camera');
 
@@ -169,6 +181,14 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   const [micGain, setMicGain] = useState(85);
   const [desktopAudioGain, setDesktopAudioGain] = useState(75);
   const [desktopAudioMuted, setDesktopAudioMuted] = useState(false);
+
+  // Web Audio API refs for Real Microphone Input & VU Meter
+  const micMediaStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const gainNodeRef = useRef<GainNode | null>(null);
+  const audioAnimFrameRef = useRef<number | null>(null);
+  const [isMicAccessGranted, setIsMicAccessGranted] = useState(false);
 
   // Broadcast Overlays
   const [showOverlays, setShowOverlays] = useState(true);
@@ -311,22 +331,159 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [studioDropdownOpen]);
 
-  // Audio meter simulation
+  // Real Web Audio API Microphone Analyzer for Live Studio VU Meter
+  const initMicAudio = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+
+    let stream = micMediaStreamRef.current;
+    if (!stream || !stream.active || stream.getAudioTracks().length === 0) {
+      if (cameraRealStream && cameraRealStream.getAudioTracks().length > 0) {
+        stream = cameraRealStream;
+        micMediaStreamRef.current = stream;
+        setIsMicAccessGranted(true);
+      } else if (navigator.mediaDevices?.getUserMedia) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+              echoCancellation: true,
+              noiseSuppression: true,
+              autoGainControl: true,
+            },
+          });
+          micMediaStreamRef.current = stream;
+          setIsMicAccessGranted(true);
+        } catch (err) {
+          console.warn('Microphone permission or hardware unavailable:', err);
+          setIsMicAccessGranted(false);
+          return;
+        }
+      }
+    }
+
+    if (!stream || stream.getAudioTracks().length === 0) return;
+
+    try {
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtxClass) return;
+
+      if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+        audioContextRef.current = new AudioCtxClass();
+      }
+      const audioCtx = audioContextRef.current;
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume().catch(() => {});
+      }
+
+      const source = audioCtx.createMediaStreamSource(stream);
+      const gainNode = audioCtx.createGain();
+      gainNodeRef.current = gainNode;
+      gainNode.gain.value = (micGain / 100) * 1.5;
+
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.35;
+      analyserRef.current = analyser;
+
+      source.connect(gainNode);
+      gainNode.connect(analyser);
+
+      if (audioAnimFrameRef.current) {
+        cancelAnimationFrame(audioAnimFrameRef.current);
+      }
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      const updateMeter = () => {
+        if (!micActive || !micMediaStreamRef.current) {
+          setMicMeterLevel(0);
+          audioAnimFrameRef.current = requestAnimationFrame(updateMeter);
+          return;
+        }
+
+        analyser.getByteFrequencyData(dataArray);
+
+        let sum = 0;
+        let peak = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          const v = dataArray[i];
+          sum += v;
+          if (v > peak) peak = v;
+        }
+        const avg = sum / bufferLength;
+
+        // Human speaking voice creates dynamic energy across frequencies
+        const gainMult = Math.max(0.1, micGain / 80);
+        const speechLevel = ((avg * 0.7 + peak * 0.3) / 90) * gainMult * 100;
+        const clamped = Math.min(100, Math.max(0, Math.round(speechLevel)));
+
+        setMicMeterLevel(prev => {
+          if (clamped > prev) {
+            return clamped; // Fast attack
+          }
+          return Math.max(0, Math.round(prev * 0.8 + clamped * 0.2)); // Smooth natural decay
+        });
+
+        audioAnimFrameRef.current = requestAnimationFrame(updateMeter);
+      };
+
+      audioAnimFrameRef.current = requestAnimationFrame(updateMeter);
+    } catch (err) {
+      console.warn('Error setting up Web Audio mic analyser:', err);
+    }
+  }, [cameraRealStream, micActive, micGain]);
+
+  // Trigger mic setup on audio tab or when mic is active
   useEffect(() => {
-    const audioInterval = setInterval(() => {
-      if (micActive) {
-        setMicMeterLevel(Math.floor(40 + Math.random() * 45));
-      } else {
-        setMicMeterLevel(0);
+    if (micActive) {
+      initMicAudio();
+    }
+  }, [micActive, rightStudioTab, mode, initMicAudio]);
+
+  // Synchronize gain node when micGain slider is dragged
+  useEffect(() => {
+    if (gainNodeRef.current) {
+      gainNodeRef.current.gain.value = (micGain / 100) * 1.5;
+    }
+  }, [micGain]);
+
+  // Handle mic muting / unmuting tracks
+  useEffect(() => {
+    if (micMediaStreamRef.current) {
+      micMediaStreamRef.current.getAudioTracks().forEach(track => {
+        track.enabled = micActive;
+      });
+    }
+    if (!micActive) {
+      setMicMeterLevel(0);
+    }
+  }, [micActive]);
+
+  // System & desktop audio meter activity
+  useEffect(() => {
+    if (desktopAudioMuted) {
+      setDesktopMeterLevel(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      const flutter = Math.sin(Date.now() / 240) * 10 + Math.cos(Date.now() / 160) * 8;
+      const lvl = Math.min(100, Math.max(0, Math.round((desktopAudioGain / 100) * (42 + flutter))));
+      setDesktopMeterLevel(lvl);
+    }, 120);
+    return () => clearInterval(interval);
+  }, [desktopAudioMuted, desktopAudioGain]);
+
+  // Cleanup Web Audio on unmount
+  useEffect(() => {
+    return () => {
+      if (audioAnimFrameRef.current) {
+        cancelAnimationFrame(audioAnimFrameRef.current);
       }
-      if (!desktopAudioMuted) {
-        setDesktopMeterLevel(Math.floor(30 + Math.random() * 50));
-      } else {
-        setDesktopMeterLevel(0);
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close().catch(() => {});
       }
-    }, 150);
-    return () => clearInterval(audioInterval);
-  }, [micActive, desktopAudioMuted]);
+    };
+  }, []);
 
   // Timer loop for active broadcast
   useEffect(() => {
@@ -1172,40 +1329,42 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[10px] font-semibold text-neutral-400 block mb-1">
-                  Current:
+                  Current Followers:
                 </label>
-                <input
-                  type="number"
-                  value={goalWidgetConfig.current}
-                  onChange={e => {
-                    const val = Number(e.target.value);
-                    setGoalWidgetConfig(prev => {
-                      const updated = { ...prev, current: val };
-                      liveBroadcastService.updateStudioConfig({ goalConfig: updated });
-                      return updated;
-                    });
-                  }}
-                  className="w-full bg-[#181824] text-xs text-white px-2.5 py-1.5 rounded-xl border border-neutral-700/80 outline-none"
-                />
+                <div className="w-full bg-[#14141e] text-xs text-neutral-300 px-2.5 py-1.5 rounded-xl border border-neutral-800 flex items-center justify-between select-none">
+                  <span className="font-mono font-bold text-white">{(currentUser?.followersCount || 0).toLocaleString()}</span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">Auto</span>
+                </div>
               </div>
               <div>
                 <label className="text-[10px] font-semibold text-neutral-400 block mb-1">
-                  Target:
+                  Goal Target (Max 6 Digits):
                 </label>
                 <input
                   type="number"
-                  value={goalWidgetConfig.target}
+                  min={1}
+                  max={999999}
+                  value={goalWidgetConfig.target ?? 100}
                   onChange={e => {
-                    const val = Number(e.target.value);
+                    let cleaned = e.target.value.replace(/[^0-9]/g, '');
+                    if (cleaned.length > 6) cleaned = cleaned.slice(0, 6);
+                    let val = Number(cleaned);
+                    if (val > 999999) val = 999999;
+                    if (val < 1 && cleaned !== '') val = 1;
+                    const finalTarget = cleaned === '' ? 1 : val;
                     setGoalWidgetConfig(prev => {
-                      const updated = { ...prev, target: val };
+                      const updated = { ...prev, target: finalTarget };
                       liveBroadcastService.updateStudioConfig({ goalConfig: updated });
                       return updated;
                     });
                   }}
-                  className="w-full bg-[#181824] text-xs text-white px-2.5 py-1.5 rounded-xl border border-neutral-700/80 outline-none"
+                  placeholder="e.g. 5000"
+                  className="w-full bg-[#181824] text-xs text-white px-2.5 py-1.5 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none font-mono"
                 />
               </div>
+            </div>
+            <div className="text-[9px] text-neutral-500 italic mt-0.5">
+              * Current followers count is automatically updated from your account. Goal is limited to max 6 digits (999,999).
             </div>
           </div>
         </div>
@@ -1377,11 +1536,23 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
           <div className="flex items-center gap-2">
             <Mic className={`w-4 h-4 ${micActive ? 'text-[#ff007a]' : 'text-neutral-500'}`} />
             <span className="text-xs font-bold text-white">Microphone</span>
+            {isMicAccessGranted && micActive && (
+              <span className="inline-flex items-center gap-1 text-[9px] text-emerald-400 font-bold px-1.5 py-0.2 rounded bg-emerald-500/10 border border-emerald-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Active
+              </span>
+            )}
           </div>
           <button
             type="button"
-            onClick={() => setMicActive(!micActive)}
-            className={`text-[10px] font-bold px-2 py-0.5 rounded-full cursor-pointer ${
+            onClick={() => {
+              const next = !micActive;
+              setMicActive(next);
+              if (next && !micMediaStreamRef.current) {
+                initMicAudio();
+              }
+            }}
+            className={`text-[10px] font-bold px-2 py-0.5 rounded-full cursor-pointer transition-colors ${
               micActive ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'
             }`}
           >
@@ -1390,26 +1561,45 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         </div>
 
         <div className="space-y-1">
-          <div className="h-2 w-full bg-neutral-900 rounded-full overflow-hidden flex">
+          <div className="h-2.5 w-full bg-neutral-900 rounded-full overflow-hidden flex p-0.5 border border-white/5">
             <div
               style={{ width: `${micMeterLevel}%` }}
-              className={`h-full transition-all duration-100 ${
+              className={`h-full rounded-full transition-all duration-75 ${
                 micMeterLevel > 80
-                  ? 'bg-red-500'
+                  ? 'bg-red-500 shadow-[0_0_14px_rgba(239,68,68,0.95)]'
                   : micMeterLevel > 60
-                  ? 'bg-amber-400'
-                  : 'bg-emerald-400'
+                  ? 'bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.9)]'
+                  : micMeterLevel > 5
+                  ? 'bg-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.8)]'
+                  : 'bg-neutral-700'
               }`}
             />
           </div>
           <div className="flex justify-between text-[9px] text-neutral-500 font-mono">
             <span>-40dB</span>
-            <span>-12dB</span>
+            <span className="text-neutral-400 font-bold">
+              {micActive
+                ? micMeterLevel > 5
+                  ? `${Math.round(-40 + (micMeterLevel / 100) * 40)}dB`
+                  : '-∞dB'
+                : 'MUTED'}
+            </span>
             <span>0dB</span>
           </div>
         </div>
 
-        <div className="flex justify-between items-center text-[11px] text-neutral-400">
+        {!isMicAccessGranted && (
+          <button
+            type="button"
+            onClick={() => initMicAudio()}
+            className="w-full py-1.5 px-3 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+          >
+            <Mic className="w-3.5 h-3.5" />
+            <span>Enable & Test Hardware Microphone</span>
+          </button>
+        )}
+
+        <div className="flex justify-between items-center text-[11px] text-neutral-400 pt-1">
           <span>Gain:</span>
           <span className="font-mono text-white">{micGain}%</span>
         </div>
@@ -2598,10 +2788,10 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                   <label className="flex items-center justify-between p-3.5 rounded-2xl bg-[#181824] border border-neutral-800 text-xs text-neutral-300 cursor-pointer hover:border-neutral-700 transition-colors">
                     <div className="flex flex-col gap-0.5">
                       <span className="font-semibold text-white">
-                        {goalWidgetConfig.title} ({goalWidgetConfig.current}/{goalWidgetConfig.target})
+                        {goalWidgetConfig.title} ({(currentUser?.followersCount || 0).toLocaleString()} / {(goalWidgetConfig.target ?? 100).toLocaleString()})
                       </span>
                       <span className="text-[10px] text-neutral-400">
-                        Adjustable follower milestone widget
+                        Follower milestone bar · Current count is automatic
                       </span>
                     </div>
                     <input
@@ -2614,6 +2804,41 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                       className="rounded accent-[#ff007a] w-4 h-4 cursor-pointer"
                     />
                   </label>
+
+                  {goalWidgetConfig.enabled && (
+                    <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[11px] font-semibold text-neutral-300">
+                          Custom Goal Target:
+                        </label>
+                        <span className="text-[10px] text-neutral-500 font-mono">Max 6 digits (999,999)</span>
+                      </div>
+                      <input
+                        type="number"
+                        min={1}
+                        max={999999}
+                        value={goalWidgetConfig.target ?? 100}
+                        onChange={e => {
+                          let cleaned = e.target.value.replace(/[^0-9]/g, '');
+                          if (cleaned.length > 6) cleaned = cleaned.slice(0, 6);
+                          let val = Number(cleaned);
+                          if (val > 999999) val = 999999;
+                          if (val < 1 && cleaned !== '') val = 1;
+                          const finalTarget = cleaned === '' ? 1 : val;
+                          setGoalWidgetConfig(prev => {
+                            const updated = { ...prev, target: finalTarget };
+                            liveBroadcastService.updateStudioConfig({ goalConfig: updated });
+                            return updated;
+                          });
+                        }}
+                        placeholder="e.g. 5000"
+                        className="w-full bg-[#121218] text-xs text-white px-3 py-2 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] outline-none font-mono"
+                      />
+                      <div className="text-[9px] text-neutral-500">
+                        Current: <span className="text-white font-bold font-mono">{(currentUser?.followersCount || 0).toLocaleString()}</span> (auto-synced)
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

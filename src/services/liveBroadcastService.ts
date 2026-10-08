@@ -64,8 +64,8 @@ const DEFAULT_SCREEN_TRANSFORM: CanvasSourceTransform = {
 const DEFAULT_GOAL_CONFIG: GoalWidgetConfig = {
   enabled: true,
   title: 'Follower Goal',
-  current: 4083,
-  target: 4100,
+  current: 0,
+  target: 100,
   posX: 22,
   posY: 13,
   widthPercent: 56,
@@ -504,7 +504,9 @@ class LiveBroadcastService {
         ctx.font = 'bold 14px monospace';
         ctx.textAlign = 'right';
         ctx.fillStyle = '#ff007a';
-        ctx.fillText(`${(goal.current ?? 4083).toLocaleString()} / ${(goal.target ?? 4100).toLocaleString()}`, goalX + goalW - 16, goalY + 22);
+        const curFollowers = Math.max(0, goal.current ?? 0);
+        const tgtFollowers = Math.min(999999, Math.max(1, goal.target ?? 100));
+        ctx.fillText(`${curFollowers.toLocaleString()} / ${tgtFollowers.toLocaleString()}`, goalX + goalW - 16, goalY + 22);
 
         // Progress bar track
         const barX = goalX + 16;
@@ -517,7 +519,7 @@ class LiveBroadcastService {
         ctx.fill();
 
         // Progress bar fill
-        const pct = Math.min(1, Math.max(0, (goal.current ?? 4083) / (goal.target ?? 4100)));
+        const pct = Math.min(1, Math.max(0, curFollowers / tgtFollowers));
         ctx.fillStyle = '#ff007a';
         ctx.beginPath();
         ctx.roundRect(barX, barY, barW * pct, barH, 4);

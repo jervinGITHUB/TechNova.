@@ -21,6 +21,10 @@ import {
   Search,
   Users,
   UserCheck,
+  MoreVertical,
+  Copy,
+  Download,
+  Check,
 } from 'lucide-react';
 
 interface VideoFeedCardProps {
@@ -53,9 +57,65 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isCaptionExpanded, setIsCaptionExpanded] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [copyFeedback, setCopyFeedback] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgAudioRef = useRef<HTMLAudioElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close 3-dots dropdown when clicking outside
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setMoreMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [moreMenuOpen]);
+
+  const handleCopyLink = () => {
+    const videoUrl = typeof window !== 'undefined'
+      ? `${window.location.origin}/video/${video.id}`
+      : `https://viralhub.app/video/${video.id}`;
+    navigator.clipboard?.writeText(videoUrl);
+    setCopyFeedback(true);
+    setTimeout(() => {
+      setCopyFeedback(false);
+      setMoreMenuOpen(false);
+    }, 1800);
+  };
+
+  const handleDownloadVideo = async () => {
+    setIsDownloading(true);
+    try {
+      const response = await fetch(video.mediaUrl);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      const safeCaption = (video.caption.slice(0, 20) || 'viralhub_video').replace(/[^a-zA-Z0-9_-]/g, '_');
+      link.download = `${safeCaption}.mp4`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(blobUrl);
+    } catch {
+      const link = document.createElement('a');
+      link.href = video.mediaUrl;
+      link.target = '_blank';
+      link.download = 'video.mp4';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      setIsDownloading(false);
+      setMoreMenuOpen(false);
+    }
+  };
 
   useEffect(() => {
     setVideoSrc(video.mediaUrl);
@@ -395,23 +455,78 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           </span>
         </div>
 
-        {/* Report Video Button */}
-        <div className="flex flex-col items-center">
+        {/* 3 Dots Options Button (Copy Link, Download Video, Report Video) */}
+        <div className="relative flex flex-col items-center" ref={menuRef}>
           <button
-            onClick={() =>
-              openReportModal({
-                type: 'video',
-                targetId: video.id,
-                targetName: `${video.creator.displayName || 'Creator'}'s video`,
-                targetSubtitle: video.caption.slice(0, 35),
-                targetThumbnail: video.thumbnailUrl,
-              })
-            }
-            className="p-2.5 rounded-full bg-black/40 backdrop-blur-md text-white hover:text-red-400 hover:bg-black/60 transition-all cursor-pointer"
-            title="Report Video"
+            onClick={e => {
+              e.stopPropagation();
+              setMoreMenuOpen(prev => !prev);
+            }}
+            className={`p-2.5 rounded-full backdrop-blur-md transition-all cursor-pointer ${
+              moreMenuOpen
+                ? 'bg-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.6)]'
+                : 'bg-black/40 text-white hover:text-[#ff007a] hover:bg-black/60'
+            }`}
+            title="More Options"
           >
-            <Flag className="w-5 h-5" />
+            <MoreVertical className="w-5 h-5" />
           </button>
+
+          {/* 3 Dots Dropdown Menu */}
+          {moreMenuOpen && (
+            <div
+              onClick={e => e.stopPropagation()}
+              className="absolute right-12 bottom-0 z-50 w-44 bg-[#14141e]/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
+            >
+              <button
+                type="button"
+                onClick={handleCopyLink}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                {copyFeedback ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="text-emerald-400 font-bold">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4 text-neutral-400 shrink-0" />
+                    <span>Copy Link</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadVideo}
+                disabled={isDownloading}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Download className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span>{isDownloading ? 'Downloading...' : 'Download Video'}</span>
+              </button>
+
+              <div className="h-px bg-neutral-800 my-0.5" />
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMoreMenuOpen(false);
+                  openReportModal({
+                    type: 'video',
+                    targetId: video.id,
+                    targetName: `${video.creator.displayName || 'Creator'}'s video`,
+                    targetSubtitle: video.caption.slice(0, 35),
+                    targetThumbnail: video.thumbnailUrl,
+                  });
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+              >
+                <Flag className="w-4 h-4 text-red-400 shrink-0" />
+                <span>Report</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
