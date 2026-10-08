@@ -17,6 +17,9 @@ import {
   ArrowRightLeft,
   Shield,
   ShieldAlert,
+  Laptop,
+  Moon,
+  Sun,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -39,6 +42,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
     refreshFeed,
     loginWithGoogle,
     setAuthView,
+    themeMode,
+    setThemeMode,
   } = useApp();
 
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -223,6 +228,68 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
                     <ShieldAlert className="w-4 h-4 text-amber-400" />
                     <span>Report History</span>
                   </button>
+
+                  <div className="h-px bg-neutral-800 my-1" />
+
+                  {/* Dark Mode Theme Selector: AUTO, DARK, LIGHT */}
+                  <div className="px-2 py-1.5 rounded-xl bg-[#14141d]/80 border border-neutral-800/60 my-0.5">
+                    <div className="flex items-center justify-between mb-1.5 px-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-neutral-400">Darkmode</span>
+                      <span className="text-[10px] font-bold text-[#ff007a] uppercase tracking-wide px-1.5 py-0.5 rounded bg-[#ff007a]/15 border border-[#ff007a]/30">
+                        {themeMode}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 bg-[#0d0d14] p-1 rounded-xl border border-neutral-800/80">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setThemeMode('auto');
+                        }}
+                        className={`flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                          themeMode === 'auto'
+                            ? 'bg-[#ff007a] text-white shadow-[0_0_8px_rgba(255,0,122,0.5)] font-bold'
+                            : 'text-neutral-400 hover:text-white hover:bg-[#1a1a26]'
+                        }`}
+                        title="Auto (Follows Device/System theme)"
+                      >
+                        <Laptop className="w-3 h-3" />
+                        <span>Auto</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setThemeMode('dark');
+                        }}
+                        className={`flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                          themeMode === 'dark'
+                            ? 'bg-[#ff007a] text-white shadow-[0_0_8px_rgba(255,0,122,0.5)] font-bold'
+                            : 'text-neutral-400 hover:text-white hover:bg-[#1a1a26]'
+                        }`}
+                        title="Dark mode"
+                      >
+                        <Moon className="w-3 h-3" />
+                        <span>Dark</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setThemeMode('light');
+                        }}
+                        className={`flex items-center justify-center gap-1 py-1.5 px-1.5 rounded-lg text-[11px] font-semibold transition-all cursor-pointer ${
+                          themeMode === 'light'
+                            ? 'bg-[#ff007a] text-white shadow-[0_0_8px_rgba(255,0,122,0.5)] font-bold'
+                            : 'text-neutral-400 hover:text-white hover:bg-[#1a1a26]'
+                        }`}
+                        title="Light mode"
+                      >
+                        <Sun className="w-3 h-3" />
+                        <span>Light</span>
+                      </button>
+                    </div>
+                  </div>
 
                   <div className="h-px bg-neutral-800 my-1" />
 

@@ -168,6 +168,8 @@ export interface FollowRequest {
 
 export type FollowStatus = 'none' | 'requested' | 'following' | 'friends';
 
+export type ThemeMode = 'auto' | 'dark' | 'light';
+
 export interface NotificationItem {
   id: string;
   recipientId?: string;
@@ -177,6 +179,8 @@ export interface NotificationItem {
     | 'follow'
     | 'follow_request'
     | 'comment'
+    | 'mention'
+    | 'tag'
     | 'share'
     | 'video_revoked'
     | 'account_banned'

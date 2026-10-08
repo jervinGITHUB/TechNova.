@@ -38,6 +38,7 @@ const AppContent: React.FC = () => {
     isAdmin,
     switchAccountModalOpen,
     setSwitchAccountModalOpen,
+    resolvedTheme,
   } = useApp();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -166,7 +167,7 @@ const AppContent: React.FC = () => {
   const isLiveStudio = activeTab === 'live_host_setup' || activeTab === 'live_host_active';
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#0c0c10] text-white flex flex-col md:flex-row antialiased selection:bg-[#ff007a] selection:text-white">
+    <div className={`h-screen w-screen overflow-hidden ${resolvedTheme === 'light' ? 'bg-[#f6f8fb] text-slate-900' : 'bg-[#0c0c10] text-white'} flex flex-col md:flex-row antialiased selection:bg-[#ff007a] selection:text-white`}>
       {/* Desktop Fixed Sidebar: Hidden in Live Studio Setup & Active Broadcast so workspace is wide */}
       {!isLiveStudio && (
         <div className="hidden md:block h-full shrink-0">

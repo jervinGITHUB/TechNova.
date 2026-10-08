@@ -21,11 +21,19 @@ import {
   Loader2,
   ShieldAlert,
   Ban,
+  AtSign,
+  Tag,
+  Sparkles,
 } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
+import { NotificationItem } from '../../types';
+
+type NotificationFilter = 'all' | 'likes' | 'comments' | 'mentions' | 'followers';
 
 export const NotificationsView: React.FC = () => {
   const {
+    currentUser,
+    users,
     notifications,
     videos,
     markAllNotificationsAsRead,
@@ -35,7 +43,10 @@ export const NotificationsView: React.FC = () => {
     declineFollowRequest,
     submitVideoAppeal,
     setPreBanAppealModalOpen,
+    addCustomNotification,
   } = useApp();
+
+  const [activeFilter, setActiveFilter] = useState<NotificationFilter>('all');
 
   // Realtime relative timestamp ticker (updates "Just now" to "1m ago", "5m ago", etc. automatically)
   const [, setTick] = useState(0);
@@ -105,6 +116,10 @@ export const NotificationsView: React.FC = () => {
         return <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />;
       case 'appeal_status':
         return <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />;
+      case 'mention':
+        return <AtSign className="w-3.5 h-3.5 text-cyan-400" />;
+      case 'tag':
+        return <Tag className="w-3.5 h-3.5 text-[#ff007a]" />;
       default:
         return <Bell className="w-3.5 h-3.5 text-amber-400" />;
     }
@@ -115,14 +130,183 @@ export const NotificationsView: React.FC = () => {
     return deduplicateNotifications(notifications);
   }, [notifications]);
 
+  const isNotificationMatchingFilter = (item: NotificationItem, filter: NotificationFilter) => {
+    switch (filter) {
+      case 'likes':
+        return (
+          item.type === 'like' ||
+          item.targetText?.toLowerCase().includes('liked') ||
+          item.targetText?.toLowerCase().includes('like')
+        );
+      case 'comments':
+        return (
+          item.type === 'comment' ||
+          item.targetText?.toLowerCase().includes('comment') ||
+          item.targetText?.toLowerCase().includes('replied')
+        );
+      case 'mentions':
+        return (
+          item.type === 'mention' ||
+          item.type === 'tag' ||
+          item.targetText?.toLowerCase().includes('mention') ||
+          item.targetText?.toLowerCase().includes('tagged') ||
+          item.targetText?.toLowerCase().includes('tag') ||
+          item.targetText?.includes('@')
+        );
+      case 'followers':
+        return (
+          item.type === 'follow' ||
+          item.type === 'follow_request' ||
+          item.targetText?.toLowerCase().includes('follow') ||
+          item.targetText?.toLowerCase().includes('friend')
+        );
+      case 'all':
+      default:
+        return true;
+    }
+  };
+
+  const filterCounts = React.useMemo(() => {
+    return {
+      all: validNotifications.length,
+      likes: validNotifications.filter(n => isNotificationMatchingFilter(n, 'likes')).length,
+      comments: validNotifications.filter(n => isNotificationMatchingFilter(n, 'comments')).length,
+      mentions: validNotifications.filter(n => isNotificationMatchingFilter(n, 'mentions')).length,
+      followers: validNotifications.filter(n => isNotificationMatchingFilter(n, 'followers')).length,
+    };
+  }, [validNotifications]);
+
+  const filterUnreadCounts = React.useMemo(() => {
+    return {
+      all: validNotifications.filter(n => n.isUnread).length,
+      likes: validNotifications.filter(n => n.isUnread && isNotificationMatchingFilter(n, 'likes')).length,
+      comments: validNotifications.filter(n => n.isUnread && isNotificationMatchingFilter(n, 'comments')).length,
+      mentions: validNotifications.filter(n => n.isUnread && isNotificationMatchingFilter(n, 'mentions')).length,
+      followers: validNotifications.filter(n => n.isUnread && isNotificationMatchingFilter(n, 'followers')).length,
+    };
+  }, [validNotifications]);
+
+  const filteredNotifications = React.useMemo(() => {
+    return validNotifications.filter(n => isNotificationMatchingFilter(n, activeFilter));
+  }, [validNotifications, activeFilter]);
+
   const unreadCount = validNotifications.filter(n => n.isUnread).length;
 
-  const sortedNotifications = validNotifications;
+  const handleSimulateNotification = (type: 'like' | 'comment' | 'mention' | 'follow') => {
+    const candidateActors = users.filter(u => !currentUser || u.id !== currentUser.id);
+    const actorUser = candidateActors.length > 0
+      ? candidateActors[Math.floor(Math.random() * candidateActors.length)]
+      : {
+          id: 'user_alex',
+          username: 'alex_creator',
+          displayName: 'Alex Rivers',
+          avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+        };
+
+    const targetVideo = videos[0];
+
+    if (type === 'like') {
+      addCustomNotification({
+        type: 'like',
+        actor: {
+          id: actorUser.id,
+          username: actorUser.username,
+          displayName: actorUser.displayName,
+          avatar: actorUser.avatar,
+        },
+        targetText: targetVideo ? `liked your video: "${targetVideo.caption.slice(0, 30)}"` : 'liked your recent video post',
+        videoId: targetVideo?.id,
+      });
+      setActiveFilter('likes');
+    } else if (type === 'comment') {
+      addCustomNotification({
+        type: 'comment',
+        actor: {
+          id: actorUser.id,
+          username: actorUser.username,
+          displayName: actorUser.displayName,
+          avatar: actorUser.avatar,
+        },
+        targetText: 'commented: "This video is absolute fire! Keep it going! 🔥"',
+        videoId: targetVideo?.id,
+      });
+      setActiveFilter('comments');
+    } else if (type === 'mention') {
+      addCustomNotification({
+        type: 'mention',
+        actor: {
+          id: actorUser.id,
+          username: actorUser.username,
+          displayName: actorUser.displayName,
+          avatar: actorUser.avatar,
+        },
+        targetText: `mentioned you in a comment: "@${currentUser?.username || 'you'} definitely need to see this clip!"`,
+        videoId: targetVideo?.id,
+      });
+      setActiveFilter('mentions');
+    } else if (type === 'follow') {
+      addCustomNotification({
+        type: 'follow',
+        actor: {
+          id: actorUser.id,
+          username: actorUser.username,
+          displayName: actorUser.displayName,
+          avatar: actorUser.avatar,
+        },
+        targetText: 'started following you',
+      });
+      setActiveFilter('followers');
+    }
+  };
+
+  const tabs: {
+    id: NotificationFilter;
+    label: string;
+    icon: React.ReactNode;
+    count: number;
+    unread: number;
+  }[] = [
+    {
+      id: 'all',
+      label: 'ALL ACTIVITY',
+      icon: <Sparkles className="w-3.5 h-3.5" />,
+      count: filterCounts.all,
+      unread: filterUnreadCounts.all,
+    },
+    {
+      id: 'likes',
+      label: 'LIKED',
+      icon: <Heart className="w-3.5 h-3.5" />,
+      count: filterCounts.likes,
+      unread: filterUnreadCounts.likes,
+    },
+    {
+      id: 'comments',
+      label: 'COMMENT',
+      icon: <MessageCircle className="w-3.5 h-3.5" />,
+      count: filterCounts.comments,
+      unread: filterUnreadCounts.comments,
+    },
+    {
+      id: 'mentions',
+      label: 'MENTION OR TAG',
+      icon: <AtSign className="w-3.5 h-3.5" />,
+      count: filterCounts.mentions,
+      unread: filterUnreadCounts.mentions,
+    },
+    {
+      id: 'followers',
+      label: 'FOLLOWERS',
+      icon: <Users className="w-3.5 h-3.5" />,
+      count: filterCounts.followers,
+      unread: filterUnreadCounts.followers,
+    },
+  ];
 
   return (
     <div className="flex-1 p-4 sm:p-8 max-w-3xl mx-auto w-full select-none text-left">
       {/* Top Header */}
-      <div className="flex items-center justify-between mb-6 pb-3 border-b border-neutral-800/80">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-neutral-800/80">
         <div className="flex items-center gap-3">
           <h2 className="text-2xl font-bold font-brand text-white">Notifications</h2>
           {unreadCount > 0 ? (
@@ -136,20 +320,64 @@ export const NotificationsView: React.FC = () => {
           )}
         </div>
 
-        {unreadCount > 0 && (
-          <button
-            onClick={markAllNotificationsAsRead}
-            className="text-xs text-[#ff007a] hover:text-[#ff3399] font-bold flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-[#ff007a]/10 hover:bg-[#ff007a]/20 border border-[#ff007a]/30 transition-all cursor-pointer"
-          >
-            <Check className="w-3.5 h-3.5" />
-            <span>Mark all as read</span>
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {unreadCount > 0 && (
+            <button
+              onClick={markAllNotificationsAsRead}
+              className="text-xs text-[#ff007a] hover:text-[#ff3399] font-bold flex items-center gap-1.5 py-1.5 px-3 rounded-xl bg-[#ff007a]/10 hover:bg-[#ff007a]/20 border border-[#ff007a]/30 transition-all cursor-pointer"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Mark all as read</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Categories Filter Tabs: ALL ACTIVITY, LIKED, COMMENT, MENTION OR TAG, FOLLOWERS */}
+      <div className="mb-6 overflow-x-auto no-scrollbar pb-1">
+        <div className="flex items-center gap-2 min-w-max">
+          {tabs.map(tab => {
+            const isActive = activeFilter === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveFilter(tab.id)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
+                  isActive
+                    ? 'bg-gradient-to-r from-[#ff007a] to-[#d00062] text-white shadow-[0_0_15px_rgba(255,0,122,0.35)] scale-[1.02]'
+                    : 'bg-[#161622] text-neutral-400 hover:text-white hover:bg-[#202030] border border-neutral-800/80'
+                }`}
+              >
+                <span className={isActive ? 'text-white' : 'text-neutral-400'}>
+                  {tab.icon}
+                </span>
+                <span>{tab.label}</span>
+                {tab.count > 0 && (
+                  <span
+                    className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                      isActive
+                        ? 'bg-white/25 text-white'
+                        : tab.unread > 0
+                        ? 'bg-[#ff007a] text-white'
+                        : 'bg-neutral-800 text-neutral-400'
+                    }`}
+                  >
+                    {tab.count}
+                  </span>
+                )}
+                {tab.unread > 0 && !isActive && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-[#ff007a] shadow-[0_0_5px_rgba(255,0,122,0.8)]" />
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Notifications list */}
       <div className="space-y-3">
-        {sortedNotifications.map(item => {
+        {filteredNotifications.map(item => {
           const matchedVideo = item.videoId ? videos.find(v => v.id === item.videoId) : null;
           const currentAppealStatus = matchedVideo?.appealStatus || item.appealStatus || 'none';
 
@@ -371,11 +599,166 @@ export const NotificationsView: React.FC = () => {
           );
         })}
 
-        {notifications.length === 0 && (
-          <div className="text-center py-16 text-neutral-500 text-xs">
-            No notifications at this time.
+        {filteredNotifications.length === 0 && (
+          <div className="py-12 px-6 rounded-2xl bg-[#14141e]/60 border border-neutral-800/80 text-center flex flex-col items-center gap-3 animate-fadeIn">
+            <div className="w-12 h-12 rounded-2xl bg-[#1d1d2b] flex items-center justify-center text-[#ff007a] shadow-inner">
+              {activeFilter === 'likes' ? (
+                <Heart className="w-6 h-6 text-[#ff007a]" />
+              ) : activeFilter === 'comments' ? (
+                <MessageCircle className="w-6 h-6 text-emerald-400" />
+              ) : activeFilter === 'mentions' ? (
+                <AtSign className="w-6 h-6 text-cyan-400" />
+              ) : activeFilter === 'followers' ? (
+                <Users className="w-6 h-6 text-blue-400" />
+              ) : (
+                <Bell className="w-6 h-6 text-amber-400" />
+              )}
+            </div>
+
+            <div>
+              <h4 className="text-sm font-bold text-white">
+                {activeFilter === 'likes'
+                  ? 'No Likes Yet'
+                  : activeFilter === 'comments'
+                  ? 'No Comments Yet'
+                  : activeFilter === 'mentions'
+                  ? 'No Mentions or Tags Yet'
+                  : activeFilter === 'followers'
+                  ? 'No Follower Activity Yet'
+                  : 'All Caught Up!'}
+              </h4>
+              <p className="text-xs text-neutral-400 max-w-sm mt-1 leading-relaxed">
+                {activeFilter === 'likes'
+                  ? 'When users like your videos or comments, they will appear here.'
+                  : activeFilter === 'comments'
+                  ? 'When someone leaves a comment on your posts or replies to you, it will be listed here.'
+                  : activeFilter === 'mentions'
+                  ? `When creators tag you or mention @${currentUser?.username || 'you'}, you will get notified here.`
+                  : activeFilter === 'followers'
+                  ? 'When new creators follow you or send follow requests, they will show up here.'
+                  : 'No new notifications right now. Check back soon for fresh community activity!'}
+              </p>
+            </div>
+
+            {/* Quick interactive test simulation button */}
+            <div className="pt-2 flex flex-wrap items-center justify-center gap-2">
+              {activeFilter === 'likes' && (
+                <button
+                  type="button"
+                  onClick={() => handleSimulateNotification('like')}
+                  className="px-3.5 py-2 rounded-xl bg-[#ff007a]/15 hover:bg-[#ff007a]/25 text-[#ff007a] border border-[#ff007a]/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <Heart className="w-3.5 h-3.5" />
+                  <span>Simulate Like Notification</span>
+                </button>
+              )}
+              {activeFilter === 'comments' && (
+                <button
+                  type="button"
+                  onClick={() => handleSimulateNotification('comment')}
+                  className="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                  <span>Simulate Comment Notification</span>
+                </button>
+              )}
+              {activeFilter === 'mentions' && (
+                <button
+                  type="button"
+                  onClick={() => handleSimulateNotification('mention')}
+                  className="px-3.5 py-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-400 border border-cyan-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <AtSign className="w-3.5 h-3.5" />
+                  <span>Simulate Mention / Tag Notification</span>
+                </button>
+              )}
+              {activeFilter === 'followers' && (
+                <button
+                  type="button"
+                  onClick={() => handleSimulateNotification('follow')}
+                  className="px-3.5 py-2 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 border border-blue-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>Simulate Follower Notification</span>
+                </button>
+              )}
+              {activeFilter === 'all' && (
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleSimulateNotification('like')}
+                    className="px-2.5 py-1.5 rounded-lg bg-[#ff007a]/15 text-[#ff007a] text-xs font-bold hover:bg-[#ff007a]/25 transition-colors cursor-pointer"
+                  >
+                    + Test Like
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSimulateNotification('comment')}
+                    className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-bold hover:bg-emerald-500/25 transition-colors cursor-pointer"
+                  >
+                    + Test Comment
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSimulateNotification('mention')}
+                    className="px-2.5 py-1.5 rounded-lg bg-cyan-500/15 text-cyan-400 text-xs font-bold hover:bg-cyan-500/25 transition-colors cursor-pointer"
+                  >
+                    + Test Mention
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSimulateNotification('follow')}
+                    className="px-2.5 py-1.5 rounded-lg bg-blue-500/15 text-blue-400 text-xs font-bold hover:bg-blue-500/25 transition-colors cursor-pointer"
+                  >
+                    + Test Follower
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
+      </div>
+
+      {/* Quick Test Bar at the bottom */}
+      <div className="mt-8 pt-4 border-t border-neutral-800/60 flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
+        <div className="flex items-center gap-1.5 text-neutral-400 font-medium">
+          <Sparkles className="w-3.5 h-3.5 text-[#ff007a]" />
+          <span>Quick test category activities:</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => handleSimulateNotification('like')}
+            className="px-2.5 py-1 rounded-lg bg-[#181824] hover:bg-[#222232] text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer text-[11px] font-semibold"
+            title="Create a test Like notification"
+          >
+            + Test Like
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSimulateNotification('comment')}
+            className="px-2.5 py-1 rounded-lg bg-[#181824] hover:bg-[#222232] text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer text-[11px] font-semibold"
+            title="Create a test Comment notification"
+          >
+            + Test Comment
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSimulateNotification('mention')}
+            className="px-2.5 py-1 rounded-lg bg-[#181824] hover:bg-[#222232] text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer text-[11px] font-semibold"
+            title="Create a test Mention / Tag notification"
+          >
+            + Test Mention/Tag
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSimulateNotification('follow')}
+            className="px-2.5 py-1 rounded-lg bg-[#181824] hover:bg-[#222232] text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer text-[11px] font-semibold"
+            title="Create a test Follower notification"
+          >
+            + Test Follower
+          </button>
+        </div>
       </div>
 
       {/* ===================================================================== */}

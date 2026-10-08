@@ -16,6 +16,7 @@ import {
   AdminRecord,
   CommentEntry,
   LiveViewer,
+  ThemeMode,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -593,6 +594,14 @@ interface AppContextType {
   // Feed refresh & shuffle trigger
   feedRefreshKey: number;
   refreshFeed: () => void;
+
+  // Appearance & Theme Mode (Auto, Dark, Light)
+  themeMode: ThemeMode;
+  setThemeMode: (mode: ThemeMode) => void;
+  resolvedTheme: 'dark' | 'light';
+
+  // Notifications
+  addCustomNotification: (item: Omit<NotificationItem, 'id' | 'timestamp' | 'createdAt' | 'isUnread'>) => void;
 }
 
 export const deduplicateVideos = (videoList: Video[]): Video[] => {
@@ -967,6 +976,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setFeedRefreshKey(k => k + 1);
     syncWithSupabase(overrideUser);
   };
+
+  // Appearance & Theme Mode (Auto, Dark, Light)
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => {
+    return storage.get<ThemeMode>('viralhub_theme_mode', 'auto');
+  });
+
+  const [systemIsDark, setSystemIsDark] = useState<boolean>(() => {
+    if (typeof window !== 'undefined' && window.matchMedia) {
+      return window.matchMedia('(prefers-color-scheme: dark)').matches;
+    }
+    return true;
+  });
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (e: MediaQueryListEvent) => {
+      setSystemIsDark(e.matches);
+    };
+    mediaQuery.addEventListener('change', handler);
+    return () => mediaQuery.removeEventListener('change', handler);
+  }, []);
+
+  const resolvedTheme: 'dark' | 'light' = themeMode === 'auto' ? (systemIsDark ? 'dark' : 'light') : themeMode;
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const root = document.documentElement;
+    if (resolvedTheme === 'dark') {
+      root.classList.add('dark');
+      root.classList.remove('light');
+      root.setAttribute('data-theme', 'dark');
+      root.style.colorScheme = 'dark';
+    } else {
+      root.classList.remove('dark');
+      root.classList.add('light');
+      root.setAttribute('data-theme', 'light');
+      root.style.colorScheme = 'light';
+    }
+  }, [resolvedTheme]);
+
+  const setThemeMode = (mode: ThemeMode) => {
+    setThemeModeState(mode);
+    storage.set('viralhub_theme_mode', mode);
+  };
+
+  const addCustomNotification = useCallback(
+    (item: Omit<NotificationItem, 'id' | 'timestamp' | 'createdAt' | 'isUnread'>) => {
+      const nowIso = new Date().toISOString();
+      const newNotif: NotificationItem = {
+        ...item,
+        id: `notif_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        timestamp: nowIso,
+        createdAt: nowIso,
+        isUnread: true,
+      };
+      setNotifications(prev => deduplicateNotifications([newNotif, ...prev]));
+      if (currentUser?.id) {
+        supabaseDb.insertNotification(newNotif, currentUser.id);
+      }
+    },
+    [currentUser]
+  );
 
   // Dynamic admin state (queried from Supabase Admin table or role)
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
@@ -4041,6 +4113,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {}
     }
 
+    // 5. Trigger MENTION notifications if text contains @username
+    const mentionMatches = cleanText.match(/@([a-zA-Z0-9_]+)/g);
+    if (mentionMatches && mentionMatches.length > 0) {
+      const mentionedUsernames = new Set(mentionMatches.map(m => m.slice(1).toLowerCase()));
+      users.forEach(u => {
+        if (
+          u.username &&
+          mentionedUsernames.has(u.username.toLowerCase()) &&
+          !isSameUser(u.id, currentUser.id)
+        ) {
+          const mentionNotif: NotificationItem = {
+            id: `notif_${Date.now()}_men_${u.id.slice(0, 4)}`,
+            recipientId: u.id,
+            type: 'mention',
+            actor: {
+              id: currentUser.id,
+              username: currentUser.username,
+              displayName: currentUser.displayName,
+              avatar: currentUser.avatar,
+            },
+            targetText: `mentioned you in a comment: "${cleanText.slice(0, 35)}"`,
+            timestamp: nowIso,
+            createdAt: nowIso,
+            isUnread: true,
+            videoId: videoId,
+          };
+          setNotifications(prev => deduplicateNotifications([mentionNotif, ...prev]));
+          supabaseDb.insertNotification(mentionNotif, u.id);
+        }
+      });
+    }
+
     return success;
   };
 
@@ -4413,6 +4517,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       storage.set('videos', next);
       return next;
     });
+
+    // Trigger tag/mention notifications if video caption contains @username
+    const captionTagMatches = (newVideo.caption || '').match(/@([a-zA-Z0-9_]+)/g);
+    if (captionTagMatches && captionTagMatches.length > 0) {
+      const taggedUsernames = new Set(captionTagMatches.map(m => m.slice(1).toLowerCase()));
+      const nowIso = new Date().toISOString();
+      users.forEach(u => {
+        if (
+          u.username &&
+          taggedUsernames.has(u.username.toLowerCase()) &&
+          !isSameUser(u.id, currentUser.id)
+        ) {
+          const tagNotif: NotificationItem = {
+            id: `notif_${Date.now()}_tag_${u.id.slice(0, 4)}`,
+            recipientId: u.id,
+            type: 'tag',
+            actor: {
+              id: currentUser.id,
+              username: currentUser.username,
+              displayName: currentUser.displayName,
+              avatar: currentUser.avatar,
+            },
+            targetText: `tagged you in a video: "${created.caption.slice(0, 35)}"`,
+            timestamp: nowIso,
+            createdAt: nowIso,
+            isUnread: true,
+            videoId: created.id,
+          };
+          setNotifications(prev => deduplicateNotifications([tagNotif, ...prev]));
+          supabaseDb.insertNotification(tagNotif, u.id);
+        }
+      });
+    }
 
     const ok = await supabaseDb.insertVideo(created);
     return ok;
@@ -7409,6 +7546,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         getUserLikedVideos,
         feedRefreshKey,
         refreshFeed,
+        themeMode,
+        setThemeMode,
+        resolvedTheme,
+        addCustomNotification,
       }}
     >
       {children}

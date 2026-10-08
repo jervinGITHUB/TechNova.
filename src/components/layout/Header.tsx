@@ -338,18 +338,20 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
         </div>
       ) : (
         <>
-          {/* Mobile Hamburger Menu Toggle */}
-          <button
-            onClick={onToggleMobileNav}
-            className="md:hidden p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800/80 transition-colors"
-            aria-label="Open menu"
-          >
-            <Menu className="w-5 h-5" />
-          </button>
+          {/* Left Balance Container (Mobile Hamburger Menu / Desktop Counterweight to keep Search Bar centered) */}
+          <div className="flex items-center justify-start shrink-0 md:w-52">
+            <button
+              onClick={onToggleMobileNav}
+              className="md:hidden p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800/80 transition-colors cursor-pointer"
+              aria-label="Open menu"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+          </div>
 
-          {/* Center Search Input with Instant Dropdown (Desktop & Mobile Compact) */}
-          <div ref={searchContainerRef} className="flex-1 max-w-xl relative z-40">
-            <form onSubmit={handleSearchSubmit} className="relative flex items-center">
+          {/* Center Search Input with Instant Dropdown (Centered in the middle of Header) */}
+          <div ref={searchContainerRef} className="flex-1 max-w-xl mx-auto relative z-40 flex justify-center">
+            <form onSubmit={handleSearchSubmit} className="w-full relative flex items-center">
               <div className="absolute left-3.5 text-neutral-400 pointer-events-none">
                 <Search className="w-4 h-4" />
               </div>
@@ -510,7 +512,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
           </div>
 
           {/* Right Controls: Notification Bell + "+ Upload" Button */}
-          <div className="flex items-center gap-2 sm:gap-3.5 shrink-0">
+          <div className="flex items-center justify-end gap-2 sm:gap-3.5 shrink-0 md:w-52">
             {/* Notification Bell */}
             <button
               onClick={() => setActiveTab('notifications')}
