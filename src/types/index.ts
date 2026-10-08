@@ -139,6 +139,8 @@ export interface Message {
   deletedForUserIds?: string[];
   sharedVideo?: Video;
   sharedVideoId?: string;
+  sharedLiveStream?: LiveStream;
+  sharedLiveStreamId?: string;
 }
 
 export interface Conversation {
@@ -215,7 +217,7 @@ export interface NotificationItem {
 export interface ReportItem {
   id: string;
   reporterId?: string;
-  type: 'video' | 'user';
+  type: 'video' | 'user' | 'live_stream';
   targetId: string;
   targetName: string;
   targetSubtitle?: string;

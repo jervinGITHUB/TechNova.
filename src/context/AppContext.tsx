@@ -398,7 +398,7 @@ export const buildNavigationUrl = (tab: AppTab, userId?: string | null): string 
 
 interface ReportModalConfig {
   isOpen: boolean;
-  type: 'video' | 'user';
+  type: 'video' | 'user' | 'live_stream';
   targetId: string;
   targetName: string;
   targetSubtitle?: string;
@@ -469,6 +469,8 @@ interface AppContextType {
   fetchCommentsForVideo: (videoId: string, force?: boolean) => Promise<CommentEntry[]>;
   shareVideo: (videoId: string) => void;
   shareVideoToUser: (video: Video, targetUserId: string, note?: string) => boolean;
+  shareLiveStreamToUser: (stream: LiveStream, targetUserId: string, note?: string) => boolean;
+  updateVideoAudience: (videoId: string, audience: 'public' | 'friends' | 'only_me') => Promise<boolean>;
   recordVideoView: (videoId: string) => void;
   uploadVideo: (newVideo: {
     caption: string;
@@ -494,7 +496,8 @@ interface AppContextType {
     convId: string,
     text: string,
     replyTo?: MessageReplyInfo,
-    sharedVideo?: Video
+    sharedVideo?: Video,
+    sharedLiveStream?: LiveStream
   ) => void;
   deleteConversation: (convId: string) => void;
   deleteMessage: (convId: string, messageId: string) => void;
@@ -506,7 +509,7 @@ interface AppContextType {
   // Live Stream
   activeLiveStreams: LiveStream[];
   refreshActiveLiveStreams: () => Promise<void>;
-  openLiveStreamAsViewer: (streamId: string) => void;
+  openLiveStreamAsViewer: (streamId: string, fallbackStream?: LiveStream) => void;
   sendLiveComment: (text: string) => void;
   sendLiveLike: () => void;
   liveHeartTrigger: number;
@@ -551,7 +554,7 @@ interface AppContextType {
   reviewVideoAppeal: (videoId: string, decision: 'approved' | 'declined') => Promise<boolean>;
   updateReportStatusAdmin: (
     reportId: string,
-    type: 'video' | 'user',
+    type: 'video' | 'user' | 'live_stream',
     status: 'Approved' | 'Rejected' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted'
   ) => Promise<boolean>;
   issueUserWarningAdmin: (
@@ -4452,6 +4455,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
+  // Share live stream directly to another user via message
+  const shareLiveStreamToUser = (stream: LiveStream, targetUserId: string, note?: string): boolean => {
+    if (!currentUser) return false;
+    const targetUser = users.find(u => u.id === targetUserId || toUuid(u.id) === toUuid(targetUserId));
+    if (!targetUser) return false;
+
+    // Guard: private profile requires friendship
+    if (targetUser.isPrivate && getFollowStatus(targetUserId) !== 'friends') {
+      return false;
+    }
+
+    const canonicalConvId = getDirectConversationId(currentUser.id, targetUserId);
+    const existing = conversations.find(c => {
+      if (c.id === canonicalConvId || toUuid(c.id) === canonicalConvId) return true;
+      const pId = c.participantIds?.find(id => !isSameUser(id, currentUser.id)) || c.participant?.id;
+      return isSameUser(pId, targetUserId);
+    });
+
+    let targetConvId = canonicalConvId;
+    if (existing) {
+      targetConvId = existing.id;
+    } else {
+      const newConv: Conversation = {
+        id: canonicalConvId,
+        participantIds: [currentUser.id, targetUserId],
+        participant: targetUser,
+        lastMessage: `🔴 Shared a live stream: "${stream.title.slice(0, 25)}"`,
+        lastMessageTime: 'Just now',
+        unreadCount: 0,
+        unreadCounts: { [currentUser.id]: 0, [targetUserId]: 1 },
+        messages: [],
+        deletedForUserIds: [],
+        clearedHistoryAt: {},
+      };
+      setConversations(prev => deduplicateConversations([newConv, ...prev], currentUser.id));
+    }
+
+    const noteText = note?.trim() || '';
+    sendMessage(targetConvId, noteText, undefined, undefined, stream);
+    return true;
+  };
+
   // Upload Video (BR-013, BR-015, BR-016)
   const uploadVideo = async (newVideo: {
     caption: string;
@@ -4715,11 +4760,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     convId: string,
     text: string,
     replyTo?: MessageReplyInfo,
-    sharedVideo?: Video
+    sharedVideo?: Video,
+    sharedLiveStream?: LiveStream
   ) => {
-    if (!currentUser && !sharedVideo) return;
+    if (!currentUser && !sharedVideo && !sharedLiveStream) return;
     const cleanText = text.trim().slice(0, 200);
-    if (!cleanText && !sharedVideo) return;
+    if (!cleanText && !sharedVideo && !sharedLiveStream) return;
 
     const conv = conversations.find(c => c.id === convId || toUuid(c.id) === toUuid(convId));
     const recipientId =
@@ -4738,7 +4784,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : convId;
 
     const nowIso = new Date().toISOString();
-    const displayText = cleanText || (sharedVideo ? `Shared a video: "${sharedVideo.caption}"` : '');
+    const displayText = cleanText || (sharedVideo ? `Shared a video: "${sharedVideo.caption}"` : sharedLiveStream ? `Shared a live stream: "${sharedLiveStream.title}"` : '');
     const newMsg: Message = {
       id: `m_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       conversationId: canonicalConvId,
@@ -4752,6 +4798,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deletedForUserIds: [],
       sharedVideo: sharedVideo,
       sharedVideoId: sharedVideo?.id,
+      sharedLiveStream: sharedLiveStream,
+      sharedLiveStreamId: sharedLiveStream?.id,
     };
 
     setConversations(prev => {
@@ -4782,7 +4830,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           messages: [],
         }),
         id: canonicalConvId,
-        lastMessage: sharedVideo ? `🎥 Shared a video: "${sharedVideo.caption.slice(0, 25)}"` : cleanText,
+        lastMessage: sharedVideo ? `🎥 Shared a video: "${sharedVideo.caption.slice(0, 25)}"` : sharedLiveStream ? `🔴 Shared live stream: "${sharedLiveStream.title.slice(0, 25)}"` : cleanText,
         lastMessageTime: 'Just now',
         messages: deduplicateMessages([...(targetConv ? targetConv.messages : []), newMsg]),
         deletedForUserIds: ((targetConv && targetConv.deletedForUserIds) ? targetConv.deletedForUserIds : []).filter(
@@ -5473,8 +5521,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentLiveStream.id, activeTab, currentUser?.id]);
 
-  const openLiveStreamAsViewer = (streamId: string) => {
-    const target = activeLiveStreams.find(s => s.id === streamId || toUuid(s.id) === toUuid(streamId));
+  const openLiveStreamAsViewer = (streamId: string, fallbackStream?: LiveStream) => {
+    const target = activeLiveStreams.find(s => s.id === streamId || toUuid(s.id) === toUuid(streamId)) || fallbackStream;
     const viewerObj: LiveViewer = {
       id: currentUser?.id || `viewer_${Date.now()}`,
       username: (currentUser?.username || 'viewer').replace(/^@/, ''),
@@ -5489,9 +5537,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const nextViewers = hasMe ? existingViewers : [...existingViewers, viewerObj];
       setCurrentLiveStream({
         ...target,
+        id: streamId || target.id,
         viewers: nextViewers,
         viewersCount: Math.max(nextViewers.length, target.viewersCount, 1),
         messages: target.messages || [],
+      });
+      // Ensure it is in active live streams list
+      setActiveLiveStreams(prev => {
+        if (!prev.some(s => s.id === target.id || toUuid(s.id) === toUuid(target.id))) {
+          return [target, ...prev];
+        }
+        return prev;
       });
     } else {
       setCurrentLiveStream(prev => ({
@@ -6845,6 +6901,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
+  const updateVideoAudience = async (
+    videoId: string,
+    audience: 'public' | 'friends' | 'only_me'
+  ): Promise<boolean> => {
+    const privacy: 'friends' | 'private' | 'public' = audience === 'only_me' ? 'private' : audience === 'friends' ? 'friends' : 'public';
+    setVideos(prev => {
+      const next = prev.map(v => {
+        if (v.id === videoId || toUuid(v.id) === toUuid(videoId)) {
+          return {
+            ...v,
+            audience,
+            privacy,
+          };
+        }
+        return v;
+      });
+      storage.set('videos', next);
+      return next;
+    });
+
+    try {
+      await supabaseDb.updateVideoAudience(videoId, audience);
+    } catch (e) {
+      console.warn('Supabase updateVideoAudience error:', e);
+    }
+    return true;
+  };
+
   const deleteVideoAdmin = async (videoId: string): Promise<boolean> => {
     return deleteVideo(videoId);
   };
@@ -6899,7 +6983,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateReportStatusAdmin = async (
     reportId: string,
-    type: 'video' | 'user',
+    type: 'video' | 'user' | 'live_stream',
     status: 'Approved' | 'Rejected' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted'
   ): Promise<boolean> => {
     let targetReport: ReportItem | undefined;
@@ -7484,6 +7568,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         fetchCommentsForVideo,
         shareVideo,
         shareVideoToUser,
+        shareLiveStreamToUser,
+        updateVideoAudience,
         recordVideoView,
         uploadVideo,
         submitReport,

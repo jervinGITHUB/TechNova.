@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Video } from '../../types';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
+import { AudienceSettingsModal } from '../modals/AudienceSettingsModal';
 import { Avatar } from '../common/Avatar';
 import { DEFAULT_USER } from '../../services/storage';
 import {
@@ -70,6 +71,9 @@ export const ProfileView: React.FC = () => {
   // Video Preview & Share states
   const [selectedVideoModal, setSelectedVideoModal] = useState<Video | null>(null);
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
+  const [audienceModalVideo, setAudienceModalVideo] = useState<Video | null>(null);
+  const [videoOptionsMenuOpen, setVideoOptionsMenuOpen] = useState(false);
+  const [activeGridMenuVideoId, setActiveGridMenuVideoId] = useState<string | null>(null);
 
   // Creator Appeal Modal state
   const [appealModalVideoId, setAppealModalVideoId] = useState<string | null>(null);
@@ -723,19 +727,57 @@ export const ProfileView: React.FC = () => {
                     <span>{video.viewsCount || '0'}</span>
                   </div>
 
-                  {/* Delete button on hover for creator's own video */}
+                  {/* Options 3-dots menu on hover for creator's own video */}
                   {isSelf && (activeTabSub === 'videos' || activeTabSub === 'only_me') && (
-                    <button
-                      type="button"
-                      onClick={e => {
-                        e.stopPropagation();
-                        setDeleteConfirmVideoId(video.id);
-                      }}
-                      className="absolute top-2 right-2 z-20 p-1.5 rounded-xl bg-black/70 hover:bg-red-600 text-neutral-300 hover:text-white transition-all opacity-80 sm:opacity-0 group-hover:opacity-100 shadow-md cursor-pointer border border-white/10 hover:border-red-500"
-                      title="Delete video"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="absolute top-2 right-2 z-20" onClick={e => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          setActiveGridMenuVideoId(prev => (prev === video.id ? null : video.id));
+                        }}
+                        className={`p-1.5 rounded-xl backdrop-blur-md transition-all shadow-md cursor-pointer border ${
+                          activeGridMenuVideoId === video.id
+                            ? 'bg-[#ff007a] text-white border-[#ff007a] opacity-100'
+                            : 'bg-black/70 hover:bg-black/90 text-neutral-300 hover:text-white border-white/10 opacity-80 sm:opacity-0 group-hover:opacity-100'
+                        }`}
+                        title="Video Options"
+                      >
+                        <MoreVertical className="w-3.5 h-3.5" />
+                      </button>
+
+                      {/* Dropdown Menu */}
+                      {activeGridMenuVideoId === video.id && (
+                        <div
+                          onClick={e => e.stopPropagation()}
+                          className="absolute right-0 top-8 z-30 w-52 bg-[#14141e]/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveGridMenuVideoId(null);
+                              setAudienceModalVideo(video);
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                          >
+                            <Lock className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                            <span>Change Audience Settings</span>
+                          </button>
+                          <div className="h-px bg-neutral-800 my-0.5" />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveGridMenuVideoId(null);
+                              setDeleteConfirmVideoId(video.id);
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -1120,22 +1162,63 @@ export const ProfileView: React.FC = () => {
                 </span>
               </div>
 
-              {/* If viewing own video, also provide Delete button on rail */}
+              {/* If viewing own video, replace Trash icon with 3-dots: "Change Audience Settings" and "Delete" */}
               {currentUser &&
                 (selectedVideoModal.creatorId === currentUser.id ||
                   selectedVideoModal.creator?.id === currentUser.id) && (
-                  <div className="flex flex-col items-center">
+                  <div className="relative flex flex-col items-center">
                     <button
                       type="button"
-                      onClick={() => setDeleteConfirmVideoId(selectedVideoModal.id)}
-                      className="p-2.5 rounded-full bg-red-500/20 hover:bg-red-500/40 text-red-400 border border-red-500/40 backdrop-blur-md transition-all cursor-pointer hover:scale-105"
-                      title="Delete this video"
+                      onClick={e => {
+                        e.stopPropagation();
+                        setVideoOptionsMenuOpen(prev => !prev);
+                      }}
+                      className={`p-2.5 rounded-full backdrop-blur-md transition-all cursor-pointer hover:scale-105 ${
+                        videoOptionsMenuOpen
+                          ? 'bg-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.6)]'
+                          : 'bg-black/40 text-white hover:text-[#ff007a] hover:bg-black/60'
+                      }`}
+                      title="More Options"
                     >
-                      <Trash2 className="w-6 h-6" />
+                      <MoreVertical className="w-6 h-6" />
                     </button>
-                    <span className="text-[10px] font-semibold text-red-400 mt-1 drop-shadow">
-                      Delete
+                    <span className="text-[10px] font-semibold text-neutral-300 mt-1 drop-shadow">
+                      More
                     </span>
+
+                    {/* Popover Menu with "Change Audience Settings" and "Delete" */}
+                    {videoOptionsMenuOpen && (
+                      <div
+                        onClick={e => e.stopPropagation()}
+                        className="absolute right-14 bottom-0 z-50 w-56 bg-[#14141e]/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setVideoOptionsMenuOpen(false);
+                            setAudienceModalVideo(selectedVideoModal);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          <Lock className="w-4 h-4 text-pink-400 shrink-0" />
+                          <span>Change Audience Settings</span>
+                        </button>
+
+                        <div className="h-px bg-neutral-800 my-0.5" />
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setVideoOptionsMenuOpen(false);
+                            setDeleteConfirmVideoId(selectedVideoModal.id);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4 text-red-400 shrink-0" />
+                          <span>Delete</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
             </div>
@@ -1294,6 +1377,33 @@ export const ProfileView: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Audience Settings Modal */}
+      <AudienceSettingsModal
+        video={audienceModalVideo}
+        isOpen={Boolean(audienceModalVideo)}
+        onClose={() => setAudienceModalVideo(null)}
+        onAudienceChanged={newAudience => {
+          if (selectedVideoModal && audienceModalVideo && selectedVideoModal.id === audienceModalVideo.id) {
+            setSelectedVideoModal(prev =>
+              prev
+                ? {
+                    ...prev,
+                    audience: newAudience,
+                    privacy: newAudience === 'only_me' ? 'private' : newAudience === 'friends' ? 'friends' : 'public',
+                  }
+                : null
+            );
+          }
+          const label =
+            newAudience === 'only_me'
+              ? 'Only me'
+              : newAudience === 'friends'
+              ? 'Friends Only'
+              : 'Everyone (Public)';
+          setToastMessage(`Audience settings updated to "${label}"`);
+          setTimeout(() => setToastMessage(''), 3000);
+        }}
+      />
     </div>
   );
 };

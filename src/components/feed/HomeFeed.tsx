@@ -4,6 +4,7 @@ import { Video } from '../../types';
 import { isSameUser, checkIsUserBanned } from '../../lib/supabase';
 import { formatRealtimeAgo } from '../../utils/time';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
+import { AudienceSettingsModal } from '../modals/AudienceSettingsModal';
 import { Avatar } from '../common/Avatar';
 import {
   Heart,
@@ -25,6 +26,8 @@ import {
   Copy,
   Download,
   Check,
+  Lock,
+  Trash2,
 } from 'lucide-react';
 
 interface VideoFeedCardProps {
@@ -49,6 +52,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     currentUser,
     getFollowStatus,
     toggleFollowUser,
+    deleteVideo,
   } = useApp();
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -60,6 +64,9 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [audienceModalOpen, setAudienceModalOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgAudioRef = useRef<HTMLAudioElement>(null);
@@ -509,23 +516,51 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
               <div className="h-px bg-neutral-800 my-0.5" />
 
-              <button
-                type="button"
-                onClick={() => {
-                  setMoreMenuOpen(false);
-                  openReportModal({
-                    type: 'video',
-                    targetId: video.id,
-                    targetName: `${video.creator.displayName || 'Creator'}'s video`,
-                    targetSubtitle: video.caption.slice(0, 35),
-                    targetThumbnail: video.thumbnailUrl,
-                  });
-                }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
-              >
-                <Flag className="w-4 h-4 text-red-400 shrink-0" />
-                <span>Report</span>
-              </button>
+              {currentUser && isSameUser(currentUser.id, video.creator.id) ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setAudienceModalOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <Lock className="w-4 h-4 text-pink-400 shrink-0" />
+                    <span>Change Audience Settings</span>
+                  </button>
+                  <div className="h-px bg-neutral-800 my-0.5" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setDeleteConfirmOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-400 shrink-0" />
+                    <span>Delete Video</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    openReportModal({
+                      type: 'video',
+                      targetId: video.id,
+                      targetName: `${video.creator.displayName || 'Creator'}'s video`,
+                      targetSubtitle: video.caption.slice(0, 35),
+                      targetThumbnail: video.thumbnailUrl,
+                    });
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+                >
+                  <Flag className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>Report</span>
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -646,6 +681,60 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
           />
         </div>
       </div>
+
+      {/* Audience Settings Modal */}
+      <AudienceSettingsModal
+        video={video}
+        isOpen={audienceModalOpen}
+        onClose={() => setAudienceModalOpen(false)}
+      />
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmOpen && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn select-none">
+          <div
+            className="absolute inset-0"
+            onClick={() => !isDeleting && setDeleteConfirmOpen(false)}
+          />
+          <div className="relative w-full max-w-sm bg-[#13131c] border border-neutral-800 rounded-3xl p-6 shadow-2xl z-10 text-center space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/15 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-bold text-white font-brand">Delete Video?</h3>
+              <p className="text-xs text-neutral-400 leading-relaxed">
+                Are you sure you want to permanently delete this video? This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setDeleteConfirmOpen(false)}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 font-bold text-xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={async () => {
+                  setIsDeleting(true);
+                  try {
+                    await deleteVideo(video.id);
+                    setDeleteConfirmOpen(false);
+                  } finally {
+                    setIsDeleting(false);
+                  }
+                }}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs transition-colors cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {isDeleting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

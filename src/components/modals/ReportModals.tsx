@@ -54,7 +54,25 @@ export const ReportModals: React.FC = () => {
     'Other reasons',
   ];
 
-  const scenarios = reportModal.type === 'video' ? videoScenarios : userScenarios;
+  // Live Stream Scenarios
+  const liveStreamScenarios = [
+    'Inappropriate or dangerous live broadcast',
+    'Physical violence, threats, or weapon display',
+    'Harassment, bullying, or intimidation in stream',
+    'Hate speech or hateful behavior',
+    'Nudity, sexual content, or exploitation',
+    'Self-harm or dangerous activities',
+    'Scam, fraud, or commercial spam',
+    'Copyright infringement / unauthorized broadcast',
+    'Other reasons',
+  ];
+
+  const scenarios =
+    reportModal.type === 'video'
+      ? videoScenarios
+      : reportModal.type === 'live_stream'
+      ? liveStreamScenarios
+      : userScenarios;
 
   // Clicking any scenario opens the "More Reason" form (Screenshot 1 bottom left)
   const handleSelectScenario = (scenario: string) => {
@@ -172,7 +190,7 @@ export const ReportModals: React.FC = () => {
             <div className="flex items-center gap-2">
               <ShieldAlert className="w-5 h-5 text-[#ff007a]" />
               <h2 className="text-lg font-bold text-white font-brand">
-                {reportModal.type === 'user' ? 'Report User' : 'Report'}
+                {reportModal.type === 'user' ? 'Report User' : reportModal.type === 'live_stream' ? 'Report Live Stream' : 'Report Video'}
               </h2>
             </div>
             <button

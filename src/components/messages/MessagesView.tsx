@@ -1,8 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useApp, deduplicateConversations, getConversationClearedTimestamp, deduplicateMessages } from '../../context/AppContext';
-import { Conversation, User, MessageReplyInfo, Message, Video } from '../../types';
+import { Conversation, User, MessageReplyInfo, Message, Video, LiveStream } from '../../types';
 import { Avatar } from '../common/Avatar';
 import { MessageVideoCard } from './MessageVideoCard';
+import { MessageLiveCard } from './MessageLiveCard';
 import { toUuid, isSameUser, checkIsUserBanned } from '../../lib/supabase';
 import { toTimestampMillis, getConversationLastActivityTime, formatConversationTime, formatMessageTime } from '../../utils/time';
 import {
@@ -159,11 +160,58 @@ const resolveSharedVideo = (
   return { isVideo: false };
 };
 
+export const resolveSharedLiveStream = (
+  msg: Message,
+  activeStreams: LiveStream[],
+  users: User[]
+): { isLiveStream: boolean; stream?: LiveStream; note?: string } => {
+  if (msg.sharedLiveStream) {
+    const s = msg.sharedLiveStream;
+    const hostUser = s.host || users.find(u => isSameUser(u.id, s.host?.id) || u.username === s.host?.username);
+    const cleanNote = msg.text && !msg.text.startsWith('🔴') ? msg.text : undefined;
+    return {
+      isLiveStream: true,
+      stream: { ...s, host: hostUser || s.host },
+      note: cleanNote,
+    };
+  }
+
+  if (msg.sharedLiveStreamId) {
+    const found = activeStreams.find(s => s.id === msg.sharedLiveStreamId || toUuid(s.id) === toUuid(msg.sharedLiveStreamId));
+    if (found) {
+      const cleanNote = msg.text && !msg.text.startsWith('🔴') ? msg.text : undefined;
+      return { isLiveStream: true, stream: found, note: cleanNote };
+    }
+  }
+
+  const liveMarker = (msg.text || '').match(/\[LIVE_SHARE:([^\]]+)\](?:\s*([\s\S]*))?/);
+  if (liveMarker) {
+    const streamId = liveMarker[1].trim();
+    const note = liveMarker[2]?.trim() || '';
+    const found = activeStreams.find(s => s.id === streamId || toUuid(s.id) === toUuid(streamId));
+    if (found) {
+      return { isLiveStream: true, stream: found, note };
+    }
+  }
+
+  const liveTextMatch = (msg.text || '').match(/🔴\s*(?:Watch this Live Stream|Shared live stream|Shared a live stream|Check out this live stream):\s*"([^"]+)"/i);
+  if (liveTextMatch) {
+    const title = liveTextMatch[1].trim();
+    const found = activeStreams.find(s => s.title.toLowerCase().includes(title.toLowerCase()));
+    if (found) {
+      return { isLiveStream: true, stream: found };
+    }
+  }
+
+  return { isLiveStream: false };
+};
+
 export const MessagesView: React.FC = () => {
   const {
     currentUser,
     users,
     videos,
+    activeLiveStreams,
     conversations,
     activeConversationId,
     openConversation,
@@ -771,6 +819,7 @@ export const MessagesView: React.FC = () => {
 
                 return visibleMessages.map(msg => {
                   const isMe = currentUser ? isSameUser(msg.senderId, currentUser.id) : Boolean(msg.isMine);
+                  const liveStreamData = resolveSharedLiveStream(msg, activeLiveStreams, users);
                   const videoData = resolveSharedVideo(msg, videos, users);
 
                   return (
@@ -781,7 +830,7 @@ export const MessagesView: React.FC = () => {
                       {/* Bubble */}
                       <div
                         className={`${
-                          videoData.isVideo
+                          liveStreamData.isLiveStream || videoData.isVideo
                             ? 'w-72 sm:w-80 max-w-[90vw] p-2 sm:p-2.5 rounded-2xl shadow-xl'
                             : 'max-w-[85%] sm:max-w-md px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-medium leading-relaxed shadow-md'
                         } ${
@@ -807,7 +856,16 @@ export const MessagesView: React.FC = () => {
                           </div>
                         )}
 
-                        {videoData.isVideo && videoData.video ? (
+                        {liveStreamData.isLiveStream && liveStreamData.stream ? (
+                          <MessageLiveCard
+                            stream={liveStreamData.stream}
+                            note={liveStreamData.note}
+                            isMe={isMe}
+                            messageId={msg.id}
+                            conversationId={activeConv.id}
+                            onDeleteMessage={() => deleteMessage(activeConv.id, msg.id)}
+                          />
+                        ) : videoData.isVideo && videoData.video ? (
                           <MessageVideoCard
                             video={videoData.video}
                             note={videoData.note}

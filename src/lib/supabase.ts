@@ -2153,6 +2153,44 @@ export const supabaseDb = {
     }
   },
 
+  async updateVideoAudience(videoId: string, audience: 'public' | 'friends' | 'only_me'): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client) return false;
+    try {
+      const vUuid = toUuid(videoId);
+      // Try PascalCase table 'Video' and column 'Audience'
+      let res = await client
+        .from('Video')
+        .update({ Audience: audience })
+        .eq('VideoID', vUuid);
+
+      if (res.error && (res.error.code === '42703' || res.error.message?.includes('column'))) {
+        // Fallback: try lowercase column 'audience'
+        res = await client
+          .from('Video')
+          .update({ audience })
+          .eq('VideoID', vUuid);
+      }
+
+      if (res.error && (res.error.code === '42P01' || res.error.message?.includes('does not exist'))) {
+        // Fallback: try lowercase table 'videos'
+        res = await client
+          .from('videos')
+          .update({ audience })
+          .eq('id', vUuid);
+      }
+
+      if (res.error) {
+        console.warn('Supabase updateVideoAudience notice:', res.error.message);
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.warn('Supabase updateVideoAudience error:', e);
+      return false;
+    }
+  },
+
   async submitVideoAppeal(videoId: string, reason: string): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;
@@ -4272,7 +4310,7 @@ export const supabaseDb = {
 
   async updateReportStatus(
     reportId: string,
-    type: 'video' | 'user',
+    type: 'video' | 'user' | 'live_stream',
     status: 'Approved' | 'Rejected' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted'
   ): Promise<boolean> {
     const client = getSupabaseClient();

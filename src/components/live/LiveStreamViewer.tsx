@@ -15,7 +15,9 @@ import {
   RotateCcw,
   Laptop,
   Smartphone,
+  Share2,
 } from 'lucide-react';
+import { ShareLiveModal } from '../modals/ShareLiveModal';
 
 export const LiveStreamViewer: React.FC = () => {
   const {
@@ -37,6 +39,7 @@ export const LiveStreamViewer: React.FC = () => {
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<string>('connecting');
   const [sessionKey, setSessionKey] = useState<number>(0);
+  const [shareLiveModalOpen, setShareLiveModalOpen] = useState(false);
 
   const hostUser = users.find(u => u.id === currentLiveStream.host.id) || currentLiveStream.host;
   const isFollowingHost = !!hostUser.isFollowing;
@@ -179,6 +182,17 @@ export const LiveStreamViewer: React.FC = () => {
         </button>
 
         <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Share Live Stream Button */}
+          <button
+            type="button"
+            onClick={() => setShareLiveModalOpen(true)}
+            className="text-xs bg-[#ff007a]/20 hover:bg-[#ff007a]/35 text-[#ff007a] border border-[#ff007a]/40 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer font-bold shadow-sm"
+            title="Share stream via message"
+          >
+            <Share2 className="w-3.5 h-3.5" />
+            <span>Share Stream</span>
+          </button>
+
           {/* Quick Layout Mode Switcher (Allows viewer to seamlessly toggle Wide 16:9 vs Portrait 9:16) */}
           <div className="flex items-center bg-[#181824] p-0.5 rounded-full border border-neutral-800 text-[11px] shadow-sm">
             <button
@@ -340,11 +354,19 @@ export const LiveStreamViewer: React.FC = () => {
                 </span>
                 <button
                   type="button"
+                  onClick={() => setShareLiveModalOpen(true)}
+                  className="p-1 rounded-full text-neutral-400 hover:text-pink-400 cursor-pointer"
+                  title="Share Stream"
+                >
+                  <Share2 className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
                   onClick={() =>
                     openReportModal({
-                      type: 'video',
+                      type: 'live_stream',
                       targetId: currentLiveStream.id,
-                      targetName: `${hostUser.displayName}'s Live Stream`,
+                      targetName: `${hostUser.displayName || hostUser.username}'s Live Stream`,
                       targetSubtitle: currentLiveStream.title,
                     })
                   }
@@ -558,14 +580,24 @@ export const LiveStreamViewer: React.FC = () => {
                     </button>
                   </div>
 
+                  {/* Share Stream Button */}
+                  <button
+                    type="button"
+                    onClick={() => setShareLiveModalOpen(true)}
+                    className="p-1.5 sm:p-2 rounded-full bg-black/60 backdrop-blur-md text-white/80 hover:text-pink-400 border border-white/10 transition-colors cursor-pointer shrink-0 shadow-md"
+                    title="Share Stream"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                  </button>
+
                   {/* Report Stream Button */}
                   <button
                     type="button"
                     onClick={() =>
                       openReportModal({
-                        type: 'video',
+                        type: 'live_stream',
                         targetId: currentLiveStream.id,
-                        targetName: `${hostUser.displayName}'s Live Stream`,
+                        targetName: `${hostUser.displayName || hostUser.username}'s Live Stream`,
                         targetSubtitle: currentLiveStream.title,
                       })
                     }
@@ -688,6 +720,15 @@ export const LiveStreamViewer: React.FC = () => {
 
                       <button
                         type="button"
+                        onClick={() => setShareLiveModalOpen(true)}
+                        className="p-2 rounded-full bg-black/60 backdrop-blur-md text-white hover:text-pink-400 border border-white/10 shadow-lg active:scale-90 transition-transform shrink-0 cursor-pointer"
+                        title="Share Stream in Message"
+                      >
+                        <Share2 className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={handleFloatHeart}
                         className="p-2 rounded-full bg-[#ff007a] text-white shadow-lg active:scale-90 transition-transform shrink-0 cursor-pointer"
                         title="Send Love"
@@ -711,13 +752,38 @@ export const LiveStreamViewer: React.FC = () => {
                   Viewers {Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)}
                 </span>
               </div>
-              <button
-                onClick={() => setActiveTab('live')}
-                className="text-neutral-400 hover:text-white p-1 cursor-pointer"
-                title="Exit Stream"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setShareLiveModalOpen(true)}
+                  className="text-neutral-400 hover:text-pink-400 p-1.5 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
+                  title="Share Stream"
+                >
+                  <Share2 className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    openReportModal({
+                      type: 'live_stream',
+                      targetId: currentLiveStream.id,
+                      targetName: `${hostUser.displayName || hostUser.username}'s Live Stream`,
+                      targetSubtitle: currentLiveStream.title,
+                    })
+                  }
+                  className="text-neutral-400 hover:text-red-400 p-1.5 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
+                  title="Report Stream"
+                >
+                  <Flag className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setActiveTab('live')}
+                  className="text-neutral-400 hover:text-white p-1.5 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
+                  title="Exit Stream"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {/* Chat Comments & Event Feed */}
@@ -791,6 +857,12 @@ export const LiveStreamViewer: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Share Live Stream Modal */}
+      <ShareLiveModal
+        stream={currentLiveStream}
+        isOpen={shareLiveModalOpen}
+        onClose={() => setShareLiveModalOpen(false)}
+      />
     </div>
   );
 };
