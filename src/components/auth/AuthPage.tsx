@@ -13,6 +13,7 @@ import {
   UserPlus,
   X,
   Users,
+  Database,
 } from 'lucide-react';
 import { SupabaseVercelModal } from '../modals/SupabaseVercelModal';
 import { resendConfirmationEmail, isGoogleAccount, isAccountLoggedInOnDevice } from '../../lib/supabase';
@@ -709,8 +710,16 @@ export const AuthPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Bottom Footer Credits */}
+      {/* Bottom Footer Credits & Supabase Connection */}
       <div className="w-full text-center text-xs text-neutral-500 z-10 flex flex-col items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setSupabaseModalOpen(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#181822] hover:bg-[#232332] text-xs font-medium text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer"
+        >
+          <Database className="w-3.5 h-3.5 text-emerald-400" />
+          <span>Supabase / Database Connection Settings</span>
+        </button>
         <div>ViralHub &copy; 2026 · Social Video Platform & Live Stream Broadcast Studio</div>
       </div>
 

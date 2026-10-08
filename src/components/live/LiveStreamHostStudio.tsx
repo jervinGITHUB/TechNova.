@@ -125,7 +125,13 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   const [streamAbout, setStreamAbout] = useState(initialBroadcast.streamAbout || currentLiveStream.aboutMe || '');
 
   // Studio Display Mode: Portrait 9:16 (TikTok Mobile standard) vs Landscape 16:9 (Gaming/Desktop)
-  const [canvasAspectRatio, setCanvasAspectRatio] = useState<'9:16' | '16:9'>(initialBroadcast.canvasAspectRatio);
+  const [canvasAspectRatio, setCanvasAspectRatio] = useState<'9:16' | '16:9'>(() => {
+    if (typeof window !== 'undefined') {
+      const isMobile = window.innerWidth < 768 || /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      return isMobile ? '9:16' : '16:9';
+    }
+    return initialBroadcast.canvasAspectRatio || '16:9';
+  });
   const [showGrid, setShowGrid] = useState(false);
   const [showSafeArea, setShowSafeArea] = useState(false);
 
@@ -606,13 +612,32 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             borderStyle: 'none',
             opacity: 1,
           }
-        : cameraTransform,
+        : (finalAspectRatio === '16:9' && (cameraTransform.width >= 80 || cameraTransform.height >= 80)
+            ? {
+                ...cameraTransform,
+                x: 72,
+                y: 64,
+                width: 26,
+                height: 32,
+                visible: cameraEnabled,
+                zIndex: 20,
+              }
+            : cameraTransform),
       screenTransform: isMobile
         ? {
             ...screenTransform,
             visible: false,
           }
-        : screenTransform,
+        : (finalAspectRatio === '16:9' && screenTransform.height < 60
+            ? {
+                ...screenTransform,
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+                visible: true,
+              }
+            : screenTransform),
       goalConfig: isMobile
         ? {
             ...goalWidgetConfig,

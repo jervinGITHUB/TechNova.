@@ -26,14 +26,16 @@ export interface BroadcastState {
   isMobileStream?: boolean;
 }
 
+const isDesktopClient = typeof window !== 'undefined' && window.innerWidth >= 768;
+
 const DEFAULT_CAMERA_TRANSFORM: CanvasSourceTransform = {
   id: 'camera',
   name: 'Camera (Facecam)',
   type: 'camera',
-  x: 56,
-  y: 68,
-  width: 38,
-  height: 26,
+  x: isDesktopClient ? 72 : 56,
+  y: isDesktopClient ? 64 : 68,
+  width: isDesktopClient ? 26 : 38,
+  height: isDesktopClient ? 32 : 26,
   zIndex: 20,
   visible: true,
   locked: false,
@@ -50,7 +52,7 @@ const DEFAULT_SCREEN_TRANSFORM: CanvasSourceTransform = {
   x: 0,
   y: 0,
   width: 100,
-  height: 32, // Natural 16:9 height in 9:16 portrait canvas
+  height: isDesktopClient ? 100 : 32, // Full 100% on 16:9 desktop, 32% on 9:16 mobile canvas
   zIndex: 10,
   visible: true,
   locked: false,
@@ -83,7 +85,7 @@ class LiveBroadcastService {
     cameraEnabled: true,
     micEnabled: true,
     screenShareEnabled: true,
-    canvasAspectRatio: '9:16',
+    canvasAspectRatio: isDesktopClient ? '16:9' : '9:16',
     cameraTransform: { ...DEFAULT_CAMERA_TRANSFORM },
     screenTransform: { ...DEFAULT_SCREEN_TRANSFORM },
     goalWidgetConfig: { ...DEFAULT_GOAL_CONFIG },
@@ -92,7 +94,7 @@ class LiveBroadcastService {
     streamAbout: '',
     viewersCount: 0,
     lastSnapshotUrl: null,
-    isMobileStream: false,
+    isMobileStream: !isDesktopClient,
   };
 
   private listeners = new Set<(state: BroadcastState) => void>();
@@ -273,6 +275,16 @@ class LiveBroadcastService {
         width: 100,
         height: 100,
         visible: true,
+      };
+      // Keep facecam nicely sized in corner over screen share
+      this.state.cameraTransform = {
+        ...this.state.cameraTransform,
+        x: 72,
+        y: 64,
+        width: 26,
+        height: 32,
+        visible: this.state.cameraEnabled,
+        zIndex: 20,
       };
     }
     this.notify();
@@ -643,6 +655,8 @@ class LiveBroadcastService {
                 streamId,
                 hostId: hostUser.id,
                 title: this.state.streamTitle,
+                aspectRatio: this.state.canvasAspectRatio,
+                isMobileStream: this.state.isMobileStream,
               });
               // Send immediate initial snapshot
               this.captureAndBroadcastSnapshot();
@@ -947,8 +961,8 @@ export const createLiveViewerSession = (
     if (currentState.canvasAspectRatio && callbacks.onAspectRatio) {
       callbacks.onAspectRatio(currentState.canvasAspectRatio);
     }
-    if (currentState.isMobileStream && callbacks.onMobileStream) {
-      callbacks.onMobileStream(true);
+    if (currentState.isMobileStream !== undefined && callbacks.onMobileStream) {
+      callbacks.onMobileStream(Boolean(currentState.isMobileStream));
     }
     if (callbacks.viewerUser && liveBroadcastService.getOnViewerJoined()) {
       try {

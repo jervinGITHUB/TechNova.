@@ -66,6 +66,7 @@ export interface LiveStreamCanvasProps {
   onUpdateGoalWidgetConfig?: (config: Partial<GoalWidgetConfig>) => void;
   showGrid?: boolean;
   showSafeArea?: boolean;
+  onDetectedAspectRatio?: (ratio: '9:16' | '16:9') => void;
 }
 
 type ResizeHandle = 'nw' | 'ne' | 'se' | 'sw' | 'n' | 's' | 'e' | 'w';
@@ -104,6 +105,7 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
   onUpdateScreenTransform,
   showGrid = false,
   showSafeArea = false,
+  onDetectedAspectRatio,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const cameraVideoRef = useRef<HTMLVideoElement>(null);
@@ -759,11 +761,21 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
                 }
               }
             }}
+            onLoadedMetadata={e => {
+              const el = e.currentTarget;
+              if (el.videoWidth && el.videoHeight && onDetectedAspectRatio) {
+                if (el.videoWidth > el.videoHeight * 1.15) {
+                  onDetectedAspectRatio('16:9');
+                } else if (el.videoHeight > el.videoWidth * 1.15) {
+                  onDetectedAspectRatio('9:16');
+                }
+              }
+            }}
             autoPlay
             playsInline
             muted={isStreamMuted}
-            className="w-full h-full object-cover select-none bg-black block"
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            className="w-full h-full object-contain select-none bg-black block"
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
           />
 
           {/* Floating Audio Unmute/Mute Toggle Indicator */}
@@ -800,8 +812,8 @@ export const LiveStreamCanvas: React.FC<LiveStreamCanvasProps> = ({
           <img
             src={snapshotUrl}
             alt="Live Stream Broadcast"
-            className="w-full h-full object-cover select-none animate-fadeIn bg-black block"
-            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            className="w-full h-full object-contain select-none animate-fadeIn bg-black block"
+            style={{ width: '100%', height: '100%', objectFit: 'contain' }}
           />
         </div>
       ) : (!isInteractive && (isMobileStream || (canvasAspectRatio === '9:16' && (!screenTransform || !screenTransform.visible)))) ? (
