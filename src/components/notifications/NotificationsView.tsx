@@ -268,35 +268,35 @@ export const NotificationsView: React.FC = () => {
   }[] = [
     {
       id: 'all',
-      label: 'ALL ACTIVITY',
+      label: 'ALL',
       icon: <Sparkles className="w-3.5 h-3.5" />,
       count: filterCounts.all,
       unread: filterUnreadCounts.all,
     },
     {
       id: 'likes',
-      label: 'LIKED',
+      label: 'LIKES',
       icon: <Heart className="w-3.5 h-3.5" />,
       count: filterCounts.likes,
       unread: filterUnreadCounts.likes,
     },
     {
       id: 'comments',
-      label: 'COMMENT',
+      label: 'COMMENTS',
       icon: <MessageCircle className="w-3.5 h-3.5" />,
       count: filterCounts.comments,
       unread: filterUnreadCounts.comments,
     },
     {
       id: 'mentions',
-      label: 'MENTION OR TAG',
+      label: 'MENTIONS',
       icon: <AtSign className="w-3.5 h-3.5" />,
       count: filterCounts.mentions,
       unread: filterUnreadCounts.mentions,
     },
     {
       id: 'followers',
-      label: 'FOLLOWERS',
+      label: 'FOLLOWING',
       icon: <Users className="w-3.5 h-3.5" />,
       count: filterCounts.followers,
       unread: filterUnreadCounts.followers,
@@ -333,9 +333,9 @@ export const NotificationsView: React.FC = () => {
         </div>
       </div>
 
-      {/* Categories Filter Tabs: ALL ACTIVITY, LIKED, COMMENT, MENTION OR TAG, FOLLOWERS */}
+      {/* Categories Filter Tabs: ALL, LIKES, COMMENTS, MENTIONS, FOLLOWING */}
       <div className="mb-6 overflow-x-auto no-scrollbar pb-1">
-        <div className="flex items-center gap-2 min-w-max">
+        <div className="flex items-center gap-2 min-w-max pr-6">
           {tabs.map(tab => {
             const isActive = activeFilter === tab.id;
             return (
@@ -639,126 +639,8 @@ export const NotificationsView: React.FC = () => {
                   : 'No new notifications right now. Check back soon for fresh community activity!'}
               </p>
             </div>
-
-            {/* Quick interactive test simulation button */}
-            <div className="pt-2 flex flex-wrap items-center justify-center gap-2">
-              {activeFilter === 'likes' && (
-                <button
-                  type="button"
-                  onClick={() => handleSimulateNotification('like')}
-                  className="px-3.5 py-2 rounded-xl bg-[#ff007a]/15 hover:bg-[#ff007a]/25 text-[#ff007a] border border-[#ff007a]/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                >
-                  <Heart className="w-3.5 h-3.5" />
-                  <span>Simulate Like Notification</span>
-                </button>
-              )}
-              {activeFilter === 'comments' && (
-                <button
-                  type="button"
-                  onClick={() => handleSimulateNotification('comment')}
-                  className="px-3.5 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-400 border border-emerald-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                >
-                  <MessageCircle className="w-3.5 h-3.5" />
-                  <span>Simulate Comment Notification</span>
-                </button>
-              )}
-              {activeFilter === 'mentions' && (
-                <button
-                  type="button"
-                  onClick={() => handleSimulateNotification('mention')}
-                  className="px-3.5 py-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-400 border border-cyan-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                >
-                  <AtSign className="w-3.5 h-3.5" />
-                  <span>Simulate Mention / Tag Notification</span>
-                </button>
-              )}
-              {activeFilter === 'followers' && (
-                <button
-                  type="button"
-                  onClick={() => handleSimulateNotification('follow')}
-                  className="px-3.5 py-2 rounded-xl bg-blue-500/15 hover:bg-blue-500/25 text-blue-400 border border-blue-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                >
-                  <UserPlus className="w-3.5 h-3.5" />
-                  <span>Simulate Follower Notification</span>
-                </button>
-              )}
-              {activeFilter === 'all' && (
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleSimulateNotification('like')}
-                    className="px-2.5 py-1.5 rounded-lg bg-[#ff007a]/15 text-[#ff007a] text-xs font-bold hover:bg-[#ff007a]/25 transition-colors cursor-pointer"
-                  >
-                    + Test Like
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSimulateNotification('comment')}
-                    className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 text-xs font-bold hover:bg-emerald-500/25 transition-colors cursor-pointer"
-                  >
-                    + Test Comment
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSimulateNotification('mention')}
-                    className="px-2.5 py-1.5 rounded-lg bg-cyan-500/15 text-cyan-400 text-xs font-bold hover:bg-cyan-500/25 transition-colors cursor-pointer"
-                  >
-                    + Test Mention
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSimulateNotification('follow')}
-                    className="px-2.5 py-1.5 rounded-lg bg-blue-500/15 text-blue-400 text-xs font-bold hover:bg-blue-500/25 transition-colors cursor-pointer"
-                  >
-                    + Test Follower
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         )}
-      </div>
-
-      {/* Quick Test Bar at the bottom */}
-      <div className="mt-8 pt-4 border-t border-neutral-800/60 flex flex-wrap items-center justify-between gap-3 text-xs text-neutral-500">
-        <div className="flex items-center gap-1.5 text-neutral-400 font-medium">
-          <Sparkles className="w-3.5 h-3.5 text-[#ff007a]" />
-          <span>Quick test category activities:</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => handleSimulateNotification('like')}
-            className="px-2.5 py-1 rounded-lg bg-[#181824] hover:bg-[#222232] text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer text-[11px] font-semibold"
-            title="Create a test Like notification"
-          >
-            + Test Like
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSimulateNotification('comment')}
-            className="px-2.5 py-1 rounded-lg bg-[#181824] hover:bg-[#222232] text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer text-[11px] font-semibold"
-            title="Create a test Comment notification"
-          >
-            + Test Comment
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSimulateNotification('mention')}
-            className="px-2.5 py-1 rounded-lg bg-[#181824] hover:bg-[#222232] text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer text-[11px] font-semibold"
-            title="Create a test Mention / Tag notification"
-          >
-            + Test Mention/Tag
-          </button>
-          <button
-            type="button"
-            onClick={() => handleSimulateNotification('follow')}
-            className="px-2.5 py-1 rounded-lg bg-[#181824] hover:bg-[#222232] text-neutral-300 hover:text-white border border-neutral-800 transition-colors cursor-pointer text-[11px] font-semibold"
-            title="Create a test Follower notification"
-          >
-            + Test Follower
-          </button>
-        </div>
       </div>
 
       {/* ===================================================================== */}

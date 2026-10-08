@@ -116,6 +116,8 @@ export interface Video {
   originalAudioVolume?: number;
   audioStartTime?: number;
   audioEndTime?: number;
+  audience?: 'public' | 'friends' | 'only_me';
+  privacy?: 'public' | 'friends' | 'private';
 }
 
 export interface MessageReplyInfo {

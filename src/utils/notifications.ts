@@ -9,8 +9,47 @@ const normalizeId = (id?: string | null): string => {
 };
 
 /**
+ * Checks if a notification is 7 days or older.
+ * All notifications 7 days and up automatically disappear.
+ */
+export const isNotificationOlderThan7Days = (item: NotificationItem): boolean => {
+  if (!item) return false;
+  const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  // 1. Try ISO date from createdAt
+  if (item.createdAt) {
+    const t = new Date(item.createdAt).getTime();
+    if (!isNaN(t) && t > 0) {
+      return (now - t) >= SEVEN_DAYS_MS;
+    }
+  }
+
+  // 2. Try timestamp
+  if (item.timestamp) {
+    const t = new Date(item.timestamp).getTime();
+    if (!isNaN(t) && t > 0) {
+      return (now - t) >= SEVEN_DAYS_MS;
+    }
+
+    // Check for string relative format (e.g. "7d ago", "8d ago", "2w ago")
+    const str = String(item.timestamp).toLowerCase().trim();
+    const dayMatch = str.match(/^(\d+)\s*d\s*ago/);
+    if (dayMatch && parseInt(dayMatch[1], 10) >= 7) {
+      return true;
+    }
+    if (str.includes('w ago') || str.includes('week') || str.includes('mo ago') || str.includes('month') || str.includes('y ago')) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
+/**
  * Deduplicates a list of notifications, preventing race condition duplicates,
  * double-click duplicates, and database sync duplicates.
+ * Also filters out any notifications that are 7 days or older.
  * Always retains the newest and most up-to-date status (e.g., appealStatus, isRead).
  */
 export const deduplicateNotifications = (items: NotificationItem[]): NotificationItem[] => {
@@ -29,6 +68,11 @@ export const deduplicateNotifications = (items: NotificationItem[]): Notificatio
 
   for (const item of sorted) {
     if (!item) continue;
+
+    // Discard notifications that are 7 days or older
+    if (isNotificationOlderThan7Days(item)) {
+      continue;
+    }
 
     // Discard invalid / empty notifications
     if (!item.id && !item.type) continue;

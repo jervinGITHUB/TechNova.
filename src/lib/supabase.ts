@@ -1990,6 +1990,8 @@ export const supabaseDb = {
           rejectionReason: row.RejectionReason || undefined,
           appealStatus: (row.AppealStatus as any) || (row.appeal_status as any) || 'none',
           appealReason: row.AppealReason || row.appeal_reason || undefined,
+          audience: (row.Audience || row.audience || 'public') as any,
+          privacy: (row.Audience === 'only_me' || row.audience === 'only_me' ? 'private' : row.Audience === 'friends' ? 'friends' : 'public') as any,
         };
       });
     } catch (e) {
@@ -2043,6 +2045,7 @@ export const supabaseDb = {
       const extendedPayload: Record<string, any> = {
         ...corePayload,
         Status: video.status || 'approved',
+        Audience: video.audience || 'public',
       };
       if (video.rejectionReason) {
         extendedPayload.RejectionReason = video.rejectionReason;

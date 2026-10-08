@@ -129,11 +129,13 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
       )
     : [];
 
-  // Filter matching videos - hide videos from banned creators or rejected videos
+  // Filter matching videos - hide videos from banned creators, rejected videos, or only_me private videos
   const matchedVideos = cleanQuery
     ? videos.filter(
         v =>
           v.status !== 'rejected' &&
+          v.audience !== 'only_me' &&
+          v.privacy !== 'private' &&
           !v.creator?.isBanned &&
           !checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned &&
           (v.caption.toLowerCase().includes(cleanQuery) ||

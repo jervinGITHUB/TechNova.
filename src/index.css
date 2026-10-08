@@ -71,22 +71,27 @@ html.light body {
   color: #0f172a;
 }
 
-/* Light Mode Overrides for main app containers, header, sidebar, and cards */
+/* 1. Main light mode background conversions for containers, sidebars, headers, cards */
 html.light .bg-\[\#0c0c10\],
 html.light .bg-\[\#0d0d12\],
-html.light .bg-\[\#0b0b0f\] {
+html.light .bg-\[\#0b0b0f\],
+html.light .bg-\[\#13131a\],
+html.light .bg-\[\#121218\] {
   background-color: #ffffff !important;
 }
 
-html.light .bg-\[\#121218\],
 html.light .bg-\[\#14141e\],
 html.light .bg-\[\#16161f\],
+html.light .bg-\[\#161622\],
 html.light .bg-\[\#181822\],
 html.light .bg-\[\#181824\],
+html.light .bg-\[\#1a1a26\],
 html.light .bg-\[\#1d1d2b\],
 html.light .bg-\[\#14141d\]\/80,
-html.light .bg-\[\#0d0d14\] {
-  background-color: #f1f4f9 !important;
+html.light .bg-\[\#0d0d14\],
+html.light .bg-\[\#191926\],
+html.light .bg-\[\#161622\]\/60 {
+  background-color: #f8fafc !important;
 }
 
 html.light .bg-\[\#252535\],
@@ -95,19 +100,28 @@ html.light .bg-\[\#252538\] {
   background-color: #e2e8f0 !important;
 }
 
+/* 2. Light Mode Borders */
 html.light .border-neutral-800,
 html.light .border-neutral-800\/80,
+html.light .border-neutral-800\/90,
 html.light .border-neutral-800\/60,
 html.light .border-neutral-700,
 html.light .border-neutral-700\/80,
-html.light .border-neutral-700\/90 {
+html.light .border-neutral-700\/90,
+html.light .border-neutral-700\/60 {
   border-color: #e2e8f0 !important;
 }
 
-html.light .text-white {
+/* 3. General Typography in Light Mode */
+html.light h1,
+html.light h2,
+html.light h3,
+html.light h4,
+html.light .font-brand {
   color: #0f172a !important;
 }
 
+html.light .text-neutral-200,
 html.light .text-neutral-300,
 html.light .text-neutral-400 {
   color: #475569 !important;
@@ -117,17 +131,154 @@ html.light .text-neutral-500 {
   color: #64748b !important;
 }
 
-html.light .hover\:bg-neutral-800:hover,
-html.light .hover\:bg-neutral-800\/80:hover,
-html.light .hover\:bg-\[\#16161f\]:hover,
-html.light .hover\:bg-\[\#181822\]:hover {
-  background-color: #e9eef5 !important;
+/* 4. Sidebar in Light Mode */
+html.light aside {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
 }
 
-html.light .hover\:text-white:hover {
+html.light aside nav button {
+  color: #475569 !important;
+}
+
+html.light aside nav button:hover {
+  background-color: #f1f5f9 !important;
   color: #0f172a !important;
 }
 
+html.light aside nav button.bg-\[\#1b1b24\],
+html.light aside nav button[class*="border-[#ff007a]"] {
+  background-color: #fff1f6 !important;
+  color: #ff007a !important;
+  border-left-color: #ff007a !important;
+}
+
+html.light aside nav button.bg-\[\#1b1b24\] span,
+html.light aside nav button[class*="border-[#ff007a]"] span {
+  color: #ff007a !important;
+}
+
+/* Sidebar profile menu popover */
+html.light aside .group\/menu,
+html.light aside [class*="bg-[#121218]"],
+html.light aside [class*="bg-[#16161f]"] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05) !important;
+}
+
+/* 5. Header in Light Mode */
+html.light header {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.light header input {
+  background-color: #f1f5f9 !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+/* 6. Right Sidebar (Live Now & Trending) in Light Mode */
+html.light .space-y-6 .bg-\[\#13131a\] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.light .space-y-6 h3 {
+  color: #0f172a !important;
+}
+
+html.light .space-y-6 button.bg-\[\#181824\] {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.light .space-y-6 button.bg-\[\#181824\]:hover {
+  background-color: #f1f5f9 !important;
+}
+
+html.light .space-y-6 button.bg-\[\#181824\] .text-white {
+  color: #0f172a !important;
+}
+
+html.light .space-y-6 button.bg-\[\#181824\] .text-neutral-400 {
+  color: #64748b !important;
+}
+
+/* 7. Notifications in Light Mode */
+html.light .space-y-3 > div.bg-\[\#121218\],
+html.light .space-y-3 > div.bg-\[\#151119\] {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.light .space-y-3 > div .text-white {
+  color: #0f172a !important;
+}
+
+html.light .space-y-3 > div .text-neutral-400,
+html.light .space-y-3 > div .text-neutral-100 {
+  color: #475569 !important;
+}
+
+html.light button.bg-\[\#161622\] {
+  background-color: #f1f5f9 !important;
+  color: #475569 !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.light button.bg-\[\#161622\]:hover {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+/* 8. Profile View in Light Mode */
+html.light .profile-view-container,
+html.light .profile-view-container h2 {
+  color: #0f172a !important;
+}
+
+html.light .profile-view-container span.text-white {
+  color: #0f172a !important;
+}
+
+/* 9. CRITICAL EXEMPTIONS: Elements that MUST ALWAYS KEEP CRISP WHITE TEXT */
+/* Primary Action Buttons */
+html.light button.bg-gradient-to-r,
+html.light button.bg-gradient-to-r *,
+html.light [class*="bg-gradient-to-r from-[#ff007a]"],
+html.light [class*="bg-gradient-to-r from-[#ff007a]"] *,
+html.light button.bg-\[\#ff007a\],
+html.light button.bg-\[\#ff007a\] *,
+html.light .bg-\[\#ff007a\],
+html.light .bg-\[\#ff007a\] * {
+  color: #ffffff !important;
+}
+
+/* Video Player, Video Cards, and Canvas overlays ALWAYS maintain white text */
+.video-feed-card,
+.video-feed-card *,
+[data-video-player],
+[data-video-player] *,
+.video-overlay,
+.video-overlay * {
+  color: #ffffff !important;
+}
+
+[data-video-player] .text-neutral-300,
+[data-video-player] .text-neutral-400,
+[data-video-player] .text-neutral-200 {
+  color: #e2e8f0 !important;
+}
+
+/* Badges on video thumbnails */
+[data-video-player] span,
+.video-feed-card span {
+  color: #ffffff !important;
+}
+
+/* Form inputs in Light Mode */
 html.light input,
 html.light textarea {
   color: #0f172a !important;

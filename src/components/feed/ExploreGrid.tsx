@@ -184,6 +184,8 @@ export const ExploreGrid: React.FC = () => {
   // Filter videos by search query and trending tag filter
   const filteredVideos = useMemo(() => {
     return deduplicateVideos(videos).filter(v => {
+      // Explore grid strictly features public videos only
+      if (v.audience === 'only_me' || v.privacy === 'private' || v.audience === 'friends' || v.privacy === 'friends') return false;
       if (v.status === 'rejected') return false;
       if (v.creator?.isBanned) return false;
       if (checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned) return false;

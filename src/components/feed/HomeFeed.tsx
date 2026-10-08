@@ -274,7 +274,8 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   return (
     <div
       onClick={() => togglePlayPause()}
-      className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100vh-6rem)] bg-[#101017] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative group select-none shrink-0 mb-6 flex flex-col justify-between cursor-pointer"
+      data-video-player="true"
+      className="video-feed-card snap-start snap-always w-full aspect-[9/16] max-h-[calc(100vh-6rem)] bg-[#101017] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative group select-none shrink-0 mb-6 flex flex-col justify-between cursor-pointer"
     >
       {/* Background Video Media / Canvas */}
       {videoSrc ? (
@@ -799,6 +800,8 @@ export const HomeFeed: React.FC = () => {
   // Filter: Public feed only shows approved videos (or pending videos to their creator) & never shows banned creators
   const visibleApprovedVideos = useMemo(() => {
     return deduplicateVideos(videos).filter(v => {
+      // "Only me" videos are strictly private and NEVER appear in any public feeds
+      if (v.audience === 'only_me' || v.privacy === 'private') return false;
       if (v.status === 'rejected') return false;
       if (v.creator?.isBanned) return false;
       if (checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned) return false;
@@ -811,14 +814,19 @@ export const HomeFeed: React.FC = () => {
     });
   }, [videos, users, currentUser]);
 
-  // Following videos: videos from creators followed by currentUser
+  // Following videos: videos from creators followed by currentUser (respecting audience)
   const followingVideos = useMemo(() => {
     if (!currentUser) return [];
     return visibleApprovedVideos.filter(v => {
       const creatorId = v.creatorId || v.creator?.id;
       if (!creatorId) return false;
       const status = getFollowStatus(creatorId);
-      return status === 'following' || status === 'friends';
+      if (status !== 'following' && status !== 'friends') return false;
+      // If video is Friends-Only, viewer must be mutual friends
+      if (v.audience === 'friends' || v.privacy === 'friends') {
+        return status === 'friends';
+      }
+      return true;
     }).sort((a, b) => {
       const timeA = new Date(a.createdAt || 0).getTime() || 0;
       const timeB = new Date(b.createdAt || 0).getTime() || 0;
@@ -840,12 +848,22 @@ export const HomeFeed: React.FC = () => {
     });
   }, [visibleApprovedVideos, currentUser, getFollowStatus, followRelations]);
 
-  // For You videos: randomized discovery feed with newest video first
+  // For You videos: randomized discovery feed with newest video first (respecting audience)
   const forYouVideos = useMemo(() => {
-    if (visibleApprovedVideos.length <= 1) return visibleApprovedVideos;
+    const eligibleForYou = visibleApprovedVideos.filter(v => {
+      if (v.audience === 'friends' || v.privacy === 'friends') {
+        const creatorId = v.creatorId || v.creator?.id;
+        if (!currentUser) return false;
+        if (isSameUser(currentUser.id, creatorId)) return true;
+        return getFollowStatus(creatorId) === 'friends';
+      }
+      return true;
+    });
+
+    if (eligibleForYou.length <= 1) return eligibleForYou;
 
     // 1. Sort by upload date to find the most recent upload
-    const sortedByRecent = [...visibleApprovedVideos].sort((a, b) => {
+    const sortedByRecent = [...eligibleForYou].sort((a, b) => {
       const timeA = new Date(a.createdAt || 0).getTime() || 0;
       const timeB = new Date(b.createdAt || 0).getTime() || 0;
       return timeB - timeA;
@@ -863,7 +881,7 @@ export const HomeFeed: React.FC = () => {
 
     // 3. Newest is strictly first, rest are shuffled
     return [newestVideo, ...shuffledOthers];
-  }, [visibleApprovedVideos, shuffleSeed]);
+  }, [visibleApprovedVideos, shuffleSeed, currentUser, getFollowStatus]);
 
   // Active video list based on selected feed tab
   const feedVideos = useMemo(() => {

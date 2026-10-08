@@ -481,6 +481,7 @@ interface AppContextType {
     originalAudioVolume?: number;
     audioStartTime?: number;
     audioEndTime?: number;
+    audience?: 'public' | 'friends' | 'only_me';
   }) => Promise<boolean>;
   submitReport: (report: Omit<ReportItem, 'id' | 'timestamp' | 'status'>) => void;
   
@@ -4463,6 +4464,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     originalAudioVolume?: number;
     audioStartTime?: number;
     audioEndTime?: number;
+    audience?: 'public' | 'friends' | 'only_me';
   }): Promise<boolean> => {
     if (!currentUser) return false;
     const videoId = crypto.randomUUID();
@@ -4487,6 +4489,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
+    const createdAudience = newVideo.audience || 'public';
+
     const created: Video = {
       id: videoId,
       creatorId: currentUser.id,
@@ -4510,6 +4514,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       originalAudioVolume: newVideo.originalAudioVolume ?? 100,
       audioStartTime: newVideo.audioStartTime,
       audioEndTime: newVideo.audioEndTime,
+      audience: createdAudience,
+      privacy: createdAudience === 'only_me' ? 'private' : createdAudience === 'friends' ? 'friends' : 'public',
     };
 
     setVideos(prev => {

@@ -16,6 +16,9 @@ import {
   VolumeX,
   Sliders,
   Sparkles,
+  Globe,
+  Users,
+  Lock,
 } from 'lucide-react';
 
 export const UploadView: React.FC = () => {
@@ -30,6 +33,7 @@ export const UploadView: React.FC = () => {
 
   const [caption, setCaption] = useState('');
   const [hashtags, setHashtags] = useState('');
+  const [audience, setAudience] = useState<'public' | 'friends' | 'only_me'>('public');
   const [selectedAudio, setSelectedAudio] = useState<AudioTrack | null>(null);
 
   // Audio trim / gap selection state
@@ -277,6 +281,7 @@ export const UploadView: React.FC = () => {
     await uploadVideo({
       caption: caption.trim() || 'New viral moment! 🔥',
       hashtags: extractedTags.length > 0 ? extractedTags : ['#viral', '#fyp'],
+      audience,
       audioTrack: selectedAudio
         ? {
             ...selectedAudio,
@@ -305,6 +310,7 @@ export const UploadView: React.FC = () => {
     handleRemoveVideo();
     setCaption('');
     setHashtags('');
+    setAudience('public');
     setSelectedAudio(null);
     setAudioTrimStart(0);
     setAudioTrimEnd(30);
@@ -749,6 +755,71 @@ export const UploadView: React.FC = () => {
                   placeholder="#viral #fyp #trending #dance #music"
                   className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 px-3.5 py-2.5 rounded-2xl border border-neutral-700/80 focus:border-[#ff007a] outline-none transition-colors"
                 />
+              </div>
+
+              {/* Audience / Privacy Settings */}
+              <div>
+                <label className="text-xs font-semibold text-neutral-300 block mb-2">
+                  Who can watch this video?
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {/* Public */}
+                  <button
+                    type="button"
+                    onClick={() => setAudience('public')}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col gap-1 ${
+                      audience === 'public'
+                        ? 'bg-[#ff007a]/15 border-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.25)] ring-1 ring-[#ff007a]'
+                        : 'bg-[#181824] border-neutral-700/80 text-neutral-400 hover:text-white hover:bg-[#202030]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs">
+                      <Globe className="w-3.5 h-3.5 text-cyan-400" />
+                      <span className={audience === 'public' ? 'text-white' : 'text-neutral-300'}>Public</span>
+                    </div>
+                    <span className="text-[10px] text-neutral-400 leading-tight">
+                      Anyone on ViralHub can watch and discover
+                    </span>
+                  </button>
+
+                  {/* Friends Only */}
+                  <button
+                    type="button"
+                    onClick={() => setAudience('friends')}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col gap-1 ${
+                      audience === 'friends'
+                        ? 'bg-[#ff007a]/15 border-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.25)] ring-1 ring-[#ff007a]'
+                        : 'bg-[#181824] border-neutral-700/80 text-neutral-400 hover:text-white hover:bg-[#202030]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs">
+                      <Users className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className={audience === 'friends' ? 'text-white' : 'text-neutral-300'}>Friends Only</span>
+                    </div>
+                    <span className="text-[10px] text-neutral-400 leading-tight">
+                      Only mutual followers can view
+                    </span>
+                  </button>
+
+                  {/* Only me */}
+                  <button
+                    type="button"
+                    onClick={() => setAudience('only_me')}
+                    className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col gap-1 ${
+                      audience === 'only_me'
+                        ? 'bg-[#ff007a]/15 border-[#ff007a] text-white shadow-[0_0_15px_rgba(255,0,122,0.25)] ring-1 ring-[#ff007a]'
+                        : 'bg-[#181824] border-neutral-700/80 text-neutral-400 hover:text-white hover:bg-[#202030]'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1.5 font-bold text-xs">
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      <span className={audience === 'only_me' ? 'text-white' : 'text-neutral-300'}>Only me</span>
+                    </div>
+                    <span className="text-[10px] text-neutral-400 leading-tight">
+                      Private to you in your "Only me" profile tab
+                    </span>
+                  </button>
+                </div>
               </div>
 
               {/* Publish Button */}

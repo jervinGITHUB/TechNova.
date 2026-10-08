@@ -60,7 +60,7 @@ export const ProfileView: React.FC = () => {
     submitVideoAppeal,
   } = useApp();
 
-  const [activeTabSub, setActiveTabSub] = useState<'videos' | 'liked'>('videos');
+  const [activeTabSub, setActiveTabSub] = useState<'videos' | 'liked' | 'only_me'>('videos');
   const [menuOpen, setMenuOpen] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
@@ -165,12 +165,39 @@ export const ProfileView: React.FC = () => {
     );
   }
 
+  // Follow & Relationship states
+  const followStatus = getFollowStatus(targetUser.id);
+  const targetFollowsMe = isTargetFollowingMe(targetUser.id);
+  const isFollowingTarget = followStatus === 'following' || followStatus === 'friends';
+  const areMutualFriends = targetFollowsMe && (followStatus === 'following' || followStatus === 'friends');
+
   // Videos associated with this user (matched reliably by UUID or string)
   const userVideos = videos.filter(v => {
     if (!isSameUser(v.creatorId || v.creator?.id, targetUser.id)) return false;
     if (!isSelf && (v.status === 'pending' || v.status === 'rejected')) return false;
+
+    // "Only me" videos are strictly hidden from the public "Videos" tab and other users
+    if (v.audience === 'only_me' || v.privacy === 'private') {
+      return false;
+    }
+
+    // "Friends Only" videos are only visible to the creator or mutual friends
+    if (v.audience === 'friends' || v.privacy === 'friends') {
+      if (isSelf) return true;
+      return areMutualFriends;
+    }
+
     return true;
   });
+
+  // "Only me" videos (strictly isolated to personal profile of currentUser, hidden from other users)
+  const onlyMeVideos = isSelf
+    ? videos.filter(v => {
+        if (!isSameUser(v.creatorId || v.creator?.id, currentUser?.id)) return false;
+        return v.audience === 'only_me' || v.privacy === 'private';
+      })
+    : [];
+
   // User's liked videos are strictly isolated to targetUser!
   const likedVideos = getUserLikedVideos(targetUser.id);
 
@@ -186,11 +213,6 @@ export const ProfileView: React.FC = () => {
     recordVideoView(video.id);
     setSelectedVideoModal(video);
   };
-
-  // Follow & Relationship states
-  const followStatus = getFollowStatus(targetUser.id);
-  const targetFollowsMe = isTargetFollowingMe(targetUser.id);
-  const isFollowingTarget = followStatus === 'following' || followStatus === 'friends';
 
   // Following & Followers lists
   const targetFollowersList = getUserFollowers(targetUser.id);
@@ -262,7 +284,7 @@ export const ProfileView: React.FC = () => {
     : rawList;
 
   return (
-    <div className="flex-1 p-4 sm:p-8 max-w-5xl mx-auto w-full text-left relative">
+    <div className="profile-view-container flex-1 p-4 sm:p-8 max-w-5xl mx-auto w-full text-left relative">
       {/* Toast Alert */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 bg-[#1e1e2c] border border-neutral-700 text-white text-xs px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2 animate-bounce">
@@ -515,8 +537,8 @@ export const ProfileView: React.FC = () => {
         </div>
       )}
 
-      {/* Tabs: Videos vs Liked */}
-      <div className="flex items-center gap-8 border-b border-neutral-800 mt-6 mb-6">
+      {/* Tabs: Videos vs Liked vs Only me */}
+      <div className="flex items-center gap-6 sm:gap-8 border-b border-neutral-800 mt-6 mb-6">
         <button
           onClick={() => setActiveTabSub('videos')}
           className={`pb-3 text-sm font-bold transition-all relative cursor-pointer ${
@@ -538,6 +560,26 @@ export const ProfileView: React.FC = () => {
             }`}
           >
             Liked
+          </button>
+        )}
+
+        {/* "Only me" tab ONLY shown on user's own profile (strictly hidden when stalking other users) */}
+        {isSelf && (
+          <button
+            onClick={() => setActiveTabSub('only_me')}
+            className={`pb-3 text-sm font-bold transition-all relative cursor-pointer flex items-center gap-1.5 ${
+              activeTabSub === 'only_me'
+                ? 'text-white border-b-2 border-[#ff007a]'
+                : 'text-neutral-500 hover:text-neutral-300'
+            }`}
+          >
+            <Lock className="w-3.5 h-3.5 text-amber-400" />
+            <span>Only me</span>
+            {onlyMeVideos.length > 0 && (
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-neutral-800 text-neutral-300 font-bold">
+                {onlyMeVideos.length}
+              </span>
+            )}
           </button>
         )}
       </div>
@@ -562,29 +604,40 @@ export const ProfileView: React.FC = () => {
           </p>
         </div>
       ) : (
-        /* Public Video Grid matching Screenshot 5 */
+        /* Video Grid */
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-          {(activeTabSub === 'videos' ? userVideos : likedVideos).length === 0 ? (
+          {(activeTabSub === 'videos' ? userVideos : activeTabSub === 'only_me' ? onlyMeVideos : likedVideos).length === 0 ? (
             <div className="col-span-full py-16 text-center space-y-3">
               <div className="w-14 h-14 rounded-3xl bg-[#181824] border border-neutral-800 text-neutral-500 flex items-center justify-center mx-auto">
-                <Play className="w-6 h-6 text-[#ff007a]" />
+                {activeTabSub === 'only_me' ? (
+                  <Lock className="w-6 h-6 text-amber-400" />
+                ) : (
+                  <Play className="w-6 h-6 text-[#ff007a]" />
+                )}
               </div>
-              <p className="text-xs text-neutral-400">
+              <p className="text-sm font-bold text-white">
                 {activeTabSub === 'videos'
                   ? 'No videos uploaded yet.'
+                  : activeTabSub === 'only_me'
+                  ? 'No "Only me" videos yet'
                   : 'No liked videos yet.'}
               </p>
-              {isSelf && activeTabSub === 'videos' && (
+              <p className="text-xs text-neutral-400 max-w-sm mx-auto">
+                {activeTabSub === 'only_me'
+                  ? 'Videos you upload with the "Only me" audience setting will appear here. They are strictly private and cannot be viewed by other users.'
+                  : ''}
+              </p>
+              {isSelf && (activeTabSub === 'videos' || activeTabSub === 'only_me') && (
                 <button
                   onClick={() => setActiveTab('upload')}
-                  className="py-2 px-5 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all cursor-pointer shadow-md"
+                  className="py-2 px-5 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all cursor-pointer shadow-md inline-block"
                 >
-                  Upload Your First Video
+                  {activeTabSub === 'only_me' ? 'Upload a Private Video' : 'Upload Your First Video'}
                 </button>
               )}
             </div>
           ) : (
-            (activeTabSub === 'videos' ? userVideos : likedVideos).map((video, idx) => {
+            (activeTabSub === 'videos' ? userVideos : activeTabSub === 'only_me' ? onlyMeVideos : likedVideos).map((video, idx) => {
               const isImageThumbnail =
                 Boolean(video.thumbnailUrl) &&
                 !isVideoUrl(video.thumbnailUrl) &&
@@ -623,8 +676,22 @@ export const ProfileView: React.FC = () => {
                   )}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
 
+                  {/* Audience Badges */}
+                  {(video.audience === 'only_me' || video.privacy === 'private') && (
+                    <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/80 border border-amber-500/50 text-amber-300 text-[10px] font-bold shadow backdrop-blur-sm">
+                      <Lock className="w-2.5 h-2.5 text-amber-400" />
+                      <span>Only me</span>
+                    </div>
+                  )}
+                  {video.audience === 'friends' && isSelf && (
+                    <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/80 border border-emerald-500/50 text-emerald-300 text-[10px] font-bold shadow backdrop-blur-sm">
+                      <Users className="w-2.5 h-2.5 text-emerald-400" />
+                      <span>Friends</span>
+                    </div>
+                  )}
+
                   {/* Status Badges for Creator's POV */}
-                  {video.status === 'pending' && (
+                  {video.status === 'pending' && (!video.audience || video.audience === 'public') && (
                     <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-500/90 text-black text-[10px] font-extrabold shadow backdrop-blur-sm animate-pulse">
                       <Clock className="w-2.5 h-2.5" />
                       <span>In Review</span>
@@ -657,7 +724,7 @@ export const ProfileView: React.FC = () => {
                   </div>
 
                   {/* Delete button on hover for creator's own video */}
-                  {isSelf && activeTabSub === 'videos' && (
+                  {isSelf && (activeTabSub === 'videos' || activeTabSub === 'only_me') && (
                     <button
                       type="button"
                       onClick={e => {
