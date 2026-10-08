@@ -49,6 +49,9 @@ import {
   checkIsUserBanned,
   recordUserBan,
   recordUserUnban,
+  recordUserWarning,
+  clearUserWarning,
+  checkUserWarning,
   injectUserIntoCache,
   isGoogleAccount,
   recordGoogleAccount,
@@ -547,8 +550,26 @@ interface AppContextType {
   updateReportStatusAdmin: (
     reportId: string,
     type: 'video' | 'user',
-    status: 'Approved' | 'Rejected' | 'Under Review'
+    status: 'Approved' | 'Rejected' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted'
   ) => Promise<boolean>;
+  issueUserWarningAdmin: (
+    userId: string,
+    reason?: string,
+    deadlineHours?: number,
+    reportId?: string
+  ) => Promise<boolean>;
+  submitPreBanAppeal: (
+    reason: string,
+    proofUrl?: string,
+    proofName?: string
+  ) => Promise<boolean>;
+  resolvePreBanAppealAdmin: (
+    userId: string,
+    decision: 'approved' | 'declined',
+    reportId?: string
+  ) => Promise<boolean>;
+  preBanAppealModalOpen: boolean;
+  setPreBanAppealModalOpen: (open: boolean) => void;
   syncAllToSupabase: () => Promise<{ success: boolean; message: string }>;
 
   // Per-User Interactions & Account Switch
@@ -608,6 +629,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const saved = storage.get<User | null>('currentUser', null);
     if (saved && saved.id && (saved.username || saved.displayName) && saved.id !== 'user_main') {
       const banInfo = checkIsUserBanned(saved.id, saved.email, saved);
+      const warningInfo = checkUserWarning(saved.id, saved.email, saved);
       return {
         ...saved,
         isBanned: banInfo.isBanned,
@@ -616,6 +638,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         appealStatus: banInfo.appealStatus,
         appealReason: banInfo.appealReason,
         appealSubmittedAt: banInfo.appealSubmittedAt,
+        warningActive: warningInfo.warningActive,
+        warningReason: warningInfo.warningReason,
+        warningIssuedAt: warningInfo.warningIssuedAt,
+        warningDeadline: warningInfo.warningDeadline,
+        preBanAppealStatus: warningInfo.preBanAppealStatus,
+        preBanAppealReason: warningInfo.preBanAppealReason,
+        preBanAppealProofUrl: warningInfo.preBanAppealProofUrl,
+        preBanAppealProofName: warningInfo.preBanAppealProofName,
+        preBanAppealSubmittedAt: warningInfo.preBanAppealSubmittedAt,
       };
     }
     return null;
@@ -678,6 +709,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const raw = storage.get<User[]>('users', INITIAL_USERS);
     return raw.map(u => {
       const banInfo = checkIsUserBanned(u.id, u.email, u);
+      const warningInfo = checkUserWarning(u.id, u.email, u);
       return {
         ...u,
         isBanned: banInfo.isBanned,
@@ -686,6 +718,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         appealStatus: banInfo.appealStatus,
         appealReason: banInfo.appealReason,
         appealSubmittedAt: banInfo.appealSubmittedAt,
+        warningActive: warningInfo.warningActive,
+        warningReason: warningInfo.warningReason,
+        warningIssuedAt: warningInfo.warningIssuedAt,
+        warningDeadline: warningInfo.warningDeadline,
+        preBanAppealStatus: warningInfo.preBanAppealStatus,
+        preBanAppealReason: warningInfo.preBanAppealReason,
+        preBanAppealProofUrl: warningInfo.preBanAppealProofUrl,
+        preBanAppealProofName: warningInfo.preBanAppealProofName,
+        preBanAppealSubmittedAt: warningInfo.preBanAppealSubmittedAt,
       };
     });
   });
@@ -1038,6 +1079,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSearchQueryRaw(typeof query === 'string' ? query.slice(0, 50) : '');
   };
   const [supabaseModalOpen, setSupabaseModalOpen] = useState<boolean>(false);
+  const [preBanAppealModalOpen, setPreBanAppealModalOpen] = useState<boolean>(false);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(() => getSupabaseConfig().isConnected);
 
   // Browser History Navigation (Back / Forward arrows on browser address bar)
@@ -6715,7 +6757,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const updateReportStatusAdmin = async (
     reportId: string,
     type: 'video' | 'user',
-    status: 'Approved' | 'Rejected' | 'Under Review'
+    status: 'Approved' | 'Rejected' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted'
   ): Promise<boolean> => {
     let targetReport: ReportItem | undefined;
 
@@ -6776,6 +6818,434 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     return true;
+  };
+
+  const issueUserWarningAdmin = async (
+    userId: string,
+    reason = 'Violation of Community Guidelines',
+    deadlineHours = 24,
+    reportId?: string
+  ): Promise<boolean> => {
+    const finalReason = reason.trim() || 'Violation of Community Guidelines';
+    const nowIso = new Date().toISOString();
+    const deadlineIso = new Date(Date.now() + (deadlineHours || 24) * 3600 * 1000).toISOString();
+
+    const targetUser =
+      users.find(u => isSameUser(u.id, userId) || u.username?.toLowerCase() === userId.toLowerCase() || u.email?.toLowerCase() === userId.toLowerCase()) ||
+      savedAccounts.find(u => isSameUser(u.id, userId) || u.username?.toLowerCase() === userId.toLowerCase() || u.email?.toLowerCase() === userId.toLowerCase());
+
+    const resolvedUserId = targetUser ? targetUser.id : userId;
+    const resolvedEmail = targetUser?.email ? targetUser.email.toLowerCase() : null;
+    const resolvedUsername = targetUser?.username ? targetUser.username.toLowerCase() : null;
+
+    // 1. Record warning in registry
+    recordUserWarning({
+      userId: resolvedUserId,
+      username: resolvedUsername,
+      email: resolvedEmail,
+      warningReason: finalReason,
+      warningIssuedAt: nowIso,
+      warningDeadline: deadlineIso,
+      preBanAppealStatus: 'none',
+    });
+
+    // 2. Update users list
+    setUsers(prev => {
+      const next = prev.map(u => {
+        if (isSameUser(u.id, resolvedUserId) || (resolvedEmail && u.email?.toLowerCase() === resolvedEmail)) {
+          return {
+            ...u,
+            warningActive: true,
+            warningReason: finalReason,
+            warningIssuedAt: nowIso,
+            warningDeadline: deadlineIso,
+            preBanAppealStatus: 'none' as const,
+            preBanAppealReason: undefined,
+            preBanAppealProofUrl: undefined,
+            preBanAppealProofName: undefined,
+            preBanAppealSubmittedAt: undefined,
+          };
+        }
+        return u;
+      });
+      storage.set('users', next);
+      return next;
+    });
+
+    // 3. Update savedAccounts
+    setSavedAccounts(prev => {
+      const next = prev.map(a => {
+        if (isSameUser(a.id, resolvedUserId) || (resolvedEmail && a.email?.toLowerCase() === resolvedEmail)) {
+          return {
+            ...a,
+            warningActive: true,
+            warningReason: finalReason,
+            warningIssuedAt: nowIso,
+            warningDeadline: deadlineIso,
+            preBanAppealStatus: 'none' as const,
+          };
+        }
+        return a;
+      });
+      storage.set('saved_accounts_v2', next);
+      return next;
+    });
+
+    // 4. Update currentUser if that user is currently active
+    if (currentUser && (isSameUser(currentUser.id, resolvedUserId) || (resolvedEmail && currentUser.email?.toLowerCase() === resolvedEmail))) {
+      const updatedUser: User = {
+        ...currentUser,
+        warningActive: true,
+        warningReason: finalReason,
+        warningIssuedAt: nowIso,
+        warningDeadline: deadlineIso,
+        preBanAppealStatus: 'none',
+      };
+      setCurrentUser(updatedUser);
+      storage.set('currentUser', updatedUser);
+    }
+
+    // 5. Update related reports
+    setReports(prev => {
+      const next = prev.map(r => {
+        const matchesTarget = isSameUser(r.targetId, resolvedUserId) || (reportId && (r.id === reportId || toUuid(r.id) === toUuid(reportId)));
+        if (matchesTarget && r.type === 'user') {
+          return {
+            ...r,
+            status: 'Warning Issued' as const,
+            warningReason: finalReason,
+            warningIssuedAt: nowIso,
+            warningDeadline: deadlineIso,
+            appealStatus: 'none' as const,
+          };
+        }
+        return r;
+      });
+      storage.set('reports', next);
+      return next;
+    });
+
+    // 6. Send high-priority notification to target user
+    const warningNotif: NotificationItem = {
+      id: `notif_warn_${Date.now()}`,
+      recipientId: resolvedUserId,
+      recipientEmail: resolvedEmail || undefined,
+      type: 'account_warning',
+      actor: {
+        id: 'viralhub_moderation',
+        username: 'moderation',
+        displayName: 'ViralHub Moderation',
+        avatar: '',
+      },
+      targetText: `Urgent: Your account was flagged for "${finalReason}". You have ${deadlineHours}h to submit an appeal and counter-proof before suspension.`,
+      warningReason: finalReason,
+      warningDeadline: deadlineIso,
+      timestamp: nowIso,
+      createdAt: nowIso,
+      isUnread: true,
+    };
+
+    setNotifications(prev => {
+      const next = deduplicateNotifications([warningNotif, ...prev]);
+      storage.set('notifications', next);
+      return next;
+    });
+    supabaseDb.insertNotification(warningNotif, resolvedUserId);
+
+    if (reportId) {
+      await supabaseDb.updateReportStatus(reportId, 'user', 'Warning Issued');
+    }
+
+    // 7. Broadcast event so other open tabs update
+    storage.set('viralhub_user_warning_event', {
+      userId: resolvedUserId,
+      email: resolvedEmail,
+      username: resolvedUsername,
+      warningReason: finalReason,
+      warningDeadline: deadlineIso,
+      timestamp: Date.now(),
+    });
+
+    return true;
+  };
+
+  const submitPreBanAppeal = async (
+    reason: string,
+    proofUrl?: string,
+    proofName?: string
+  ): Promise<boolean> => {
+    if (!currentUser) return false;
+    const cleanReason = reason.trim();
+    if (!cleanReason) return false;
+    const nowIso = new Date().toISOString();
+
+    // 1. Update currentUser
+    const updatedUser: User = {
+      ...currentUser,
+      preBanAppealStatus: 'pending',
+      preBanAppealReason: cleanReason,
+      preBanAppealProofUrl: proofUrl,
+      preBanAppealProofName: proofName,
+      preBanAppealSubmittedAt: nowIso,
+    };
+    setCurrentUser(updatedUser);
+    storage.set('currentUser', updatedUser);
+
+    // 2. Update warnings registry
+    recordUserWarning({
+      userId: currentUser.id,
+      username: currentUser.username,
+      email: currentUser.email,
+      warningReason: currentUser.warningReason,
+      warningIssuedAt: currentUser.warningIssuedAt,
+      warningDeadline: currentUser.warningDeadline,
+      preBanAppealStatus: 'pending',
+      preBanAppealReason: cleanReason,
+      preBanAppealProofUrl: proofUrl,
+      preBanAppealProofName: proofName,
+      preBanAppealSubmittedAt: nowIso,
+    });
+
+    // 3. Update users list
+    setUsers(prev => {
+      const next = prev.map(u => {
+        if (isSameUser(u.id, currentUser.id)) {
+          return {
+            ...u,
+            preBanAppealStatus: 'pending' as const,
+            preBanAppealReason: cleanReason,
+            preBanAppealProofUrl: proofUrl,
+            preBanAppealProofName: proofName,
+            preBanAppealSubmittedAt: nowIso,
+          };
+        }
+        return u;
+      });
+      storage.set('users', next);
+      return next;
+    });
+
+    // 4. Update saved accounts
+    setSavedAccounts(prev => {
+      const next = prev.map(a => {
+        if (isSameUser(a.id, currentUser.id)) {
+          return {
+            ...a,
+            preBanAppealStatus: 'pending' as const,
+            preBanAppealReason: cleanReason,
+            preBanAppealProofUrl: proofUrl,
+            preBanAppealProofName: proofName,
+            preBanAppealSubmittedAt: nowIso,
+          };
+        }
+        return a;
+      });
+      storage.set('saved_accounts_v2', next);
+      return next;
+    });
+
+    // 5. Update related reports in state
+    setReports(prev => {
+      const next = prev.map(r => {
+        if (isSameUser(r.targetId, currentUser.id) && r.type === 'user') {
+          return {
+            ...r,
+            status: 'Appeal Submitted' as const,
+            appealStatus: 'pending' as const,
+            appealReason: cleanReason,
+            appealProofUrl: proofUrl,
+            appealProofName: proofName,
+            appealSubmittedAt: nowIso,
+          };
+        }
+        return r;
+      });
+      storage.set('reports', next);
+      return next;
+    });
+
+    // 6. Notify admin team
+    const adminNotif: NotificationItem = {
+      id: `notif_appeal_proof_${Date.now()}`,
+      recipientId: 'admin',
+      type: 'pre_ban_appeal_update',
+      actor: {
+        id: currentUser.id,
+        username: currentUser.username,
+        displayName: currentUser.displayName,
+        avatar: currentUser.avatar,
+      },
+      targetText: `User @${currentUser.username} submitted pre-ban appeal with supporting proof: "${cleanReason.slice(0, 70)}..."`,
+      appealReason: cleanReason,
+      proofUrl: proofUrl,
+      timestamp: nowIso,
+      createdAt: nowIso,
+      isUnread: true,
+    };
+
+    setNotifications(prev => {
+      const next = deduplicateNotifications([adminNotif, ...prev]);
+      storage.set('notifications', next);
+      return next;
+    });
+    supabaseDb.insertNotification(adminNotif, 'admin');
+
+    // 7. Update Supabase reports
+    for (const r of reports.filter(rep => isSameUser(rep.targetId, currentUser.id) && rep.type === 'user')) {
+      await supabaseDb.updateReportStatus(r.id, 'user', 'Appeal Submitted');
+    }
+
+    return true;
+  };
+
+  const resolvePreBanAppealAdmin = async (
+    userId: string,
+    decision: 'approved' | 'declined',
+    reportId?: string
+  ): Promise<boolean> => {
+    const isApproved = decision === 'approved';
+    const nowIso = new Date().toISOString();
+
+    const targetUser =
+      users.find(u => isSameUser(u.id, userId) || u.username?.toLowerCase() === userId.toLowerCase() || u.email?.toLowerCase() === userId.toLowerCase()) ||
+      savedAccounts.find(u => isSameUser(u.id, userId) || u.username?.toLowerCase() === userId.toLowerCase() || u.email?.toLowerCase() === userId.toLowerCase());
+
+    const resolvedUserId = targetUser ? targetUser.id : userId;
+    const resolvedEmail = targetUser?.email ? targetUser.email.toLowerCase() : null;
+    const resolvedUsername = targetUser?.username ? targetUser.username.toLowerCase() : null;
+    const banOrWarningReason = targetUser?.warningReason || 'Violation of Community Guidelines';
+
+    if (isApproved) {
+      // 1. User provided valid proof! Clear warning, restore clean standing
+      clearUserWarning(resolvedUserId, resolvedEmail, resolvedUsername);
+
+      // Update users list
+      setUsers(prev => {
+        const next = prev.map(u => {
+          if (isSameUser(u.id, resolvedUserId) || (resolvedEmail && u.email?.toLowerCase() === resolvedEmail)) {
+            return {
+              ...u,
+              warningActive: false,
+              warningReason: undefined,
+              warningDeadline: undefined,
+              preBanAppealStatus: 'approved' as const,
+            };
+          }
+          return u;
+        });
+        storage.set('users', next);
+        return next;
+      });
+
+      // Update savedAccounts
+      setSavedAccounts(prev => {
+        const next = prev.map(a => {
+          if (isSameUser(a.id, resolvedUserId) || (resolvedEmail && a.email?.toLowerCase() === resolvedEmail)) {
+            return {
+              ...a,
+              warningActive: false,
+              warningReason: undefined,
+              warningDeadline: undefined,
+              preBanAppealStatus: 'approved' as const,
+            };
+          }
+          return a;
+        });
+        storage.set('saved_accounts_v2', next);
+        return next;
+      });
+
+      // If currentUser is this user
+      if (currentUser && (isSameUser(currentUser.id, resolvedUserId) || (resolvedEmail && currentUser.email?.toLowerCase() === resolvedEmail))) {
+        const updated = {
+          ...currentUser,
+          warningActive: false,
+          warningReason: undefined,
+          warningDeadline: undefined,
+          preBanAppealStatus: 'approved' as const,
+        };
+        setCurrentUser(updated);
+        storage.set('currentUser', updated);
+      }
+
+      // Update report status
+      setReports(prev => {
+        const next = prev.map(r => {
+          const matches = isSameUser(r.targetId, resolvedUserId) || (reportId && (r.id === reportId || toUuid(r.id) === toUuid(reportId)));
+          if (matches && r.type === 'user') {
+            return {
+              ...r,
+              status: 'Rejected' as const, // Dismissed/exonerated
+              appealStatus: 'approved' as const,
+            };
+          }
+          return r;
+        });
+        storage.set('reports', next);
+        return next;
+      });
+
+      // Send positive notification to user
+      const approvedNotif: NotificationItem = {
+        id: `notif_appeal_ok_${Date.now()}`,
+        recipientId: resolvedUserId,
+        recipientEmail: resolvedEmail || undefined,
+        type: 'pre_ban_appeal_update',
+        actor: {
+          id: 'viralhub_moderation',
+          username: 'moderation',
+          displayName: 'ViralHub Moderation',
+          avatar: '',
+        },
+        targetText: `Great news: Your pre-ban appeal and evidence were accepted! The warning has been dismissed and your account remains in good standing.`,
+        appealStatus: 'approved',
+        timestamp: nowIso,
+        createdAt: nowIso,
+        isUnread: true,
+      };
+
+      setNotifications(prev => {
+        const next = deduplicateNotifications([approvedNotif, ...prev]);
+        storage.set('notifications', next);
+        return next;
+      });
+      supabaseDb.insertNotification(approvedNotif, resolvedUserId);
+
+      if (reportId) {
+        await supabaseDb.updateReportStatus(reportId, 'user', 'Rejected');
+      }
+
+      return true;
+    } else {
+      // 2. User's proof was invalid or deadline expired: Decline & Proceed to Ban
+      clearUserWarning(resolvedUserId, resolvedEmail, resolvedUsername);
+
+      // Call banUserAdmin to enact the official suspension
+      await banUserAdmin(resolvedUserId, `Appeal declined: ${banOrWarningReason}`);
+
+      // Update report status
+      setReports(prev => {
+        const next = prev.map(r => {
+          const matches = isSameUser(r.targetId, resolvedUserId) || (reportId && (r.id === reportId || toUuid(r.id) === toUuid(reportId)));
+          if (matches && r.type === 'user') {
+            return {
+              ...r,
+              status: 'Approved' as const, // Action taken
+              appealStatus: 'declined' as const,
+            };
+          }
+          return r;
+        });
+        storage.set('reports', next);
+        return next;
+      });
+
+      if (reportId) {
+        await supabaseDb.updateReportStatus(reportId, 'user', 'Approved');
+      }
+
+      return true;
+    }
   };
 
   const syncAllToSupabase = async (): Promise<{ success: boolean; message: string }> => {
@@ -6925,6 +7395,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         submitVideoAppeal,
         reviewVideoAppeal,
         updateReportStatusAdmin,
+        issueUserWarningAdmin,
+        submitPreBanAppeal,
+        resolvePreBanAppealAdmin,
+        preBanAppealModalOpen,
+        setPreBanAppealModalOpen,
         syncAllToSupabase,
         switchAccountModalOpen,
         setSwitchAccountModalOpen,

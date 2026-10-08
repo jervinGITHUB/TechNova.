@@ -34,6 +34,7 @@ export const NotificationsView: React.FC = () => {
     acceptFollowRequest,
     declineFollowRequest,
     submitVideoAppeal,
+    setPreBanAppealModalOpen,
   } = useApp();
 
   // Realtime relative timestamp ticker (updates "Just now" to "1m ago", "5m ago", etc. automatically)
@@ -98,6 +99,10 @@ export const NotificationsView: React.FC = () => {
         return <AlertTriangle className="w-3.5 h-3.5 text-red-400" />;
       case 'account_banned':
         return <Ban className="w-3.5 h-3.5 text-red-400" />;
+      case 'account_warning':
+        return <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />;
+      case 'pre_ban_appeal_update':
+        return <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />;
       case 'appeal_status':
         return <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />;
       default:
@@ -311,6 +316,23 @@ export const NotificationsView: React.FC = () => {
                             <span>Appeal Status: Declined</span>
                           </div>
                         )}
+                      </div>
+                    )}
+
+                    {/* Pre-Ban Warning & Appeal Action Button */}
+                    {item.type === 'account_warning' && (
+                      <div className="mt-2.5">
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setPreBanAppealModalOpen(true);
+                          }}
+                          className="py-1.5 px-3.5 rounded-xl bg-gradient-to-r from-amber-500 to-[#ff007a] hover:from-amber-400 hover:to-pink-600 text-white font-bold text-xs flex items-center gap-1.5 cursor-pointer shadow-lg shadow-amber-500/20"
+                        >
+                          <ShieldAlert className="w-3.5 h-3.5" />
+                          <span>Submit Defense & Counter-Proof</span>
+                        </button>
                       </div>
                     )}
                   </div>

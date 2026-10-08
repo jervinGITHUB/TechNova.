@@ -10,6 +10,8 @@ import { getCuratedCoverForTrack, resolveTrackCover, isDeprecatedDefaultTrack } 
 import { AudioTrack, SystemStats } from '../../types';
 import {
   Shield,
+  ShieldAlert,
+  FileText,
   Users,
   Film,
   AlertTriangle,
@@ -36,6 +38,7 @@ import {
   Database,
   Copy,
   ExternalLink,
+  Info,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -61,6 +64,8 @@ export const AdminDashboardView: React.FC = () => {
     rejectVideoAdmin,
     reviewVideoAppeal,
     updateReportStatusAdmin,
+    issueUserWarningAdmin,
+    resolvePreBanAppealAdmin,
     syncWithSupabase,
     navigateToUserProfile,
     setSwitchAccountModalOpen,
@@ -165,7 +170,9 @@ export const AdminDashboardView: React.FC = () => {
   const [videoSearch, setVideoSearch] = useState('');
   const [videoStatusFilter, setVideoStatusFilter] = useState<'approved' | 'rejected' | 'appeals' | 'all'>('approved');
   const [reportFilter, setReportFilter] = useState<'all' | 'video' | 'user'>('all');
-  const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'Under Review' | 'Approved' | 'Rejected'>('all');
+  const [reportStatusFilter, setReportStatusFilter] = useState<
+    'all' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted' | 'Approved' | 'Rejected'
+  >('all');
 
   // Audio Tab Filters & State
   const [audioSearch, setAudioSearch] = useState('');
@@ -192,8 +199,44 @@ export const AdminDashboardView: React.FC = () => {
   const [resolvingReportId, setResolvingReportId] = useState<string | null>(null);
   const [banningUser, setBanningUser] = useState<{ id: string; username: string; displayName: string } | null>(null);
   const [banCustomReason, setBanCustomReason] = useState('Violation of Community Guidelines');
+  const [banModeChoice, setBanModeChoice] = useState<'warning_first' | 'direct_ban'>('warning_first');
   const [rejectingVideoId, setRejectingVideoId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('Inappropriate visual content or guidelines violation');
+
+  // Pre-Ban Warning Modal
+  const [warningModalData, setWarningModalData] = useState<{
+    userId: string;
+    username: string;
+    displayName: string;
+    reportId?: string;
+    defaultReason?: string;
+  } | null>(null);
+  const [warningReasonText, setWarningReasonText] = useState('Violation of Community Guidelines');
+  const [warningHours, setWarningHours] = useState(24);
+  const [isSubmittingWarning, setIsSubmittingWarning] = useState(false);
+
+  // Reviewing User Pre-Ban Appeal & Proofs Modal
+  const [reviewingProofModal, setReviewingProofModal] = useState<{
+    userId: string;
+    username: string;
+    displayName: string;
+    avatar?: string;
+    statement: string;
+    proofUrl?: string;
+    proofName?: string;
+    submittedAt?: string;
+    reportId?: string;
+  } | null>(null);
+
+  // In-app Confirmation Modal (replaces browser window.confirm to support iframes safely)
+  const [confirmModal, setConfirmModal] = useState<{
+    title: string;
+    message: string;
+    confirmText?: string;
+    isDanger?: boolean;
+    onConfirm: () => void | Promise<void>;
+  } | null>(null);
+  const [isConfirmingAction, setIsConfirmingAction] = useState(false);
 
   // Add Admin Modal
   const [showAddAdminModal, setShowAddAdminModal] = useState(false);
@@ -221,6 +264,8 @@ export const AdminDashboardView: React.FC = () => {
   ).length;
 
   const pendingReportsCount = reports.filter(r => r.status === 'Under Review').length;
+  const warningReportsCount = reports.filter(r => r.status === 'Warning Issued').length;
+  const appealsSubmittedCount = reports.filter(r => r.status === 'Appeal Submitted').length;
   const approvedReportsCount = reports.filter(r => r.status === 'Approved').length;
   const rejectedReportsCount = reports.filter(r => r.status === 'Rejected').length;
 
@@ -425,18 +470,20 @@ export const AdminDashboardView: React.FC = () => {
       return;
     }
 
-    const confirmDelete = window.confirm(
-      `Are you sure you want to delete the audio track "${track.title}" by ${track.artist}?\n\nThis will remove it from the sound picker across all users.`
-    );
-    if (!confirmDelete) return;
-
-    if (playingTrackId === track.id && audioPlayerRef.current) {
-      audioPlayerRef.current.pause();
-      setPlayingTrackId(null);
-    }
-
-    await deleteAudioTrack(track.id);
-    showToast(`Track "${track.title}" deleted.`);
+    setConfirmModal({
+      title: 'Delete Audio Track',
+      message: `Are you sure you want to delete "${track.title}" by ${track.artist}? This will remove it from the sound picker across all users.`,
+      confirmText: 'Delete Track',
+      isDanger: true,
+      onConfirm: async () => {
+        if (playingTrackId === track.id && audioPlayerRef.current) {
+          audioPlayerRef.current.pause();
+          setPlayingTrackId(null);
+        }
+        await deleteAudioTrack(track.id);
+        showToast(`Track "${track.title}" deleted.`);
+      },
+    });
   };
 
   const handleAudioFileSelection = (file: File) => {
@@ -1240,6 +1287,36 @@ export const AdminDashboardView: React.FC = () => {
                                 </div>
                               )}
                             </div>
+                          ) : u.warningActive ? (
+                            <div className="space-y-1">
+                              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[10px] flex items-center gap-1 w-fit border border-amber-500/40">
+                                <ShieldAlert className="w-2.5 h-2.5" />
+                                <span>NOTICE ACTIVE</span>
+                              </span>
+                              {u.preBanAppealStatus === 'pending' ? (
+                                <button
+                                  onClick={() =>
+                                    setReviewingProofModal({
+                                      userId: u.id,
+                                      username: u.username,
+                                      displayName: u.displayName,
+                                      avatar: u.avatar,
+                                      statement: u.preBanAppealReason || 'Submitted counter-proof for review.',
+                                      proofUrl: u.preBanAppealProofUrl,
+                                      proofName: u.preBanAppealProofName,
+                                      submittedAt: u.preBanAppealSubmittedAt,
+                                    })
+                                  }
+                                  className="text-[10px] text-cyan-300 hover:text-cyan-200 font-bold flex items-center gap-1 underline cursor-pointer"
+                                >
+                                  <Sparkles className="w-2.5 h-2.5" /> Review Proofs
+                                </button>
+                              ) : (
+                                <div className="text-[10px] text-neutral-400 font-mono">
+                                  Awaiting Appeal
+                                </div>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-[10px] font-semibold text-emerald-400 flex items-center gap-1">
                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
@@ -1260,37 +1337,92 @@ export const AdminDashboardView: React.FC = () => {
 
                             {u.isBanned ? (
                               <button
-                                onClick={async () => {
-                                  const confirmUnban = window.confirm(`Unban @${u.username}?`);
-                                  if (!confirmUnban) return;
-                                  await unbanUserAdmin(u.id);
-                                  showToast(`User @${u.username} unbanned.`);
+                                onClick={() => {
+                                  setConfirmModal({
+                                    title: 'Unban User Account',
+                                    message: `Restore full access for @${u.username}? Their account will be reactivated.`,
+                                    confirmText: 'Unban Account',
+                                    isDanger: false,
+                                    onConfirm: async () => {
+                                      await unbanUserAdmin(u.id);
+                                      showToast(`User @${u.username} unbanned.`);
+                                    },
+                                  });
                                 }}
                                 className="p-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/30 text-emerald-400 transition-colors cursor-pointer"
                                 title="Unban User Account"
                               >
                                 <UserCheck className="w-3.5 h-3.5" />
                               </button>
+                            ) : u.warningActive ? (
+                              <div className="flex items-center gap-1">
+                                {u.preBanAppealStatus === 'pending' ? (
+                                  <button
+                                    onClick={() =>
+                                      setReviewingProofModal({
+                                        userId: u.id,
+                                        username: u.username,
+                                        displayName: u.displayName,
+                                        avatar: u.avatar,
+                                        statement: u.preBanAppealReason || 'Submitted defense statement.',
+                                        proofUrl: u.preBanAppealProofUrl,
+                                        proofName: u.preBanAppealProofName,
+                                        submittedAt: u.preBanAppealSubmittedAt,
+                                      })
+                                    }
+                                    className="px-2 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 text-[10px] font-bold cursor-pointer"
+                                    title="Inspect user appeal statement & proofs"
+                                  >
+                                    Inspect Proofs
+                                  </button>
+                                ) : (
+                                  <button
+                                    onClick={() => {
+                                      setConfirmModal({
+                                        title: 'Confirm Suspension',
+                                        message: `Grace period expired or no proofs submitted. Confirm ban for @${u.username}?`,
+                                        confirmText: 'Confirm Ban',
+                                        isDanger: true,
+                                        onConfirm: async () => {
+                                          await resolvePreBanAppealAdmin(u.id, 'declined');
+                                          showToast(`User @${u.username} banned.`);
+                                        },
+                                      });
+                                    }}
+                                    className="p-1.5 rounded-lg bg-red-500/15 hover:bg-red-500/30 text-red-400 transition-colors cursor-pointer"
+                                    title="Proceed to Ban"
+                                  >
+                                    <Ban className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
                             ) : (
                               <button
                                 onClick={() => {
                                   setBanningUser({ id: u.id, username: u.username, displayName: u.displayName });
                                   setBanCustomReason('Violation of Community Guidelines');
+                                  setBanModeChoice('warning_first');
                                 }}
                                 disabled={isSameUser(u.id, currentUser?.id)}
                                 className="p-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 transition-colors cursor-pointer disabled:opacity-30"
-                                title="Ban User"
+                                title="Take Moderation Action"
                               >
-                                <Ban className="w-3.5 h-3.5" />
+                                <ShieldAlert className="w-3.5 h-3.5" />
                               </button>
                             )}
 
                             <button
-                              onClick={async () => {
-                                const confirmPrompt = window.confirm(`Permanently delete user @${u.username}?`);
-                                if (!confirmPrompt) return;
-                                await deleteUserAdmin(u.id);
-                                showToast(`Account @${u.username} deleted.`);
+                              onClick={() => {
+                                setConfirmModal({
+                                  title: 'Permanently Delete User',
+                                  message: `Permanently delete user @${u.username}? This will remove their profile and all associated data.`,
+                                  confirmText: 'Delete User',
+                                  isDanger: true,
+                                  onConfirm: async () => {
+                                    await deleteUserAdmin(u.id);
+                                    showToast(`Account @${u.username} deleted.`);
+                                  },
+                                });
                               }}
                               disabled={isSameUser(u.id, currentUser?.id)}
                               className="p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 transition-colors cursor-pointer disabled:opacity-30"
@@ -1508,11 +1640,17 @@ export const AdminDashboardView: React.FC = () => {
                                 Revoke
                               </button>
                               <button
-                                onClick={async () => {
-                                  const confirmPrompt = window.confirm('Delete video permanently?');
-                                  if (!confirmPrompt) return;
-                                  await deleteVideoAdmin(video.id);
-                                  showToast('Video deleted.');
+                                onClick={() => {
+                                  setConfirmModal({
+                                    title: 'Delete Video Permanently',
+                                    message: 'Are you sure you want to delete this video permanently? This action cannot be undone.',
+                                    confirmText: 'Delete Video',
+                                    isDanger: true,
+                                    onConfirm: async () => {
+                                      await deleteVideoAdmin(video.id);
+                                      showToast('Video deleted.');
+                                    },
+                                  });
                                 }}
                                 className="p-1 rounded-lg bg-red-500/10 hover:bg-red-500/25 text-red-400 text-xs cursor-pointer"
                               >
@@ -1590,6 +1728,8 @@ export const AdminDashboardView: React.FC = () => {
               {[
                 { id: 'all', label: `All (${reports.length})` },
                 { id: 'Under Review', label: `Pending (${pendingReportsCount})` },
+                { id: 'Warning Issued', label: `Notice Active (${warningReportsCount})`, highlight: warningReportsCount > 0 },
+                { id: 'Appeal Submitted', label: `Proofs Ready (${appealsSubmittedCount})`, highlight: appealsSubmittedCount > 0 },
                 { id: 'Approved', label: `Action Taken (${approvedReportsCount})` },
                 { id: 'Rejected', label: `Dismissed (${rejectedReportsCount})` },
               ].map(tab => (
@@ -1599,6 +1739,8 @@ export const AdminDashboardView: React.FC = () => {
                   className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors cursor-pointer ${
                     reportStatusFilter === tab.id
                       ? 'bg-purple-600 text-white'
+                      : tab.highlight
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                       : 'bg-neutral-800 text-neutral-400 hover:text-white'
                   }`}
                 >
@@ -1620,7 +1762,7 @@ export const AdminDashboardView: React.FC = () => {
                     key={report.id}
                     className="p-4 rounded-xl bg-neutral-900 border border-neutral-800 flex flex-col md:flex-row md:items-center justify-between gap-4"
                   >
-                    <div className="space-y-1 text-xs">
+                    <div className="space-y-1.5 text-xs flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-neutral-800 text-neutral-300">
                           {report.type} report
@@ -1633,54 +1775,276 @@ export const AdminDashboardView: React.FC = () => {
                               ? 'bg-emerald-500/20 text-emerald-400'
                               : report.status === 'Rejected'
                               ? 'bg-red-500/15 text-red-400'
-                              : 'bg-amber-500/20 text-amber-300'
+                              : report.status === 'Warning Issued'
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                              : report.status === 'Appeal Submitted'
+                              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold'
+                              : 'bg-neutral-800 text-neutral-300'
                           }`}
                         >
                           {report.status}
                         </span>
                       </div>
-                      <div className="text-neutral-300 mt-1">
+                      <div className="text-neutral-300">
                         <strong>Reason:</strong> {report.scenario}
                         {report.description && <span className="text-neutral-400"> — "{report.description}"</span>}
                       </div>
+
+                      {/* Display Proofs / Defense Statement if user submitted */}
+                      {report.type === 'user' && (report.status === 'Appeal Submitted' || report.appealReason) && (
+                        <div className="mt-2 p-3 rounded-xl bg-cyan-950/20 border border-cyan-500/30 text-xs space-y-1.5">
+                          <div className="flex items-center justify-between text-cyan-300 font-bold">
+                            <span className="flex items-center gap-1.5">
+                              <Sparkles className="w-3.5 h-3.5" />
+                              <span>User Defense Statement:</span>
+                            </span>
+                            {report.appealSubmittedAt && (
+                              <span className="text-[10px] font-normal text-neutral-400 font-mono">
+                                Submitted {report.appealSubmittedAt.slice(0, 10)}
+                              </span>
+                            )}
+                          </div>
+                          {report.appealReason && (
+                            <p className="text-neutral-200 italic">"{report.appealReason}"</p>
+                          )}
+                          {report.appealProofUrl && (
+                            <div className="flex items-center gap-3 pt-1 border-t border-cyan-500/20">
+                              <a
+                                href={report.appealProofUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="relative group block w-12 h-12 rounded-lg overflow-hidden border border-neutral-700 bg-neutral-900 shrink-0"
+                              >
+                                <img
+                                  src={report.appealProofUrl}
+                                  alt="Proof evidence"
+                                  className="w-full h-full object-cover"
+                                />
+                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center">
+                                  <ExternalLink className="w-3.5 h-3.5 text-white" />
+                                </div>
+                              </a>
+                              <div className="text-[11px] text-neutral-300">
+                                <span className="font-semibold block">{report.appealProofName || 'Counter-Proof Evidence'}</span>
+                                <a
+                                  href={report.appealProofUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-cyan-400 hover:underline text-[10px]"
+                                >
+                                  Open full-size attachment ↗
+                                </a>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Action buttons */}
-                    <div className="flex items-center gap-2 shrink-0">
-                      {report.status !== 'Approved' && (
-                        <button
-                          disabled={resolvingReportId === report.id}
-                          onClick={async () => {
-                            setResolvingReportId(report.id);
-                            try {
-                              if (report.type === 'video') {
-                                await rejectVideoAdmin(report.targetId, report.scenario);
-                              } else {
-                                await banUserAdmin(report.targetId, report.scenario);
-                              }
-                              await updateReportStatusAdmin(report.id, report.type, 'Approved');
-                              showToast(`Report approved & penalty applied.`);
-                            } finally {
-                              setResolvingReportId(null);
-                            }
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-semibold text-xs cursor-pointer flex items-center gap-1"
-                        >
-                          <Check className="w-3.5 h-3.5" />
-                          <span>Approve & Revoke</span>
-                        </button>
-                      )}
+                    <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                      {/* USER REPORTS: Due Process Flow */}
+                      {report.type === 'user' ? (
+                        <>
+                          {report.status === 'Under Review' && (
+                            <>
+                              <button
+                                disabled={resolvingReportId === report.id}
+                                onClick={() => {
+                                  setWarningModalData({
+                                    userId: report.targetId,
+                                    username: report.targetSubtitle?.replace(/^@/, '') || report.targetName,
+                                    displayName: report.targetName,
+                                    reportId: report.id,
+                                    defaultReason: report.scenario || 'Violation of Community Guidelines',
+                                  });
+                                  setWarningReasonText(report.scenario || 'Violation of Community Guidelines');
+                                  setWarningHours(24);
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold text-xs cursor-pointer flex items-center gap-1.5 border border-amber-500/30"
+                                title="Approves report and issues pre-ban violation notice with 24h grace period for user to submit appeal & proofs"
+                              >
+                                <ShieldAlert className="w-3.5 h-3.5" />
+                                <span>Approve Report & Issue Notice</span>
+                              </button>
 
-                      {report.status !== 'Rejected' && (
-                        <button
-                          onClick={async () => {
-                            await updateReportStatusAdmin(report.id, report.type, 'Rejected');
-                            showToast(`Report dismissed.`);
-                          }}
-                          className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs cursor-pointer"
-                        >
-                          Dismiss
-                        </button>
+                              <button
+                                onClick={async () => {
+                                  await updateReportStatusAdmin(report.id, report.type, 'Rejected');
+                                  showToast(`Report dismissed.`);
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs cursor-pointer"
+                              >
+                                Dismiss Report
+                              </button>
+                            </>
+                          )}
+
+                          {report.status === 'Warning Issued' && (
+                            <>
+                              {(report.appealReason || report.appealProofUrl) ? (
+                                <button
+                                  onClick={() =>
+                                    setReviewingProofModal({
+                                      userId: report.targetId,
+                                      username: report.targetSubtitle?.replace(/^@/, '') || report.targetName,
+                                      displayName: report.targetName,
+                                      statement: report.appealReason || 'User submitted defense statement.',
+                                      proofUrl: report.appealProofUrl,
+                                      proofName: report.appealProofName,
+                                      submittedAt: report.appealSubmittedAt,
+                                      reportId: report.id,
+                                    })
+                                  }
+                                  className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 font-bold text-xs cursor-pointer flex items-center gap-1.5 border border-cyan-500/40"
+                                >
+                                  <Sparkles className="w-3.5 h-3.5" />
+                                  <span>Review Proofs</span>
+                                </button>
+                              ) : null}
+
+                              <button
+                                disabled={resolvingReportId === report.id}
+                                onClick={() => {
+                                  setConfirmModal({
+                                    title: 'Proceed with Account Ban',
+                                    message: `Grace period expired or user failed to submit appeal proofs. Proceed with ban for ${report.targetName}?`,
+                                    confirmText: 'Confirm Ban',
+                                    isDanger: true,
+                                    onConfirm: async () => {
+                                      setResolvingReportId(report.id);
+                                      try {
+                                        await banUserAdmin(report.targetId, report.scenario);
+                                        await updateReportStatusAdmin(report.id, report.type, 'Approved');
+                                        showToast(`User account banned.`);
+                                      } finally {
+                                        setResolvingReportId(null);
+                                      }
+                                    },
+                                  });
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 font-semibold text-xs cursor-pointer flex items-center gap-1 border border-red-500/30"
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                                <span>Proceed to Ban</span>
+                              </button>
+
+                              <button
+                                onClick={async () => {
+                                  await resolvePreBanAppealAdmin(report.targetId, 'approved', report.id);
+                                  showToast(`Warning cleared.`);
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs cursor-pointer"
+                              >
+                                Dismiss Warning
+                              </button>
+                            </>
+                          )}
+
+                          {report.status === 'Appeal Submitted' && (
+                            <>
+                              <button
+                                onClick={() =>
+                                  setReviewingProofModal({
+                                    userId: report.targetId,
+                                    username: report.targetSubtitle?.replace(/^@/, '') || report.targetName,
+                                    displayName: report.targetName,
+                                    statement: report.appealReason || 'User submitted defense statement.',
+                                    proofUrl: report.appealProofUrl,
+                                    proofName: report.appealProofName,
+                                    submittedAt: report.appealSubmittedAt,
+                                    reportId: report.id,
+                                  })
+                                }
+                                className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 font-bold text-xs cursor-pointer flex items-center gap-1.5 border border-cyan-500/40"
+                              >
+                                <Sparkles className="w-3.5 h-3.5" />
+                                <span>Inspect Proofs & Decide</span>
+                              </button>
+
+                              <button
+                                disabled={resolvingReportId === report.id}
+                                onClick={async () => {
+                                  setResolvingReportId(report.id);
+                                  try {
+                                    await resolvePreBanAppealAdmin(report.targetId, 'approved', report.id);
+                                    showToast(`Appeal accepted! Warning cleared for ${report.targetName}.`);
+                                  } finally {
+                                    setResolvingReportId(null);
+                                  }
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-bold text-xs cursor-pointer flex items-center gap-1 border border-emerald-500/40"
+                              >
+                                <Check className="w-3.5 h-3.5 stroke-[3]" />
+                                <span>Accept</span>
+                              </button>
+
+                              <button
+                                disabled={resolvingReportId === report.id}
+                                onClick={() => {
+                                  setConfirmModal({
+                                    title: 'Decline Appeal and Ban Account',
+                                    message: `Decline defense proofs and proceed to ban ${report.targetName}?`,
+                                    confirmText: 'Decline & Ban',
+                                    isDanger: true,
+                                    onConfirm: async () => {
+                                      setResolvingReportId(report.id);
+                                      try {
+                                        await resolvePreBanAppealAdmin(report.targetId, 'declined', report.id);
+                                        showToast(`Appeal declined. Account banned.`);
+                                      } finally {
+                                        setResolvingReportId(null);
+                                      }
+                                    },
+                                  });
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 font-bold text-xs cursor-pointer flex items-center gap-1 border border-red-500/40"
+                              >
+                                <Ban className="w-3.5 h-3.5" />
+                                <span>Decline & Ban</span>
+                              </button>
+                            </>
+                          )}
+
+                          {report.status !== 'Under Review' && report.status !== 'Warning Issued' && report.status !== 'Appeal Submitted' && (
+                            <span className="text-[11px] text-neutral-500 italic">Report resolved</span>
+                          )}
+                        </>
+                      ) : (
+                        /* VIDEO REPORTS: Standard Video Revocation Flow */
+                        <>
+                          {report.status !== 'Approved' && (
+                            <button
+                              disabled={resolvingReportId === report.id}
+                              onClick={async () => {
+                                setResolvingReportId(report.id);
+                                try {
+                                  await rejectVideoAdmin(report.targetId, report.scenario);
+                                  await updateReportStatusAdmin(report.id, report.type, 'Approved');
+                                  showToast(`Video revoked from feed.`);
+                                } finally {
+                                  setResolvingReportId(null);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 font-semibold text-xs cursor-pointer flex items-center gap-1"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                              <span>Revoke Video</span>
+                            </button>
+                          )}
+
+                          {report.status !== 'Rejected' && (
+                            <button
+                              onClick={async () => {
+                                await updateReportStatusAdmin(report.id, report.type, 'Rejected');
+                                showToast(`Report dismissed.`);
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs cursor-pointer"
+                            >
+                              Dismiss
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -2101,53 +2465,502 @@ export const AdminDashboardView: React.FC = () => {
         </div>
       )}
 
-      {/* Ban User Modal */}
+      {/* Moderation / Ban User Modal with Due Process Appeal Option */}
       {banningUser && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-neutral-900 border border-red-500/30 rounded-2xl p-6 w-full max-w-md space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-base text-white font-brand flex items-center gap-2">
-                <Ban className="w-4 h-4 text-red-400" />
-                <span>Ban Account: @{banningUser.username}</span>
-              </h3>
-              <button onClick={() => setBanningUser(null)} className="text-neutral-400 hover:text-white cursor-pointer">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-[#12121a] border border-amber-500/30 rounded-2xl p-6 w-full max-w-lg space-y-4 text-left shadow-[0_0_40px_rgba(245,158,11,0.15)] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white font-brand">
+                    Moderation Action: @{banningUser.username}
+                  </h3>
+                  <p className="text-xs text-neutral-400">{banningUser.displayName}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setBanningUser(null)}
+                className="p-1 rounded-lg bg-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
+              >
                 ✕
               </button>
             </div>
 
-            <p className="text-xs text-neutral-300 leading-relaxed">
-              Banning this user suspends their access, hides their content, and sends guidelines violation details.
-            </p>
+            {/* Mode selection tabs */}
+            <div className="grid grid-cols-2 gap-2 p-1 bg-neutral-900/80 rounded-xl border border-neutral-800">
+              <button
+                type="button"
+                onClick={() => setBanModeChoice('warning_first')}
+                className={`py-2 px-3 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                  banModeChoice === 'warning_first'
+                    ? 'bg-amber-500 text-black shadow-md'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span>Due Process (Appeal First)</span>
+              </button>
 
-            <div className="space-y-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setBanModeChoice('direct_ban')}
+                className={`py-2 px-3 rounded-lg text-xs font-bold transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                  banModeChoice === 'direct_ban'
+                    ? 'bg-red-600 text-white shadow-md'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                <Ban className="w-3.5 h-3.5" />
+                <span>Immediate Ban</span>
+              </button>
+            </div>
+
+            {banModeChoice === 'warning_first' ? (
+              <div className="space-y-3.5">
+                <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 leading-relaxed flex items-start gap-2">
+                  <Info className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Fair Hearing Policy:</strong> User will <em>not</em> be banned immediately. They will receive an urgent in-app notification with an appeal window to submit an explanation and counter-proof. If they fail to appeal or provide proofs before the deadline, you can then confirm the ban.
+                  </span>
+                </div>
+
+                <div className="space-y-1.5 text-xs">
+                  <label className="font-semibold text-neutral-300 block">Violation Reason:</label>
+                  <div className="flex flex-wrap gap-1.5 mb-2">
+                    {[
+                      'Violation of Community Guidelines',
+                      'Inappropriate content or harassment',
+                      'Spam, scam, or deceptive behavior',
+                      'Copyright / Intellectual property',
+                      'Impersonation of another creator',
+                    ].map(r => (
+                      <button
+                        key={r}
+                        type="button"
+                        onClick={() => setBanCustomReason(r)}
+                        className={`text-[10px] px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${
+                          banCustomReason === r
+                            ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-semibold'
+                            : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-white'
+                        }`}
+                      >
+                        {r}
+                      </button>
+                    ))}
+                  </div>
+                  <textarea
+                    value={banCustomReason}
+                    onChange={e => setBanCustomReason(e.target.value)}
+                    rows={2}
+                    className="w-full bg-neutral-950 p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-amber-500 text-xs resize-none"
+                    placeholder="Describe violation notice reason..."
+                  />
+                </div>
+
+                <div className="space-y-1.5 text-xs">
+                  <label className="font-semibold text-neutral-300 block">
+                    Appeal Window (Grace Period for User to Submit Proofs):
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {[12, 24, 48, 72].map(hrs => (
+                      <button
+                        key={hrs}
+                        type="button"
+                        onClick={() => setWarningHours(hrs)}
+                        className={`py-1.5 rounded-xl border text-xs font-mono font-bold transition-colors cursor-pointer ${
+                          warningHours === hrs
+                            ? 'bg-amber-500 text-black border-amber-400'
+                            : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-white'
+                        }`}
+                      >
+                        {hrs} Hours
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => setBanningUser(null)}
+                    className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isSubmittingWarning}
+                    onClick={async () => {
+                      if (!banningUser) return;
+                      setIsSubmittingWarning(true);
+                      try {
+                        await issueUserWarningAdmin(banningUser.id, banCustomReason, warningHours);
+                        showToast(`Due process notice issued to @${banningUser.username}. User has ${warningHours}h to appeal.`);
+                        setBanningUser(null);
+                      } finally {
+                        setIsSubmittingWarning(false);
+                      }
+                    }}
+                    className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold text-xs cursor-pointer shadow-lg disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    {isSubmittingWarning && <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />}
+                    <span>Issue Notice & Require Proofs</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3.5">
+                <div className="p-3 rounded-xl bg-red-950/20 border border-red-500/30 text-xs text-red-300 leading-relaxed flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
+                  <span>
+                    <strong>Emergency Ban:</strong> This suspends the account immediately without giving an appeal grace period. Use only for severe illegal violations or extreme emergencies.
+                  </span>
+                </div>
+
+                <div className="space-y-1.5 text-xs">
+                  <label className="font-semibold text-neutral-300 block">Ban Reason:</label>
+                  <textarea
+                    value={banCustomReason}
+                    onChange={e => setBanCustomReason(e.target.value)}
+                    rows={2}
+                    className="w-full bg-neutral-950 p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-red-500 text-xs resize-none"
+                    placeholder="Enter specific ban reason..."
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-800">
+                  <button
+                    type="button"
+                    onClick={() => setBanningUser(null)}
+                    className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!banningUser) return;
+                      await banUserAdmin(banningUser.id, banCustomReason);
+                      showToast(`User @${banningUser.username} banned immediately.`);
+                      setBanningUser(null);
+                    }}
+                    className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs cursor-pointer shadow-lg"
+                  >
+                    Confirm Immediate Ban
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Standalone Pre-Ban Warning Modal (Triggered by Approving Community Reports) */}
+      {warningModalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-[#12121a] border border-amber-500/40 rounded-2xl p-6 w-full max-w-lg space-y-4 text-left shadow-[0_0_50px_rgba(245,158,11,0.2)] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white font-brand">
+                    Approve Report & Issue Violation Notice
+                  </h3>
+                  <p className="text-xs text-neutral-400">
+                    Target: @{warningModalData.username} ({warningModalData.displayName})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setWarningModalData(null)}
+                className="p-1 rounded-lg bg-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300 leading-relaxed flex items-start gap-2">
+              <Info className="w-4 h-4 shrink-0 mt-0.5" />
+              <div>
+                <strong>Due Process Enforcement:</strong> Under platform policy, this reported user will <em>not</em> be banned immediately. They will receive an urgent notice requiring them to submit an explanation and counter-proof/evidence before the countdown expires.
+              </div>
+            </div>
+
+            <div className="space-y-1.5 text-xs">
+              <label className="font-semibold text-neutral-300 block">Flagged Violation Reason:</label>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {[
+                  'Harassment, bullying, or hate speech',
+                  'Inappropriate content or community guidelines violation',
+                  'Spam, scam, or misleading information',
+                  'Copyright infringement / unauthorized content',
+                  'Impersonation of another person',
+                ].map(r => (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => setWarningReasonText(r)}
+                    className={`text-[10px] px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${
+                      warningReasonText === r
+                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 font-semibold'
+                        : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </div>
               <textarea
-                value={banCustomReason}
-                onChange={e => setBanCustomReason(e.target.value)}
+                value={warningReasonText}
+                onChange={e => setWarningReasonText(e.target.value)}
                 rows={2}
-                className="w-full bg-neutral-950 p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-red-500 text-xs resize-none"
-                placeholder="Enter specific ban reason..."
+                className="w-full bg-neutral-950 p-2.5 rounded-xl border border-neutral-700 text-white outline-none focus:border-amber-500 text-xs resize-none"
+                placeholder="Enter specific violation details..."
               />
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
+            <div className="space-y-1.5 text-xs">
+              <label className="font-semibold text-neutral-300 block">
+                Appeal Window (Grace Period for Proof Submission):
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {[12, 24, 48, 72].map(hrs => (
+                  <button
+                    key={hrs}
+                    type="button"
+                    onClick={() => setWarningHours(hrs)}
+                    className={`py-1.5 rounded-xl border text-xs font-mono font-bold transition-colors cursor-pointer ${
+                      warningHours === hrs
+                        ? 'bg-amber-500 text-black border-amber-400'
+                        : 'bg-neutral-900 border-neutral-800 text-neutral-400 hover:text-white'
+                    }`}
+                  >
+                    {hrs} Hours
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-neutral-800">
               <button
                 type="button"
-                onClick={() => setBanningUser(null)}
+                onClick={() => setWarningModalData(null)}
                 className="px-4 py-2 rounded-xl bg-neutral-800 text-neutral-300 text-xs font-semibold cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
+                disabled={isSubmittingWarning}
                 onClick={async () => {
-                  if (!banningUser) return;
-                  await banUserAdmin(banningUser.id, banCustomReason);
-                  showToast(`User @${banningUser.username} banned.`);
-                  setBanningUser(null);
+                  setIsSubmittingWarning(true);
+                  try {
+                    await issueUserWarningAdmin(
+                      warningModalData.userId,
+                      warningReasonText,
+                      warningHours,
+                      warningModalData.reportId
+                    );
+                    showToast(`Report approved & notice sent! User @${warningModalData.username} has ${warningHours}h to appeal.`);
+                    setWarningModalData(null);
+                  } finally {
+                    setIsSubmittingWarning(false);
+                  }
                 }}
-                className="px-5 py-2 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs cursor-pointer shadow-lg"
+                className="px-5 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-black font-bold text-xs cursor-pointer shadow-lg disabled:opacity-50 flex items-center gap-1.5"
               >
-                Confirm Ban
+                {isSubmittingWarning && <div className="w-3.5 h-3.5 border-2 border-black border-t-transparent rounded-full animate-spin" />}
+                <span>Send Notice & Start Grace Period</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Review Submitted Proofs & Defense Statement Modal */}
+      {reviewingProofModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-[#12121a] border border-cyan-500/40 rounded-2xl p-6 w-full max-w-lg space-y-4 text-left shadow-[0_0_50px_rgba(6,182,212,0.2)] max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-xl bg-cyan-500/15 border border-cyan-500/30 text-cyan-300">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white font-brand">
+                    Review User Defense & Counter-Proofs
+                  </h3>
+                  <p className="text-xs text-neutral-400">
+                    Creator: @{reviewingProofModal.username} ({reviewingProofModal.displayName})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setReviewingProofModal(null)}
+                className="p-1 rounded-lg bg-neutral-800 text-neutral-400 hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Defense Statement */}
+            <div className="space-y-1.5 text-xs">
+              <label className="font-bold text-neutral-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                <span>User's Explanation Statement:</span>
+              </label>
+              <div className="p-3.5 rounded-xl bg-black/50 border border-neutral-800 text-neutral-200 text-xs italic leading-relaxed">
+                "{reviewingProofModal.statement}"
+              </div>
+            </div>
+
+            {/* Submitted Proof / Attachment */}
+            {reviewingProofModal.proofUrl ? (
+              <div className="space-y-1.5 text-xs">
+                <label className="font-bold text-neutral-300 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Submitted Counter-Proof Evidence:</span>
+                </label>
+                <div className="p-3 rounded-xl bg-neutral-900 border border-neutral-800 flex items-center gap-3">
+                  <a
+                    href={reviewingProofModal.proofUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="relative group block w-16 h-16 rounded-xl overflow-hidden border border-neutral-700 bg-black shrink-0"
+                  >
+                    <img
+                      src={reviewingProofModal.proofUrl}
+                      alt="Proof"
+                      className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                    />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                      <ExternalLink className="w-4 h-4 text-white" />
+                    </div>
+                  </a>
+                  <div className="flex-1 min-w-0 text-xs">
+                    <span className="font-semibold text-white block truncate">
+                      {reviewingProofModal.proofName || 'Supporting Evidence Document'}
+                    </span>
+                    <a
+                      href={reviewingProofModal.proofUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-cyan-400 hover:underline text-[11px] inline-flex items-center gap-1 mt-1"
+                    >
+                      <span>Open full attachment in new window</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-neutral-900 border border-neutral-800 text-xs text-neutral-400">
+                No external attachment file provided. User submitted defense text only.
+              </div>
+            )}
+
+            {/* Decisions */}
+            <div className="pt-2 border-t border-neutral-800 space-y-2">
+              <span className="text-[11px] font-bold text-neutral-400 uppercase tracking-wider block">
+                Moderator Verdict:
+              </span>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await resolvePreBanAppealAdmin(
+                      reviewingProofModal.userId,
+                      'approved',
+                      reviewingProofModal.reportId
+                    );
+                    showToast(`Appeal accepted! Warning cleared for @${reviewingProofModal.username}.`);
+                    setReviewingProofModal(null);
+                  }}
+                  className="p-2.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 border border-emerald-500/40 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                >
+                  <Check className="w-4 h-4 stroke-[3]" />
+                  <span>Accept Appeal & Exonerate</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await resolvePreBanAppealAdmin(
+                      reviewingProofModal.userId,
+                      'declined',
+                      reviewingProofModal.reportId
+                    );
+                    showToast(`Appeal rejected. Account @${reviewingProofModal.username} banned.`);
+                    setReviewingProofModal(null);
+                  }}
+                  className="p-2.5 rounded-xl bg-red-600/20 hover:bg-red-600/30 text-red-300 border border-red-500/40 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                >
+                  <Ban className="w-4 h-4" />
+                  <span>Reject Proofs & Ban</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Universal In-App Confirmation Modal (Replaces browser window.confirm) */}
+      {confirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-[#12121a] border border-neutral-700 rounded-2xl p-6 w-full max-w-sm space-y-4 text-left shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div
+                className={`p-2 rounded-xl shrink-0 ${
+                  confirmModal.isDanger
+                    ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                    : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                }`}
+              >
+                {confirmModal.isDanger ? <AlertTriangle className="w-5 h-5" /> : <Info className="w-5 h-5" />}
+              </div>
+              <h3 className="font-bold text-base text-white font-brand">
+                {confirmModal.title}
+              </h3>
+            </div>
+
+            <p className="text-xs text-neutral-300 leading-relaxed">
+              {confirmModal.message}
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-neutral-800">
+              <button
+                type="button"
+                disabled={isConfirmingAction}
+                onClick={() => setConfirmModal(null)}
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isConfirmingAction}
+                onClick={async () => {
+                  setIsConfirmingAction(true);
+                  try {
+                    await confirmModal.onConfirm();
+                    setConfirmModal(null);
+                  } finally {
+                    setIsConfirmingAction(false);
+                  }
+                }}
+                className={`px-4 py-2 rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-md ${
+                  confirmModal.isDanger
+                    ? 'bg-red-600 hover:bg-red-500 text-white'
+                    : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                }`}
+              >
+                {isConfirmingAction && <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                <span>{confirmModal.confirmText || 'Confirm'}</span>
               </button>
             </div>
           </div>

@@ -20,6 +20,16 @@ export interface User {
   appealReason?: string;
   appealSubmittedAt?: string;
   authProvider?: 'google' | 'email';
+  // Pre-ban due-process warning & proof fields:
+  warningActive?: boolean;
+  warningReason?: string;
+  warningIssuedAt?: string;
+  warningDeadline?: string;
+  preBanAppealStatus?: 'none' | 'pending' | 'approved' | 'declined';
+  preBanAppealReason?: string;
+  preBanAppealProofUrl?: string;
+  preBanAppealProofName?: string;
+  preBanAppealSubmittedAt?: string;
 }
 
 export interface AudioTrack {
@@ -162,7 +172,18 @@ export interface NotificationItem {
   id: string;
   recipientId?: string;
   recipientEmail?: string;
-  type: 'like' | 'follow' | 'follow_request' | 'comment' | 'share' | 'video_revoked' | 'account_banned' | 'appeal_status' | 'message';
+  type:
+    | 'like'
+    | 'follow'
+    | 'follow_request'
+    | 'comment'
+    | 'share'
+    | 'video_revoked'
+    | 'account_banned'
+    | 'appeal_status'
+    | 'message'
+    | 'account_warning'
+    | 'pre_ban_appeal_update';
   actor: {
     id: string;
     username: string;
@@ -180,6 +201,9 @@ export interface NotificationItem {
   rejectionReason?: string;
   appealReason?: string;
   banReason?: string;
+  warningReason?: string;
+  warningDeadline?: string;
+  proofUrl?: string;
 }
 
 export interface ReportItem {
@@ -192,9 +216,18 @@ export interface ReportItem {
   targetThumbnail?: string;
   scenario: string;
   description?: string;
-  status: 'Under Review' | 'Approved' | 'Rejected';
+  status: 'Under Review' | 'Approved' | 'Rejected' | 'Warning Issued' | 'Appeal Submitted';
   timestamp: string;
   createdAt?: string;
+  // Pre-ban due-process warning & proof tracking:
+  warningReason?: string;
+  warningIssuedAt?: string;
+  warningDeadline?: string;
+  appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
+  appealReason?: string;
+  appealProofUrl?: string;
+  appealProofName?: string;
+  appealSubmittedAt?: string;
 }
 
 export interface LiveViewer {

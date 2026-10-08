@@ -412,6 +412,210 @@ export const checkIsUserBanned = (
 };
 
 // =========================================================================
+// Pre-Ban Warning & Grace Period Registry (Report -> Appeal Before Ban)
+// Guarantees users get due process notice with countdown timer before any suspension
+// =========================================================================
+export const recordUserWarning = (data: {
+  userId?: string | null;
+  username?: string | null;
+  email?: string | null;
+  warningReason?: string;
+  warningIssuedAt?: string;
+  warningDeadline?: string;
+  preBanAppealStatus?: 'none' | 'pending' | 'approved' | 'declined';
+  preBanAppealReason?: string;
+  preBanAppealProofUrl?: string;
+  preBanAppealProofName?: string;
+  preBanAppealSubmittedAt?: string;
+}) => {
+  try {
+    let warningsMap: Record<string, any> = {};
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_user_warnings_v1') : null;
+    if (raw) warningsMap = JSON.parse(raw);
+
+    const cleanUsername = data.username ? data.username.toLowerCase().replace(/^@/, '').trim() : undefined;
+    const cleanEmail = data.email ? data.email.toLowerCase().trim() : undefined;
+    const cleanUserId = data.userId ? String(data.userId).trim() : undefined;
+    const nowIso = data.warningIssuedAt || new Date().toISOString();
+    const deadlineIso = data.warningDeadline || new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+
+    const record = {
+      warningActive: true,
+      warningReason: data.warningReason || 'Violation of Community Guidelines',
+      warningIssuedAt: nowIso,
+      warningDeadline: deadlineIso,
+      preBanAppealStatus: data.preBanAppealStatus || 'none',
+      preBanAppealReason: data.preBanAppealReason,
+      preBanAppealProofUrl: data.preBanAppealProofUrl,
+      preBanAppealProofName: data.preBanAppealProofName,
+      preBanAppealSubmittedAt: data.preBanAppealSubmittedAt,
+      userId: cleanUserId,
+      username: cleanUsername,
+      email: cleanEmail,
+    };
+
+    if (cleanUserId) {
+      warningsMap[cleanUserId] = record;
+      warningsMap[cleanUserId.toLowerCase()] = record;
+      warningsMap[toUuid(cleanUserId)] = record;
+    }
+    if (cleanUsername) {
+      warningsMap[cleanUsername] = record;
+      warningsMap[`@${cleanUsername}`] = record;
+    }
+    if (cleanEmail) {
+      warningsMap[cleanEmail] = record;
+    }
+
+    localStorage.setItem('viralhub_user_warnings_v1', JSON.stringify(warningsMap));
+    localStorage.setItem('viralhub_user_warning_event', JSON.stringify({ ...record, timestamp: Date.now() }));
+  } catch (e) {
+    console.warn('recordUserWarning failed', e);
+  }
+};
+
+export const clearUserWarning = (
+  userId?: string | null,
+  email?: string | null,
+  username?: string | null
+) => {
+  try {
+    let warningsMap: Record<string, any> = {};
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_user_warnings_v1') : null;
+    if (raw) warningsMap = JSON.parse(raw);
+
+    const cleanUsername = username ? username.toLowerCase().replace(/^@/, '').trim() : undefined;
+    const cleanEmail = email ? email.toLowerCase().trim() : undefined;
+    const cleanUserId = userId ? String(userId).trim() : undefined;
+
+    if (cleanUserId) {
+      delete warningsMap[cleanUserId];
+      delete warningsMap[cleanUserId.toLowerCase()];
+      delete warningsMap[toUuid(cleanUserId)];
+    }
+    if (cleanUsername) {
+      delete warningsMap[cleanUsername];
+      delete warningsMap[`@${cleanUsername}`];
+    }
+    if (cleanEmail) {
+      delete warningsMap[cleanEmail];
+    }
+
+    for (const [k, rec] of Object.entries(warningsMap)) {
+      if (!rec) continue;
+      if (cleanUserId && (rec.userId === cleanUserId || toUuid(rec.userId) === toUuid(cleanUserId))) {
+        delete warningsMap[k];
+      } else if (cleanEmail && rec.email && rec.email.toLowerCase() === cleanEmail) {
+        delete warningsMap[k];
+      } else if (cleanUsername && rec.username && rec.username.toLowerCase().replace(/^@/, '') === cleanUsername) {
+        delete warningsMap[k];
+      }
+    }
+
+    localStorage.setItem('viralhub_user_warnings_v1', JSON.stringify(warningsMap));
+
+    // Also update cached currentUser in localStorage
+    const rawCurr = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_currentUser') : null;
+    if (rawCurr) {
+      try {
+        const curr = JSON.parse(rawCurr);
+        const matches =
+          (cleanUserId && (curr.id === cleanUserId || toUuid(curr.id) === toUuid(cleanUserId))) ||
+          (cleanEmail && curr.email && curr.email.toLowerCase() === cleanEmail) ||
+          (cleanUsername && curr.username && curr.username.toLowerCase().replace(/^@/, '') === cleanUsername);
+        if (matches && curr.warningActive) {
+          curr.warningActive = false;
+          curr.warningReason = undefined;
+          curr.preBanAppealStatus = 'approved';
+          localStorage.setItem('viralhub_currentUser', JSON.stringify(curr));
+        }
+      } catch {}
+    }
+
+    localStorage.setItem(
+      'viralhub_user_warning_cleared_event',
+      JSON.stringify({ userId: cleanUserId, email: cleanEmail, username: cleanUsername, timestamp: Date.now() })
+    );
+  } catch (e) {
+    console.warn('clearUserWarning failed', e);
+  }
+};
+
+export const checkUserWarning = (
+  userId?: string | null,
+  email?: string | null,
+  userObj?: Partial<User> | null
+): {
+  warningActive: boolean;
+  warningReason?: string;
+  warningIssuedAt?: string;
+  warningDeadline?: string;
+  preBanAppealStatus: 'none' | 'pending' | 'approved' | 'declined';
+  preBanAppealReason?: string;
+  preBanAppealProofUrl?: string;
+  preBanAppealProofName?: string;
+  preBanAppealSubmittedAt?: string;
+} => {
+  const candidateUsername = (userObj?.username || '').trim().toLowerCase().replace(/^@/, '');
+  const candidateEmail = (email || userObj?.email || '').trim().toLowerCase();
+  const candidateId = userId ? String(userId).trim() : (userObj?.id ? String(userObj.id).trim() : '');
+
+  if (userObj?.warningActive) {
+    return {
+      warningActive: true,
+      warningReason: userObj.warningReason || 'Violation of Community Guidelines',
+      warningIssuedAt: userObj.warningIssuedAt,
+      warningDeadline: userObj.warningDeadline,
+      preBanAppealStatus: (userObj.preBanAppealStatus as any) || 'none',
+      preBanAppealReason: userObj.preBanAppealReason,
+      preBanAppealProofUrl: userObj.preBanAppealProofUrl,
+      preBanAppealProofName: userObj.preBanAppealProofName,
+      preBanAppealSubmittedAt: userObj.preBanAppealSubmittedAt,
+    };
+  }
+
+  let warningsMap: Record<string, any> = {};
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_user_warnings_v1') : null;
+    if (raw) warningsMap = JSON.parse(raw);
+  } catch {}
+
+  const keys: string[] = [];
+  if (candidateId) {
+    keys.push(candidateId);
+    keys.push(candidateId.toLowerCase());
+    keys.push(toUuid(candidateId));
+  }
+  if (candidateEmail) keys.push(candidateEmail);
+  if (candidateUsername) {
+    keys.push(candidateUsername);
+    keys.push(`@${candidateUsername}`);
+  }
+
+  for (const k of keys) {
+    const record = warningsMap[k];
+    if (record && record.warningActive) {
+      return {
+        warningActive: true,
+        warningReason: record.warningReason || 'Violation of Community Guidelines',
+        warningIssuedAt: record.warningIssuedAt,
+        warningDeadline: record.warningDeadline,
+        preBanAppealStatus: record.preBanAppealStatus || 'none',
+        preBanAppealReason: record.preBanAppealReason,
+        preBanAppealProofUrl: record.preBanAppealProofUrl,
+        preBanAppealProofName: record.preBanAppealProofName,
+        preBanAppealSubmittedAt: record.preBanAppealSubmittedAt,
+      };
+    }
+  }
+
+  return {
+    warningActive: false,
+    preBanAppealStatus: 'none',
+  };
+};
+
+// =========================================================================
 // Configuration & Client Initialization
 // =========================================================================
 export const getSupabaseConfig = (): SupabaseConfig => {
@@ -990,6 +1194,8 @@ export const supabaseDb = {
           recordUserUnban(uId, uEmail, candidateUser.username);
         }
 
+        const warningInfo = checkUserWarning(uId, uEmail, row);
+
         const newUser: User = {
           id: uId,
           username: row.Username || row.username || `user_${String(uId).slice(0, 6)}`,
@@ -1008,6 +1214,15 @@ export const supabaseDb = {
           appealStatus: candidateUser.appealStatus || (isActuallyBanned ? 'none' : 'approved'),
           appealReason: candidateUser.appealReason,
           appealSubmittedAt: candidateUser.appealSubmittedAt,
+          warningActive: warningInfo.warningActive,
+          warningReason: warningInfo.warningReason,
+          warningIssuedAt: warningInfo.warningIssuedAt,
+          warningDeadline: warningInfo.warningDeadline,
+          preBanAppealStatus: warningInfo.preBanAppealStatus,
+          preBanAppealReason: warningInfo.preBanAppealReason,
+          preBanAppealProofUrl: warningInfo.preBanAppealProofUrl,
+          preBanAppealProofName: warningInfo.preBanAppealProofName,
+          preBanAppealSubmittedAt: warningInfo.preBanAppealSubmittedAt,
         };
 
         userMap.set(uId, newUser);
@@ -3867,6 +4082,15 @@ export const supabaseDb = {
         let scenario = 'Community Violation';
         let description = rawReason;
 
+        let warningReason: string | undefined;
+        let warningIssuedAt: string | undefined;
+        let warningDeadline: string | undefined;
+        let appealStatus: 'none' | 'pending' | 'approved' | 'declined' | undefined;
+        let appealReason: string | undefined;
+        let appealProofUrl: string | undefined;
+        let appealProofName: string | undefined;
+        let appealSubmittedAt: string | undefined;
+
         if (rawReason.includes('|||')) {
           const parts = rawReason.split('|||');
           const basicReason = parts[0] || '';
@@ -3877,6 +4101,14 @@ export const supabaseDb = {
             if (meta.targetThumbnail) targetThumbnail = meta.targetThumbnail;
             if (meta.scenario) scenario = meta.scenario;
             if (meta.description) description = meta.description;
+            if (meta.warningReason) warningReason = meta.warningReason;
+            if (meta.warningIssuedAt) warningIssuedAt = meta.warningIssuedAt;
+            if (meta.warningDeadline) warningDeadline = meta.warningDeadline;
+            if (meta.appealStatus) appealStatus = meta.appealStatus;
+            if (meta.appealReason) appealReason = meta.appealReason;
+            if (meta.appealProofUrl) appealProofUrl = meta.appealProofUrl;
+            if (meta.appealProofName) appealProofName = meta.appealProofName;
+            if (meta.appealSubmittedAt) appealSubmittedAt = meta.appealSubmittedAt;
           } catch {}
           if (!description) description = basicReason;
         } else if (rawReason.includes(':')) {
@@ -3884,19 +4116,50 @@ export const supabaseDb = {
           description = rawReason.substring(rawReason.indexOf(':') + 1).trim();
         }
 
+        // Also check local warning cache for target user
+        const targetUserId = r.ReportedUserID || r.reported_user_id;
+        const targetWarning = checkUserWarning(targetUserId);
+        if (targetWarning.warningActive) {
+          warningReason = warningReason || targetWarning.warningReason;
+          warningIssuedAt = warningIssuedAt || targetWarning.warningIssuedAt;
+          warningDeadline = warningDeadline || targetWarning.warningDeadline;
+          appealStatus = appealStatus || targetWarning.preBanAppealStatus;
+          appealReason = appealReason || targetWarning.preBanAppealReason;
+          appealProofUrl = appealProofUrl || targetWarning.preBanAppealProofUrl;
+          appealProofName = appealProofName || targetWarning.preBanAppealProofName;
+          appealSubmittedAt = appealSubmittedAt || targetWarning.preBanAppealSubmittedAt;
+        }
+
+        let currentReportStatus = (r.Status as any) || (r.status as any) || 'Under Review';
+        if (targetWarning.warningActive) {
+          if (targetWarning.preBanAppealStatus === 'pending') {
+            currentReportStatus = 'Appeal Submitted';
+          } else if (currentReportStatus === 'Under Review') {
+            currentReportStatus = 'Warning Issued';
+          }
+        }
+
         items.push({
           id: r.ReportID || r.id,
           reporterId: r.ReportUserID || r.reporter_id || undefined,
           type: 'user',
-          targetId: r.ReportedUserID || r.reported_user_id,
+          targetId: targetUserId,
           targetName,
           targetSubtitle,
           targetThumbnail: targetThumbnail || undefined,
           scenario,
           description,
-          status: (r.Status as any) || (r.status as any) || 'Under Review',
+          status: currentReportStatus,
           timestamp: r.ReportedDate ? new Date(r.ReportedDate).toLocaleDateString() : 'Recent',
           createdAt: r.ReportedDate || new Date().toISOString(),
+          warningReason,
+          warningIssuedAt,
+          warningDeadline,
+          appealStatus,
+          appealReason,
+          appealProofUrl,
+          appealProofName,
+          appealSubmittedAt,
         });
       }
 
@@ -4007,7 +4270,7 @@ export const supabaseDb = {
   async updateReportStatus(
     reportId: string,
     type: 'video' | 'user',
-    status: 'Approved' | 'Rejected' | 'Under Review'
+    status: 'Approved' | 'Rejected' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted'
   ): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;
@@ -4032,6 +4295,27 @@ export const supabaseDb = {
     } catch (e) {
       console.warn('Supabase updateReportStatus error:', e);
       return false;
+    }
+  },
+
+  async uploadAppealProof(file: File): Promise<{ url: string; error?: string }> {
+    const client = getSupabaseClient();
+    const fallbackUrl = URL.createObjectURL(file);
+    if (!client) return { url: fallbackUrl };
+
+    try {
+      const ext = file.name.split('.').pop() || 'png';
+      const filePath = `appeal_proofs/${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
+
+      // Upload to avatars bucket (which is standard public image bucket in Supabase)
+      const { error } = await client.storage.from('avatars').upload(filePath, file, { upsert: true });
+      if (!error) {
+        const { data } = client.storage.from('avatars').getPublicUrl(filePath);
+        return { url: data?.publicUrl || fallbackUrl };
+      }
+      return { url: fallbackUrl };
+    } catch (e: any) {
+      return { url: fallbackUrl, error: e?.message };
     }
   },
 
@@ -5102,6 +5386,15 @@ ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "BannedAt" TIMESTAM
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "AppealStatus" TEXT DEFAULT 'none';
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "AppealReason" TEXT;
 ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "AppealSubmittedAt" TIMESTAMP WITH TIME ZONE;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "WarningActive" BOOLEAN DEFAULT false;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "WarningReason" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "WarningIssuedAt" TIMESTAMP WITH TIME ZONE;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "WarningDeadline" TIMESTAMP WITH TIME ZONE;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealStatus" TEXT DEFAULT 'none';
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealReason" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealProofUrl" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealProofName" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealSubmittedAt" TIMESTAMP WITH TIME ZONE;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "Status" TEXT DEFAULT 'approved';
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "ThumbnailURL" TEXT;
 ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "RejectionReason" TEXT;
@@ -5114,6 +5407,8 @@ ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "LikesCount" INT
 -- 6. INDEXES (Guarantees sub-millisecond lookups & protects Supabase Disk IO!)
 CREATE INDEX IF NOT EXISTS "idx_user_isbanned" ON public."User"("IsBanned");
 CREATE INDEX IF NOT EXISTS "idx_user_appealstatus" ON public."User"("AppealStatus");
+CREATE INDEX IF NOT EXISTS "idx_user_warningactive" ON public."User"("WarningActive");
+CREATE INDEX IF NOT EXISTS "idx_user_prebanappeal" ON public."User"("PreBanAppealStatus");
 CREATE INDEX IF NOT EXISTS "idx_video_status" ON public."Video"("Status");
 CREATE INDEX IF NOT EXISTS "idx_reportvideo_status" ON public."ReportVideo"("Status");
 CREATE INDEX IF NOT EXISTS "idx_reportuser_status" ON public."ReportUser"("Status");
@@ -5303,4 +5598,31 @@ BEGIN
     WITH CHECK (bucket_id = 'audio');
   END IF;
 END $$;
+`;
+
+export const PRE_BAN_APPEAL_SQL_SNIPPET = `-- =====================================================================
+-- VIRALHUB: PRE-BAN DUE PROCESS & COUNTER-PROOF APPEAL SCHEMA
+-- Run this in Supabase Dashboard -> SQL Editor -> New query -> Run
+-- Safe, non-blocking, preserves database integrity & protects Disk IO!
+-- =====================================================================
+
+-- 1. Ensure User table has pre-ban warning, appeal, and proof columns
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "WarningActive" BOOLEAN DEFAULT false;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "WarningReason" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "WarningIssuedAt" TIMESTAMP WITH TIME ZONE;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "WarningDeadline" TIMESTAMP WITH TIME ZONE;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealStatus" TEXT DEFAULT 'none';
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealReason" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealProofUrl" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealProofName" TEXT;
+ALTER TABLE IF EXISTS public."User" ADD COLUMN IF NOT EXISTS "PreBanAppealSubmittedAt" TIMESTAMP WITH TIME ZONE;
+
+-- 2. Add lightweight B-Tree indexes (Sub-millisecond lookups, protects Disk IO)
+CREATE INDEX IF NOT EXISTS "idx_user_warningactive" ON public."User"("WarningActive");
+CREATE INDEX IF NOT EXISTS "idx_user_prebanappeal" ON public."User"("PreBanAppealStatus");
+
+-- 3. Ensure avatars/proofs storage bucket is public for counter-proof screenshots
+INSERT INTO storage.buckets (id, name, public)
+VALUES ('avatars', 'avatars', true)
+ON CONFLICT (id) DO UPDATE SET public = true;
 `;
