@@ -320,4 +320,6 @@ export interface LiveStream {
   screenShareEnabled: boolean;
   aspectRatio?: '9:16' | '16:9';
   isMobileStream?: boolean;
+  thumbnailUrl?: string;
+  likesCount?: number;
 }

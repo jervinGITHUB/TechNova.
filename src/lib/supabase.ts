@@ -4563,8 +4563,10 @@ export const supabaseDb = {
             role: 'creator',
           },
           title: row.Title || 'Live Stream',
-          topic: 'Gaming & Chat',
+          topic: row.Topic || 'Gaming & Chat',
           aboutMe: '',
+          thumbnailUrl: row.ThumbnailURL || row.thumbnail_url || undefined,
+          likesCount: typeof row.LikesCount === 'number' ? row.LikesCount : (typeof row.likes_count === 'number' ? row.likes_count : 0),
           viewersCount: 1,
           viewers: [],
           isLive: true,
@@ -4767,6 +4769,43 @@ export const supabaseDb = {
       return !error;
     } catch (e) {
       console.warn('Supabase insertLiveComment fallback:', e);
+      return false;
+    }
+  },
+
+  async deleteLiveComment(commentId: string): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !commentId) return false;
+
+    try {
+      const isIdUuid = isUuid(commentId);
+      const targetId = isIdUuid ? commentId : toUuid(commentId);
+
+      // 1. Try deleting by primary key LiveCommentID in public."LiveComment"
+      let res = await client
+        .from('LiveComment')
+        .delete()
+        .eq('LiveCommentID', targetId);
+
+      if (res.error) {
+        // Fallback: try column name 'id'
+        const res2 = await client
+          .from('LiveComment')
+          .delete()
+          .eq('id', targetId);
+
+        if (res2.error) {
+          // Fallback: try lowercase 'live_comments' table
+          await client
+            .from('live_comments')
+            .delete()
+            .or(`id.eq.${targetId},live_comment_id.eq.${targetId}`);
+        }
+      }
+
+      return true;
+    } catch (e) {
+      console.warn('deleteLiveComment fallback:', e);
       return false;
     }
   },

@@ -1097,69 +1097,9 @@ export const HomeFeed: React.FC = () => {
       </div>
 
       {/* ========================================================================= */}
-      {/* RIGHT SIDE: COMPLETELY STATIC & FIXED (Live now & Trending do NOT scroll)  */}
+      {/* RIGHT SIDE: COMPLETELY STATIC & FIXED (Trending does NOT scroll)            */}
       {/* ========================================================================= */}
       <div className="hidden lg:flex flex-col w-80 shrink-0 space-y-6 pt-1 overflow-hidden pointer-events-auto">
-        {/* "Live now" Widget */}
-        <div className="bg-[#13131a] border border-neutral-800/80 rounded-3xl p-5 shadow-xl text-left">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2">
-              <Radio className="w-4 h-4 text-[#ff007a] animate-pulse" />
-              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-brand">
-                Live now
-              </h3>
-            </div>
-            <button
-              onClick={() => setActiveTab('live')}
-              className="text-xs text-[#ff007a] hover:underline font-semibold cursor-pointer"
-            >
-              See all
-            </button>
-          </div>
-
-          {currentLiveStream && currentLiveStream.isLive ? (
-            <div
-              onClick={() => openLiveStreamAsViewer(currentLiveStream.id)}
-              className="relative rounded-2xl overflow-hidden aspect-[16/9] group cursor-pointer border border-neutral-800 hover:border-[#ff007a]/60 transition-all bg-[#1a1a26]"
-            >
-              <div className="absolute inset-0 flex items-center justify-center text-neutral-400">
-                <Radio className="w-8 h-8 text-[#ff007a] animate-pulse" />
-              </div>
-              <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent" />
-
-              {/* Live Indicator Pill */}
-              <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ff007a] text-white text-[10px] font-bold shadow-md">
-                <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
-                <span>LIVE</span>
-              </div>
-
-              {/* Stream info */}
-              <div className="absolute bottom-2.5 left-2.5 right-2.5 text-left">
-                <div className="text-xs font-bold text-white group-hover:text-[#ff007a] transition-colors truncate">
-                  {currentLiveStream.title || 'Live Broadcast'}
-                </div>
-                <div className="text-[10px] text-neutral-300">
-                  {currentLiveStream.viewersCount || 1} watching
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div
-              onClick={() => setActiveTab('live_host_setup')}
-              className="rounded-2xl p-5 border border-dashed border-neutral-700/80 bg-[#161622]/60 hover:bg-[#161622] transition-colors cursor-pointer text-center group"
-            >
-              <Radio className="w-6 h-6 text-neutral-500 group-hover:text-[#ff007a] transition-colors mx-auto mb-2" />
-              <div className="text-xs font-bold text-white mb-1">No Active Streams</div>
-              <p className="text-[11px] text-neutral-400 mb-3">
-                Broadcast live to your audience anytime
-              </p>
-              <span className="inline-block text-[11px] font-bold text-[#ff007a] bg-[#ff007a]/15 px-3 py-1 rounded-xl">
-                Go Live Now →
-              </span>
-            </div>
-          )}
-        </div>
-
         {/* "Trending" Widget (Automatic from videos) */}
         <div className="bg-[#13131a] border border-neutral-800/80 rounded-3xl p-5 shadow-xl text-left">
           <div className="flex items-center gap-2 mb-4">

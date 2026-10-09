@@ -511,6 +511,7 @@ interface AppContextType {
   refreshActiveLiveStreams: () => Promise<void>;
   openLiveStreamAsViewer: (streamId: string, fallbackStream?: LiveStream) => void;
   sendLiveComment: (text: string) => void;
+  deleteLiveComment: (commentId: string) => Promise<void>;
   sendLiveLike: () => void;
   liveHeartTrigger: number;
   removeActiveLiveStream: (streamId: string) => void;
@@ -5372,8 +5373,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         if (!data) return;
         if (data.type === 'comment' && data.payload) {
           handleIncomingComment(data.payload);
+        } else if (data.type === 'delete_comment' && data.payload?.commentId) {
+          setCurrentLiveStream(prev => ({
+            ...prev,
+            messages: prev.messages.filter(m => m.id !== data.payload.commentId),
+          }));
         } else if (data.type === 'like') {
           setLiveHeartTrigger(Date.now());
+          if (data.payload && typeof data.payload.likesCount === 'number') {
+            setCurrentLiveStream(prev => ({
+              ...prev,
+              likesCount: Math.max(prev.likesCount || 0, data.payload.likesCount),
+            }));
+          } else {
+            setCurrentLiveStream(prev => ({
+              ...prev,
+              likesCount: (prev.likesCount || 0) + 1,
+            }));
+          }
         } else if (data.type === 'first_like' && data.payload) {
           handleFirstLike(data.payload);
         } else if (data.type === 'viewer_joined' && data.payload) {
@@ -5398,14 +5415,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           },
         });
 
-        chan
+        (chan as any)
           .on('broadcast', { event: 'comment' }, ({ payload }: { payload: LiveStreamMessage }) => {
             if (payload) {
               handleIncomingComment(payload);
             }
           })
-          .on('broadcast', { event: 'like' }, () => {
+          .on('broadcast', { event: 'delete_comment' }, ({ payload }: { payload?: { commentId: string } }) => {
+            if (payload?.commentId) {
+              setCurrentLiveStream(prev => ({
+                ...prev,
+                messages: prev.messages.filter(m => m.id !== payload.commentId),
+              }));
+            }
+          })
+          .on('broadcast', { event: 'like' }, ({ payload }: { payload?: any }) => {
             setLiveHeartTrigger(Date.now());
+            if (payload && typeof payload.likesCount === 'number') {
+              setCurrentLiveStream(prev => ({
+                ...prev,
+                likesCount: Math.max(prev.likesCount || 0, payload.likesCount),
+              }));
+            } else {
+              setCurrentLiveStream(prev => ({
+                ...prev,
+                likesCount: (prev.likesCount || 0) + 1,
+              }));
+            }
           })
           .on('broadcast', { event: 'first_like' }, ({ payload }: { payload: LiveStreamMessage }) => {
             if (payload) {
@@ -5647,9 +5683,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     supabaseDb.insertLiveComment(currentLiveStream.id, currentUser, cleanText);
   };
 
+  const deleteLiveComment = async (commentId: string) => {
+    if (!commentId) return;
+
+    // 1. Optimistic removal from state immediately
+    setCurrentLiveStream(prev => ({
+      ...prev,
+      messages: prev.messages.filter(m => m.id !== commentId),
+    }));
+
+    // 2. Realtime broadcast to all viewers and host (0 disk IO!)
+    try {
+      if (liveStreamChannelRef.current) {
+        liveStreamChannelRef.current.send({
+          type: 'broadcast',
+          event: 'delete_comment',
+          payload: { commentId },
+        });
+      }
+    } catch {}
+
+    try {
+      if (liveStreamBroadcastChannelRef.current) {
+        liveStreamBroadcastChannelRef.current.postMessage({
+          type: 'delete_comment',
+          payload: { commentId },
+        });
+      }
+    } catch {}
+
+    // 3. Database deletion
+    await supabaseDb.deleteLiveComment(commentId);
+  };
+
   const sendLiveLike = () => {
     if (!currentLiveStream.id || !currentUser) return;
     setLiveHeartTrigger(Date.now());
+
+    const nextLikes = (currentLiveStream.likesCount || 0) + 1;
+    setCurrentLiveStream(prev => ({
+      ...prev,
+      likesCount: nextLikes,
+    }));
 
     // Single notifier per user even if they spam like
     const userLikeKey = `${currentLiveStream.id}_${currentUser.id}`;
@@ -5696,13 +5771,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {}
     }
 
-    // Always broadcast like heart event for floating animations
+    // Always broadcast like heart event with synchronized like counter
     try {
       if (liveStreamChannelRef.current) {
         liveStreamChannelRef.current.send({
           type: 'broadcast',
           event: 'like',
-          payload: { userId: currentUser?.id, timestamp: Date.now() },
+          payload: { userId: currentUser?.id, timestamp: Date.now(), likesCount: nextLikes },
         });
       }
     } catch {}
@@ -5710,7 +5785,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (liveStreamBroadcastChannelRef.current) {
         liveStreamBroadcastChannelRef.current.postMessage({
           type: 'like',
-          payload: { userId: currentUser?.id, timestamp: Date.now() },
+          payload: { userId: currentUser?.id, timestamp: Date.now(), likesCount: nextLikes },
         });
       }
     } catch {}
@@ -5739,6 +5814,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       viewersCount: 0,
       viewers: [],
       messages: [],
+      likesCount: 0,
       aspectRatio: options?.aspectRatio || '9:16',
       isMobileStream: options?.isMobileStream || false,
     };
@@ -7584,6 +7660,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         refreshActiveLiveStreams,
         openLiveStreamAsViewer,
         sendLiveComment,
+        deleteLiveComment,
         sendLiveLike,
         liveHeartTrigger,
         removeActiveLiveStream,

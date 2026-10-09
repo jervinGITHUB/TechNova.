@@ -45,6 +45,43 @@ input[type="range"] {
   accent-color: #ff007a;
 }
 
+/* Floating Hearts Vanish Animation (Vibrantly floats up and fades over exactly 2 seconds) */
+@keyframes floatHeartVanish {
+  0% {
+    opacity: 1;
+    transform: translateY(0) scale(0.9);
+  }
+  15% {
+    opacity: 1;
+    transform: translateY(-28px) scale(1.22) rotate(-8deg);
+  }
+  45% {
+    opacity: 0.95;
+    transform: translateY(-75px) scale(1.05) rotate(8deg);
+  }
+  75% {
+    opacity: 0.55;
+    transform: translateY(-130px) scale(0.95) rotate(-4deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-180px) scale(0.8);
+  }
+}
+
+.animate-float-heart {
+  animation: floatHeartVanish 2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+/* Legacy alias for host studio */
+.animate-floatHeart {
+  animation: floatHeartVanish 2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
 /* Hide scrollbar for mobile/feed swipe containers */
 .no-scrollbar::-webkit-scrollbar {
   display: none;

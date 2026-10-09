@@ -909,6 +909,11 @@ class LiveBroadcastService {
         // Quality 0.4 keeps payload under 15KB — 100% safe within Supabase Realtime 128KB limit!
         const dataUrl = this.thumbnailCanvas.toDataURL('image/jpeg', 0.4);
         this.state.lastSnapshotUrl = dataUrl;
+        if (this.state.streamId && typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem(`viralhub_livestream_thumb_${this.state.streamId}`, dataUrl);
+          } catch {}
+        }
         this.sendBroadcastSignal({
           type: 'snapshot',
           streamId: this.state.streamId,
@@ -1053,6 +1058,11 @@ export const createLiveViewerSession = (
 
     if (signal.type === 'snapshot' && signal.dataUrl) {
       if (!signal.targetViewerId || signal.targetViewerId === viewerId) {
+        if (streamId && typeof window !== 'undefined') {
+          try {
+            sessionStorage.setItem(`viralhub_livestream_thumb_${streamId}`, signal.dataUrl);
+          } catch {}
+        }
         callbacks.onSnapshot?.(signal.dataUrl);
       }
     }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useApp } from '../../context/AppContext';
 import { LiveStreamCanvas } from './LiveStreamCanvas';
 import { Avatar } from '../common/Avatar';
@@ -16,14 +16,23 @@ import {
   Laptop,
   Smartphone,
   Share2,
+  Trash2,
 } from 'lucide-react';
 import { ShareLiveModal } from '../modals/ShareLiveModal';
+
+interface FloatingHeartItem {
+  id: string;
+  xOffset: number;
+  rotate: number;
+  scale: number;
+}
 
 export const LiveStreamViewer: React.FC = () => {
   const {
     currentUser,
     currentLiveStream,
     sendLiveComment,
+    deleteLiveComment,
     sendLiveLike,
     liveHeartTrigger,
     toggleFollowUser,
@@ -34,7 +43,7 @@ export const LiveStreamViewer: React.FC = () => {
 
   const [chatInput, setChatInput] = useState('');
   const [isLiveEnded, setIsLiveEnded] = useState(false);
-  const [likeFloatingHearts, setLikeFloatingHearts] = useState<number[]>([]);
+  const [likeFloatingHearts, setLikeFloatingHearts] = useState<FloatingHeartItem[]>([]);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<string>('connecting');
@@ -43,6 +52,7 @@ export const LiveStreamViewer: React.FC = () => {
 
   const hostUser = users.find(u => u.id === currentLiveStream.host.id) || currentLiveStream.host;
   const isFollowingHost = !!hostUser.isFollowing;
+  const isHost = Boolean(currentUser && (isSameUser(currentLiveStream.host?.id, currentUser.id) || currentLiveStream.host?.id === currentUser.id));
 
   // Stream Aspect Ratio Auto-Detection:
   // If host is on mobile (or stream explicitly has 9:16), default to 9:16 portrait.
@@ -147,16 +157,26 @@ export const LiveStreamViewer: React.FC = () => {
     };
   }, [currentLiveStream.id, sessionKey]);
 
-  // Real-time floating hearts on likes from any user
+  // Real-time floating hearts on likes from any user (guaranteed to vanish after exactly 2 seconds)
+  const triggerVanishHeart = useCallback(() => {
+    const id = `heart_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const newHeart: FloatingHeartItem = {
+      id,
+      xOffset: (Math.random() - 0.5) * 44,
+      rotate: (Math.random() - 0.5) * 26,
+      scale: 0.9 + Math.random() * 0.35,
+    };
+    setLikeFloatingHearts(prev => [...prev.slice(-15), newHeart]);
+    setTimeout(() => {
+      setLikeFloatingHearts(prev => prev.filter(h => h.id !== id));
+    }, 2000);
+  }, []);
+
   useEffect(() => {
     if (liveHeartTrigger > 0) {
-      setLikeFloatingHearts(prev => [...prev, liveHeartTrigger]);
-      const timer = setTimeout(() => {
-        setLikeFloatingHearts(prev => prev.slice(1));
-      }, 1800);
-      return () => clearTimeout(timer);
+      triggerVanishHeart();
     }
-  }, [liveHeartTrigger]);
+  }, [liveHeartTrigger, triggerVanishHeart]);
 
   const handleSendChat = (e: React.FormEvent) => {
     e.preventDefault();
@@ -166,6 +186,7 @@ export const LiveStreamViewer: React.FC = () => {
   };
 
   const handleFloatHeart = () => {
+    triggerVanishHeart();
     sendLiveLike();
   };
 
@@ -329,10 +350,16 @@ export const LiveStreamViewer: React.FC = () => {
                 </div>
 
                 {/* Floating Hearts */}
-                <div className="absolute right-4 bottom-4 pointer-events-none z-30">
-                  {likeFloatingHearts.map(id => (
-                    <div key={id} className="absolute bottom-0 right-0 animate-bounce text-[#ff007a]">
-                      <Heart className="w-6 h-6 fill-[#ff007a]" />
+                <div className="absolute right-4 bottom-4 pointer-events-none z-30 overflow-visible">
+                  {likeFloatingHearts.map(heart => (
+                    <div
+                      key={heart.id}
+                      className="absolute bottom-0 right-0 animate-float-heart text-[#ff007a]"
+                      style={{
+                        transform: `translateX(${heart.xOffset}px) rotate(${heart.rotate}deg) scale(${heart.scale})`,
+                      }}
+                    >
+                      <Heart className="w-7 h-7 fill-[#ff007a] drop-shadow-[0_2px_8px_rgba(255,0,122,0.6)]" />
                     </div>
                   ))}
                 </div>
@@ -342,13 +369,17 @@ export const LiveStreamViewer: React.FC = () => {
 
           {/* Bottom Section: Flexing Interactive Chat & Stream Details */}
           <div className="flex-1 min-h-0 flex flex-col bg-[#13131a] rounded-2xl border border-neutral-800 overflow-hidden shadow-xl p-3">
-            {/* Header with viewers count and title */}
+            {/* Header with viewers count, like count and title */}
             <div className="flex items-center justify-between pb-2 border-b border-neutral-800">
               <div className="flex items-center gap-2 min-w-0">
                 <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse shrink-0" />
                 <span className="text-xs font-bold text-white truncate">{currentLiveStream.title || 'Live Stream'}</span>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1 bg-pink-500/15 border border-pink-500/30 px-2 py-0.5 rounded-full text-[11px] font-bold text-white">
+                  <Heart className="w-3 h-3 text-[#ff007a] fill-[#ff007a]" />
+                  <span>{currentLiveStream.likesCount || 0}</span>
+                </div>
                 <span className="text-[11px] font-semibold text-neutral-400">
                   {Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)} watching
                 </span>
@@ -440,10 +471,13 @@ export const LiveStreamViewer: React.FC = () => {
               <button
                 type="button"
                 onClick={handleFloatHeart}
-                className="p-2 rounded-full bg-[#ff007a] text-white shadow-md active:scale-90 transition-transform shrink-0 cursor-pointer"
+                className="relative p-2 rounded-full bg-[#ff007a] hover:bg-[#ff1a8c] text-white shadow-md active:scale-90 transition-all shrink-0 cursor-pointer flex items-center justify-center"
                 title="Send Love"
               >
                 <Heart className="w-4 h-4 fill-white" />
+                <span className="absolute -top-1.5 -left-1.5 bg-neutral-900/90 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full border border-pink-500/40 shadow-sm">
+                  {currentLiveStream.likesCount || 0}
+                </span>
               </button>
             </form>
           </div>
@@ -608,32 +642,44 @@ export const LiveStreamViewer: React.FC = () => {
                   </button>
                 </div>
 
-                {/* Mobile Viewers Badge (Top Right) */}
-                <div className="lg:hidden absolute top-3 right-3 z-40 flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-white text-[11px] font-bold shadow-md">
-                  <Radio className="w-3 h-3 text-[#ff007a] animate-pulse" />
-                  <span>{Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)}</span>
+                {/* Mobile Viewers & Likes Badge (Top Right) */}
+                <div className="lg:hidden absolute top-3 right-3 z-40 flex items-center gap-1.5">
+                  <div className="flex items-center gap-1 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-pink-500/30 text-white text-[11px] font-bold shadow-md">
+                    <Heart className="w-3 h-3 text-[#ff007a] fill-[#ff007a]" />
+                    <span>{currentLiveStream.likesCount || 0}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-white text-[11px] font-bold shadow-md">
+                    <Radio className="w-3 h-3 text-[#ff007a] animate-pulse" />
+                    <span>{Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)}</span>
+                  </div>
                 </div>
 
-                {/* Floating hearts container on like */}
-                <div className="absolute right-4 sm:right-6 bottom-16 sm:bottom-20 pointer-events-none z-30">
-                  {likeFloatingHearts.map(id => (
+                {/* Floating hearts container on like (Vibrantly floats up and vanishes after 2s) */}
+                <div className="absolute right-4 sm:right-6 bottom-16 sm:bottom-20 pointer-events-none z-40 overflow-visible">
+                  {likeFloatingHearts.map(heart => (
                     <div
-                      key={id}
-                      className="absolute bottom-0 right-0 animate-bounce text-[#ff007a]"
+                      key={heart.id}
+                      className="absolute bottom-0 right-0 animate-float-heart text-[#ff007a]"
+                      style={{
+                        transform: `translateX(${heart.xOffset}px) rotate(${heart.rotate}deg) scale(${heart.scale})`,
+                      }}
                     >
-                      <Heart className="w-7 h-7 sm:w-8 sm:h-8 fill-[#ff007a]" />
+                      <Heart className="w-8 h-8 sm:w-9 sm:h-9 fill-[#ff007a] drop-shadow-[0_2px_8px_rgba(255,0,122,0.6)]" />
                     </div>
                   ))}
                 </div>
 
-                {/* Desktop Quick like button */}
+                {/* Desktop Quick like button with Like Counter */}
                 <div className="hidden lg:block absolute right-4 bottom-4 z-40">
                   <button
                     onClick={handleFloatHeart}
-                    className="p-3 rounded-full bg-[#ff007a] text-white shadow-xl hover:scale-110 active:scale-95 transition-all cursor-pointer"
+                    className="relative p-3 rounded-full bg-[#ff007a] hover:bg-[#ff1a8c] text-white shadow-xl hover:scale-110 active:scale-95 transition-all cursor-pointer group flex items-center justify-center"
                     title="Send Love"
                   >
                     <Heart className="w-5 h-5 fill-white" />
+                    <span className="absolute -top-2 -left-2 bg-neutral-900/90 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full border border-pink-500/40 shadow-md">
+                      {currentLiveStream.likesCount || 0}
+                    </span>
                   </button>
                 </div>
 
@@ -679,22 +725,32 @@ export const LiveStreamViewer: React.FC = () => {
                           return (
                             <div
                               key={msg.id}
-                              className="bg-black/45 backdrop-blur-md text-white rounded-2xl px-3 py-1 border border-white/10 flex items-start gap-2 max-w-[85%] shadow-md"
+                              className="group bg-black/60 backdrop-blur-md text-white rounded-2xl px-2.5 py-1.5 border border-white/10 flex items-start gap-2 max-w-[90%] shadow-md"
                             >
                               <Avatar
                                 src={authorAvatar}
                                 alt={authorName}
                                 size="xs"
-                                className="mt-0.5"
+                                className="mt-0.5 shrink-0"
                               />
-                              <div className="min-w-0 text-left">
+                              <div className="min-w-0 flex-1 text-left">
                                 <span className="text-[11px] font-bold text-[#ff007a] drop-shadow-sm mr-1">
                                   {authorName}
                                 </span>
-                                <span className="text-xs text-white drop-shadow-sm">
+                                <span className="text-xs text-white drop-shadow-sm break-words">
                                   {msg.text}
                                 </span>
                               </div>
+                              {isHost && (
+                                <button
+                                  type="button"
+                                  onClick={() => deleteLiveComment(msg.id)}
+                                  className="p-1 text-neutral-400 hover:text-red-400 rounded hover:bg-red-500/20 transition-all cursor-pointer shrink-0 ml-1"
+                                  title="Remove comment"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              )}
                             </div>
                           );
                         })}
@@ -730,10 +786,13 @@ export const LiveStreamViewer: React.FC = () => {
                       <button
                         type="button"
                         onClick={handleFloatHeart}
-                        className="p-2 rounded-full bg-[#ff007a] text-white shadow-lg active:scale-90 transition-transform shrink-0 cursor-pointer"
+                        className="relative p-2 rounded-full bg-[#ff007a] hover:bg-[#ff1a8c] text-white shadow-lg active:scale-90 transition-all shrink-0 cursor-pointer flex items-center justify-center"
                         title="Send Love"
                       >
                         <Heart className="w-4 h-4 fill-white" />
+                        <span className="absolute -top-1.5 -left-1.5 bg-neutral-900/90 text-white text-[9px] font-black px-1.5 py-0.2 rounded-full border border-pink-500/40 shadow-sm">
+                          {currentLiveStream.likesCount || 0}
+                        </span>
                       </button>
                     </div>
                   </>
@@ -744,13 +803,17 @@ export const LiveStreamViewer: React.FC = () => {
 
           {/* Right Chat Panel: Desktop Only (Always clean on desktop) */}
           <div className="hidden lg:flex w-80 lg:w-88 xl:w-96 shrink-0 bg-[#13131a] rounded-3xl border border-neutral-800 p-4 flex-col justify-between shadow-xl">
-            {/* Chat Header */}
+            {/* Chat Header with Viewers and Likes */}
             <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
               <div className="flex items-center gap-2">
                 <Radio className="w-4 h-4 text-[#ff007a] animate-pulse" />
                 <span className="text-sm font-bold text-white font-brand">
-                  Viewers {Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)}
+                  {Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)} Viewers
                 </span>
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-pink-500/15 border border-pink-500/30 text-white text-xs font-bold shadow-sm">
+                  <Heart className="w-3.5 h-3.5 text-[#ff007a] fill-[#ff007a]" />
+                  <span>{currentLiveStream.likesCount || 0}</span>
+                </div>
               </div>
               <div className="flex items-center gap-1">
                 <button
@@ -820,15 +883,27 @@ export const LiveStreamViewer: React.FC = () => {
                   const authorAvatar = msg.avatar || author?.avatar || '';
 
                   return (
-                    <div key={msg.id} className="flex items-start gap-2.5">
+                    <div key={msg.id} className="group flex items-start gap-2.5 relative">
                       <Avatar
                         src={authorAvatar}
                         alt={authorName}
                         size="sm"
                       />
-                      <div className="min-w-0">
-                        <div className="font-bold text-white text-[11px]">{authorName}</div>
-                        <div className="text-neutral-300 text-xs mt-0.5">{msg.text}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between">
+                          <div className="font-bold text-white text-[11px] truncate">{authorName}</div>
+                          {isHost && (
+                            <button
+                              type="button"
+                              onClick={() => deleteLiveComment(msg.id)}
+                              className="opacity-0 group-hover:opacity-100 p-1 text-neutral-400 hover:text-red-400 rounded hover:bg-red-500/10 transition-all cursor-pointer ml-1"
+                              title="Delete comment"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="text-neutral-300 text-xs mt-0.5 break-words">{msg.text}</div>
                       </div>
                     </div>
                   );
