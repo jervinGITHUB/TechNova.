@@ -163,6 +163,67 @@ export const deduplicateMessages = (messages: Message[]): Message[] => {
 };
 
 /**
+ * Deduplicates live stream chat messages to guarantee zero duplicates on page refresh
+ * and when merging real-time broadcast events with database snapshots.
+ */
+export const deduplicateLiveComments = (msgs: LiveStreamMessage[]): LiveStreamMessage[] => {
+  if (!msgs || msgs.length === 0) return [];
+  const seenIds = new Set<string>();
+  const seenFp = new Set<string>();
+  const result: LiveStreamMessage[] = [];
+
+  for (const m of msgs) {
+    if (!m) continue;
+    const normId = (m.id || '').trim().toLowerCase();
+    if (normId && seenIds.has(normId)) continue;
+
+    // Host-only warning messages
+    if (m.isHostOnlyWarning) {
+      if (normId) seenIds.add(normId);
+      const warnFp = `host_warn:::${(m.warningReason || m.text || '').toLowerCase().trim()}`;
+      if (seenFp.has(warnFp)) continue;
+      seenFp.add(warnFp);
+      result.push(m);
+      continue;
+    }
+
+    // Join events (deduplicate so same user only shows joined once)
+    if (m.isJoinEvent) {
+      const joinKey = `join:::${(m.userId || m.username || '').toLowerCase()}`;
+      if (seenFp.has(joinKey)) continue;
+      seenFp.add(joinKey);
+      if (normId) seenIds.add(normId);
+      result.push(m);
+      continue;
+    }
+
+    // Like events (deduplicate so same user only shows liked once)
+    if (m.isLikeEvent) {
+      const likeKey = `like:::${(m.userId || m.username || '').toLowerCase()}`;
+      if (seenFp.has(likeKey)) continue;
+      seenFp.add(likeKey);
+      if (normId) seenIds.add(normId);
+      result.push(m);
+      continue;
+    }
+
+    // Regular comments: deduplicate by user + trimmed text
+    const userKey = (m.userId || m.username || '').toLowerCase().trim();
+    const textKey = (m.text || '').toLowerCase().trim();
+    const fpKey = `${userKey}:::${textKey}`;
+
+    if (normId) seenIds.add(normId);
+    if (fpKey && seenFp.has(fpKey)) {
+      continue;
+    }
+    if (fpKey) seenFp.add(fpKey);
+    result.push(m);
+  }
+
+  return result;
+};
+
+/**
  * Deduplicates conversations so that only ONE canonical conversation
  * exists per partner user, and merges all messages from duplicate threads together.
  */
@@ -521,6 +582,7 @@ interface AppContextType {
   sendLiveComment: (text: string) => void;
   deleteLiveComment: (commentId: string) => Promise<void>;
   sendLiveLike: () => void;
+  warnLiveHostAdmin: (streamId: string, reason: string, hostId?: string) => Promise<boolean>;
   liveHeartTrigger: number;
   removeActiveLiveStream: (streamId: string) => void;
   startHostLiveStream: (title: string, topic: string, aboutMe: string, customStreamId?: string, options?: { aspectRatio?: '9:16' | '16:9'; isMobileStream?: boolean }) => void;
@@ -916,6 +978,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const globalLiveBroadcastChannelRef = useRef<BroadcastChannel | null>(null);
   const [liveHeartTrigger, setLiveHeartTrigger] = useState<number>(0);
   const streamLikedUsersRef = useRef<Set<string>>(new Set());
+  // Debounced DB buffer for live likes to guarantee 0 Disk IO depletion on rapid heart clicks!
+  const pendingLiveLikeRef = useRef<{ streamId: string; likesCount: number; userId?: string } | null>(null);
+  const liveLikeDebounceTimerRef = useRef<any>(null);
 
   // Per-User Likes storage map: { [userId: string]: string[] (videoIds) }
   const [userLikes, setUserLikes] = useState<Record<string, string[]>>(() =>
@@ -3023,7 +3088,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [reports]);
 
   useEffect(() => {
-    storage.set('livestream', { ...currentLiveStream, isLive: false });
+    // Clear ephemeral messages from local storage so refreshing never duplicates past messages with database rows
+    storage.set('livestream', { ...currentLiveStream, isLive: false, messages: [] });
   }, [currentLiveStream]);
 
   // Account-specific conversation filtering: only conversations current user is part of, and NOT deleted by currentUser!
@@ -4953,6 +5019,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         prev.map(u => (u.id === report.targetId ? { ...u, isReported: true } : u))
       );
     }
+
+    // If reporting a live stream, dispatch host warning immediately to the host's comment section (visible ONLY to the host!)
+    if (report.type === 'live_stream') {
+      const streamId = report.targetId;
+      const warningReason = report.scenario || report.description || 'Violation of Community Guidelines';
+      const warningMsg: LiveStreamMessage = {
+        id: `warn_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        userId: 'safety_moderator',
+        username: 'ViralHub Safety',
+        displayName: 'ViralHub Moderator',
+        avatar: '',
+        text: `⚠️ Stream Moderation Notice: Your broadcast was reported for "${warningReason}". Please verify your stream content complies with Community Standards.`,
+        timestamp: 'Just now',
+        isSystemEvent: true,
+        isHostOnlyWarning: true,
+        warningReason,
+      };
+
+      // 1. If current user is host of that stream, display immediately in their comment section
+      setCurrentLiveStream(prev => {
+        const isHost = Boolean(
+          isSameUser(currentUser?.id, prev.host?.id) ||
+          (prev.id === streamId && activeTab === 'live_host_active')
+        );
+        if (!isHost) return prev;
+        return {
+          ...prev,
+          messages: deduplicateLiveComments([...prev.messages, warningMsg]),
+        };
+      });
+
+      // 2. Broadcast over Realtime channel & local BroadcastChannel so host receives it instantly
+      try {
+        if (liveStreamChannelRef.current) {
+          liveStreamChannelRef.current.send({
+            type: 'broadcast',
+            event: 'host_warning',
+            payload: warningMsg,
+          });
+        }
+      } catch {}
+      try {
+        const bc = new BroadcastChannel(`live_chat_${streamId}`);
+        bc.postMessage({ type: 'host_warning', payload: warningMsg });
+        setTimeout(() => { try { bc.close(); } catch {} }, 1000);
+      } catch {}
+    }
   };
 
   // Messages handling
@@ -5551,12 +5664,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
-    // 1. Fetch initial past comments once from database (single read, zero polling!)
+    // 1. Fetch initial past comments once from database (single read, zero polling, duplicate-free!)
     supabaseDb.fetchLiveComments(streamId).then(pastComments => {
       if (pastComments && pastComments.length > 0) {
         setCurrentLiveStream(prev => {
           if (prev.id !== streamId) return prev;
-          const existingIds = new Set(prev.messages.map(m => m.id));
           const enriched = pastComments.map(c => {
             const author = users.find(u => isSameUser(u.id, c.userId));
             if (author) {
@@ -5569,15 +5681,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }
             return c;
           });
-          const toAdd = enriched.filter(c => !existingIds.has(c.id));
-          if (toAdd.length === 0) return prev;
           return {
             ...prev,
-            messages: [...prev.messages, ...toAdd],
+            messages: deduplicateLiveComments([...prev.messages, ...enriched]),
           };
         });
       }
     });
+
+    // 2. Record this viewer in Supabase LivestreamViewer table (only once per session, 0 Disk IO depletion!)
+    if (activeTab === 'live_viewer' && currentUser?.id && !isSameUser(currentUser.id, currentLiveStream.host?.id)) {
+      supabaseDb.recordLivestreamViewer(streamId, currentUser.id, currentUser);
+    }
 
     const handleIncomingComment = (msg: LiveStreamMessage) => {
       if (!msg || !msg.text) return;
@@ -5591,17 +5706,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           }
         : msg;
 
-      setCurrentLiveStream(prev => {
-        if (prev.messages.some(m => m.id === enrichedMsg.id)) return prev;
-        return {
-          ...prev,
-          messages: [...prev.messages, enrichedMsg],
-        };
-      });
+      setCurrentLiveStream(prev => ({
+        ...prev,
+        messages: deduplicateLiveComments([...prev.messages, enrichedMsg]),
+      }));
     };
 
     const handleViewerJoined = (viewer: LiveViewer) => {
       if (!viewer || !viewer.id) return;
+      // Record viewer in Supabase LivestreamViewer table (session-cached, 0 Disk IO depletion!)
+      supabaseDb.recordLivestreamViewer(streamId, viewer.id, {
+        id: viewer.id,
+        username: viewer.username,
+        displayName: viewer.displayName,
+        avatar: viewer.avatar,
+      });
+
       const isHostUser = Boolean(
         (currentUser && isSameUser(currentUser.id, currentLiveStream.host?.id)) ||
         activeTab === 'live_host_active'
@@ -5632,7 +5752,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             ...prev,
             viewers: nextViewers,
             viewersCount: nextCount,
-            messages: [...prev.messages, joinMsg],
+            messages: deduplicateLiveComments([...prev.messages, joinMsg]),
           };
         }
 
@@ -5705,6 +5825,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           handleViewerJoined(data.payload);
         } else if (data.type === 'viewer_left' && data.payload) {
           handleViewerLeft(data.payload.userId || data.payload);
+        } else if (data.type === 'host_warning' && data.payload) {
+          // Warning displayed in comment section ONLY for the host!
+          const isHostUser = Boolean(
+            (currentUser && isSameUser(currentUser.id, currentLiveStream.host?.id)) ||
+            activeTab === 'live_host_active'
+          );
+          if (isHostUser) {
+            setCurrentLiveStream(prev => ({
+              ...prev,
+              messages: deduplicateLiveComments([...prev.messages, data.payload]),
+            }));
+          }
         } else if (data.type === 'stream_ended') {
           setCurrentLiveStream(prev => ({ ...prev, isLive: false }));
         }
@@ -5764,6 +5896,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .on('broadcast', { event: 'viewer_left' }, ({ payload }: { payload: any }) => {
             if (payload) {
               handleViewerLeft(payload.userId || payload);
+            }
+          })
+          .on('broadcast', { event: 'host_warning' }, ({ payload }: { payload: LiveStreamMessage }) => {
+            if (payload) {
+              // Warning displayed in comment section ONLY for the host!
+              const isHostUser = Boolean(
+                (currentUser && isSameUser(currentUser.id, currentLiveStream.host?.id)) ||
+                activeTab === 'live_host_active'
+              );
+              if (isHostUser) {
+                setCurrentLiveStream(prev => ({
+                  ...prev,
+                  messages: deduplicateLiveComments([...prev.messages, payload]),
+                }));
+              }
             }
           })
           .on('broadcast', { event: 'stream_ended' }, () => {
@@ -5914,6 +6061,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }, 600);
     } catch {}
 
+    // Record viewer in Supabase LivestreamViewer table (session-cached, 0 Disk IO depletion!)
+    supabaseDb.recordLivestreamViewer(streamId, viewerObj.id, currentUser || undefined);
+
     setTimeout(() => {
       try {
         if (liveStreamChannelRef.current) {
@@ -5947,9 +6097,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const sendLiveComment = (text: string) => {
     if (!currentUser || !text.trim() || !currentLiveStream.id) return;
     const cleanText = text.trim();
-    const msgId = `lm_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    // Deterministic UUID for the comment so client optimistic state matches Supabase PK exactly (0 duplicate chance!)
+    const commentUuid = generateUuid();
     const newLiveMsg: LiveStreamMessage = {
-      id: msgId,
+      id: commentUuid,
       userId: currentUser.id,
       username: currentUser.username,
       displayName: currentUser.displayName || currentUser.username || 'User',
@@ -5958,10 +6109,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       timestamp: 'Just now',
     };
 
-    // 1. Optimistic update so sender sees comment with 0 latency
+    // 1. Optimistic update with deduplication so sender sees comment with 0 latency
     setCurrentLiveStream(prev => ({
       ...prev,
-      messages: [...prev.messages, newLiveMsg],
+      messages: deduplicateLiveComments([...prev.messages, newLiveMsg]),
     }));
 
     // 2. Realtime WebSocket Broadcast to Host Studio and all Viewers (0 Disk IO!)
@@ -5987,8 +6138,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     } catch {}
 
-    // 4. Async database persistence (single insert, safe fallback)
-    supabaseDb.insertLiveComment(currentLiveStream.id, currentUser, cleanText);
+    // 4. Async database persistence with matching UUID (single insert, 0 schema mismatch!)
+    supabaseDb.insertLiveComment(currentLiveStream.id, currentUser, cleanText, commentUuid);
   };
 
   const deleteLiveComment = async (commentId: string) => {
@@ -6056,7 +6207,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Add locally for the sender
       setCurrentLiveStream(prev => ({
         ...prev,
-        messages: [...prev.messages, likeMsg],
+        messages: deduplicateLiveComments([...prev.messages, likeMsg]),
       }));
 
       // Broadcast single like comment to both host and other viewers (0 Disk IO!)
@@ -6097,6 +6248,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
     } catch {}
+
+    // Record like count to Supabase with 1.5s debouncing to protect Disk IO and eliminate rate limit depletion!
+    pendingLiveLikeRef.current = {
+      streamId: currentLiveStream.id,
+      likesCount: nextLikes,
+      userId: currentUser.id,
+    };
+    if (liveLikeDebounceTimerRef.current) {
+      clearTimeout(liveLikeDebounceTimerRef.current);
+    }
+    liveLikeDebounceTimerRef.current = setTimeout(() => {
+      if (pendingLiveLikeRef.current) {
+        const { streamId, likesCount, userId } = pendingLiveLikeRef.current;
+        supabaseDb.recordLiveStreamLike(streamId, likesCount, userId);
+        pendingLiveLikeRef.current = null;
+      }
+    }, 1500);
+  };
+
+  // Admin and Moderation: Issues a warning directly into the live host's comment section (visible ONLY to the host!)
+  const warnLiveHostAdmin = async (streamId: string, reason: string, hostId?: string): Promise<boolean> => {
+    const cleanReason = reason || 'Violation of Community Guidelines';
+    const warningMsg: LiveStreamMessage = {
+      id: `warn_admin_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      userId: 'admin_security',
+      username: 'ViralHub Moderator',
+      displayName: 'ViralHub Safety Team',
+      avatar: '',
+      text: `⚠️ Official Moderation Warning: Your live broadcast was flagged for "${cleanReason}". Please comply with Community Guidelines immediately.`,
+      timestamp: 'Just now',
+      isSystemEvent: true,
+      isHostOnlyWarning: true,
+      warningReason: cleanReason,
+    };
+
+    // 1. Broadcast over Realtime channel
+    try {
+      if (liveStreamChannelRef.current) {
+        liveStreamChannelRef.current.send({
+          type: 'broadcast',
+          event: 'host_warning',
+          payload: warningMsg,
+        });
+      }
+    } catch {}
+
+    // 2. Broadcast over local BroadcastChannel
+    try {
+      const bc = new BroadcastChannel(`live_chat_${streamId}`);
+      bc.postMessage({ type: 'host_warning', payload: warningMsg });
+      setTimeout(() => { try { bc.close(); } catch {} }, 1000);
+    } catch {}
+
+    // 3. If current user is host of this stream, display immediately
+    setCurrentLiveStream(prev => {
+      if (prev.id === streamId) {
+        return {
+          ...prev,
+          messages: deduplicateLiveComments([...prev.messages, warningMsg]),
+        };
+      }
+      return prev;
+    });
+
+    // 4. Create in-app system notification for host if hostId is provided
+    if (hostId) {
+      addCustomNotification({
+        recipientId: hostId,
+        type: 'account_warning',
+        actor: {
+          id: 'admin_security',
+          username: 'ViralHub Safety',
+          displayName: 'ViralHub Moderator',
+          avatar: '',
+        },
+        targetText: `⚠️ Moderation Warning on your live stream: "${cleanReason}". Visible privately in your stream comment section.`,
+        warningReason: cleanReason,
+      });
+    }
+
+    return true;
   };
 
   const startHostLiveStream = (
@@ -8043,6 +8275,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sendLiveComment,
         deleteLiveComment,
         sendLiveLike,
+        warnLiveHostAdmin,
         liveHeartTrigger,
         removeActiveLiveStream,
         startHostLiveStream,

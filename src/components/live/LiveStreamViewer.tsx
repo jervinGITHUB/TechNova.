@@ -412,7 +412,7 @@ export const LiveStreamViewer: React.FC = () => {
             {/* Scrollable Chat Feed */}
             <div className="flex-1 overflow-y-auto py-2 space-y-2 pr-1 text-left text-xs">
               {currentLiveStream.messages
-                .filter(m => !m.isJoinEvent)
+                .filter(m => !m.isJoinEvent && !m.isHostOnlyWarning)
                 .map(msg => {
                   if (msg.isSystemEvent) {
                     if (msg.isLikeEvent) {
@@ -688,7 +688,7 @@ export const LiveStreamViewer: React.FC = () => {
                   <>
                     <div className="lg:hidden absolute left-3 right-3 bottom-14 z-30 max-h-48 overflow-y-auto space-y-1.5 pr-1 pointer-events-auto flex flex-col justify-end text-left">
                       {currentLiveStream.messages
-                        .filter(m => !m.isJoinEvent)
+                        .filter(m => !m.isJoinEvent && !m.isHostOnlyWarning)
                         .slice(-10)
                         .map(msg => {
                           if (msg.isSystemEvent) {
@@ -852,7 +852,7 @@ export const LiveStreamViewer: React.FC = () => {
             {/* Chat Comments & Event Feed */}
             <div className="flex-1 overflow-y-auto py-3 space-y-3 pr-1 text-left text-xs">
               {currentLiveStream.messages
-                .filter(m => !m.isJoinEvent)
+                .filter(m => !m.isJoinEvent && !m.isHostOnlyWarning)
                 .map(msg => {
                   if (msg.isSystemEvent) {
                     if (msg.isLikeEvent) {

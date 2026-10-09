@@ -282,6 +282,8 @@ export interface LiveStreamMessage {
   isSystemEvent?: boolean;
   isJoinEvent?: boolean;
   isLikeEvent?: boolean;
+  isHostOnlyWarning?: boolean;
+  warningReason?: string;
 }
 
 export interface CanvasSourceTransform {

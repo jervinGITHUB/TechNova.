@@ -64,6 +64,8 @@ export const AdminDashboardView: React.FC = () => {
     rejectVideoAdmin,
     reviewVideoAppeal,
     updateReportStatusAdmin,
+    warnLiveHostAdmin,
+    removeActiveLiveStream,
     issueUserWarningAdmin,
     resolvePreBanAppealAdmin,
     syncWithSupabase,
@@ -169,7 +171,7 @@ export const AdminDashboardView: React.FC = () => {
   const [userSearch, setUserSearch] = useState('');
   const [videoSearch, setVideoSearch] = useState('');
   const [videoStatusFilter, setVideoStatusFilter] = useState<'approved' | 'rejected' | 'appeals' | 'all'>('approved');
-  const [reportFilter, setReportFilter] = useState<'all' | 'video' | 'user'>('all');
+  const [reportFilter, setReportFilter] = useState<'all' | 'video' | 'user' | 'live_stream'>('all');
   const [reportStatusFilter, setReportStatusFilter] = useState<
     'all' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted' | 'Approved' | 'Rejected'
   >('all');
@@ -1709,6 +1711,7 @@ export const AdminDashboardView: React.FC = () => {
                   { id: 'all', label: 'All Types' },
                   { id: 'video', label: 'Video Reports' },
                   { id: 'user', label: 'User Reports' },
+                  { id: 'live_stream', label: 'Live Stream Reports' },
                 ].map(f => (
                   <button
                     key={f.id}
@@ -2008,6 +2011,65 @@ export const AdminDashboardView: React.FC = () => {
 
                           {report.status !== 'Under Review' && report.status !== 'Warning Issued' && report.status !== 'Appeal Submitted' && (
                             <span className="text-[11px] text-neutral-500 italic">Report resolved</span>
+                          )}
+                        </>
+                      ) : report.type === 'live_stream' ? (
+                        /* LIVE STREAM REPORTS: Direct Host Warning & Stream Controls */
+                        <>
+                          {report.status !== 'Approved' && (
+                            <button
+                              disabled={resolvingReportId === report.id}
+                              onClick={async () => {
+                                setResolvingReportId(report.id);
+                                try {
+                                  const reason = report.scenario || report.description || 'Violation of Community Guidelines';
+                                  await warnLiveHostAdmin(report.targetId, reason);
+                                  await updateReportStatusAdmin(report.id, report.type, 'Warning Issued');
+                                  showToast(`Moderator warning sent directly into host's live chat!`);
+                                } finally {
+                                  setResolvingReportId(null);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 font-semibold text-xs cursor-pointer flex items-center gap-1.5 border border-amber-500/30"
+                              title="Sends a private warning visible ONLY to the host in their stream comment section"
+                            >
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                              <span>Warn Host in Live Chat</span>
+                            </button>
+                          )}
+
+                          {report.status !== 'Approved' && (
+                            <button
+                              disabled={resolvingReportId === report.id}
+                              onClick={async () => {
+                                setResolvingReportId(report.id);
+                                try {
+                                  await supabaseDb.endLiveStream(report.targetId);
+                                  removeActiveLiveStream(report.targetId);
+                                  await updateReportStatusAdmin(report.id, report.type, 'Approved');
+                                  showToast(`Live stream terminated and taken offline.`);
+                                } finally {
+                                  setResolvingReportId(null);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-red-600/20 hover:bg-red-600/30 text-red-300 font-semibold text-xs cursor-pointer flex items-center gap-1 border border-red-500/30"
+                              title="Immediately terminates the violating live broadcast"
+                            >
+                              <Ban className="w-3.5 h-3.5" />
+                              <span>End Stream</span>
+                            </button>
+                          )}
+
+                          {report.status !== 'Rejected' && (
+                            <button
+                              onClick={async () => {
+                                await updateReportStatusAdmin(report.id, report.type, 'Rejected');
+                                showToast(`Report dismissed.`);
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs cursor-pointer"
+                            >
+                              Dismiss
+                            </button>
                           )}
                         </>
                       ) : (

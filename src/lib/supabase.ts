@@ -5262,7 +5262,26 @@ export const supabaseDb = {
         } catch {}
       }
 
-      return rows.map((r: any) => {
+      // Deduplicate rows by LiveCommentID or text fingerprint to completely prevent duplicates
+      const seenRowIds = new Set<string>();
+      const seenRowFp = new Set<string>();
+      const uniqueRows: any[] = [];
+
+      for (const r of rows) {
+        const rId = String(r.LiveCommentID || r.id || '').trim();
+        const rUid = String(r.UserID || r.user_id || '').trim();
+        const rText = String(r.LiveText || r.comment_text || '').trim();
+        const rFp = `${rUid.toLowerCase()}:::${rText.toLowerCase()}`;
+
+        if (rId && seenRowIds.has(rId)) continue;
+        if (rFp && seenRowFp.has(rFp)) continue;
+
+        if (rId) seenRowIds.add(rId);
+        if (rFp) seenRowFp.add(rFp);
+        uniqueRows.push(r);
+      }
+
+      return uniqueRows.map((r: any) => {
         const uRel = Array.isArray(r.User) ? r.User[0] : (r.User || null);
         const uid = r.UserID || r.user_id || uRel?.UserID || '';
         const found = userLookup.get(String(uid)) || userLookup.get(toUuid(uid));
@@ -5272,9 +5291,10 @@ export const supabaseDb = {
         const avatar = uRel?.ProfilePictureURL || found?.avatar || '';
         const text = r.LiveText || r.comment_text || '';
         const rawDate = r.LiveCommentAt || r.created_at;
+        const commentId = r.LiveCommentID || r.id || `lm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
 
         return {
-          id: r.LiveCommentID || r.id || `lm_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          id: commentId,
           userId: uid,
           username,
           displayName,
@@ -5289,13 +5309,14 @@ export const supabaseDb = {
     }
   },
 
-  async insertLiveComment(streamId: string, user: User, text: string): Promise<boolean> {
+  async insertLiveComment(streamId: string, user: User, text: string, customCommentId?: string): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client || !streamId || !text.trim()) return false;
 
     try {
       const streamUuid = toUuid(streamId);
       const userUuid = toUuid(user.id);
+      const commentUuid = customCommentId ? toUuid(customCommentId) : generateUuid();
       const nowIso = new Date().toISOString();
 
       // Ensure commenter exists in User table to avoid FK violation (code 23503)
@@ -5305,10 +5326,18 @@ export const supabaseDb = {
         } catch {}
       }
 
-      // Exactly matches columns in public."LiveComment": LiveStreamID, UserID, LiveText, LiveCommentAt
-      const payload = {
+      const cleanUsername = (user.username || '').replace(/^@/, '');
+      const cleanDisplayName = user.displayName || cleanUsername || 'User';
+      const cleanAvatar = user.avatar || '';
+
+      // Matches columns in public."LiveComment": LiveCommentID, LiveStreamID, UserID, Username, DisplayName, AvatarURL, LiveText, LiveCommentAt
+      const payload: Record<string, any> = {
+        LiveCommentID: commentUuid,
         LiveStreamID: streamUuid,
         UserID: userUuid,
+        Username: cleanUsername,
+        DisplayName: cleanDisplayName,
+        AvatarURL: cleanAvatar,
         LiveText: text.trim(),
         LiveCommentAt: nowIso,
       };
@@ -5316,10 +5345,23 @@ export const supabaseDb = {
       let res = await client.from('LiveComment').insert(payload);
       let error = res.error;
 
-      // If foreign key constraint failed (code 23503) e.g. UserID not in parent table,
-      // retry with UserID: null so the comment is safely saved without foreign key error!
+      // If custom columns were not found, try standard columns
+      if (error && (error.code === '42703' || error.message?.includes('column'))) {
+        const minimalPayload = {
+          LiveCommentID: commentUuid,
+          LiveStreamID: streamUuid,
+          UserID: userUuid,
+          LiveText: text.trim(),
+          LiveCommentAt: nowIso,
+        };
+        const minRes = await client.from('LiveComment').insert(minimalPayload);
+        error = minRes.error;
+      }
+
+      // If foreign key constraint failed (code 23503) e.g. UserID not in parent table, retry with UserID: null
       if (error && error.code === '23503') {
         const nullFkPayload = {
+          LiveCommentID: commentUuid,
           LiveStreamID: streamUuid,
           UserID: null,
           LiveText: text.trim(),
@@ -5329,9 +5371,10 @@ export const supabaseDb = {
         error = fkRes.error;
       }
 
-      // If table LiveComment does not exist (code 42P01), try lowercase 'live_comments' fallback once
+      // If table LiveComment does not exist (code 42P01), try lowercase 'live_comments' fallback
       if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
         const resSnake = await client.from('live_comments').insert({
+          id: commentUuid,
           live_stream_id: streamUuid,
           user_id: userUuid,
           comment_text: text.trim(),
@@ -5384,22 +5427,133 @@ export const supabaseDb = {
     }
   },
 
-  async recordLivestreamViewer(streamId: string, viewerId: string): Promise<boolean> {
+  // Record live stream likes count in Supabase Livestream table (with 0 Disk IO depletion!)
+  async recordLiveStreamLike(streamId: string, likesCount: number, userId?: string): Promise<boolean> {
     const client = getSupabaseClient();
-    if (!client) return false;
+    if (!client || !streamId) return false;
 
     try {
       const streamUuid = toUuid(streamId);
-      const viewerUuid = toUuid(viewerId);
 
-      const { error } = await client.from('LivestreamViewer').insert({
+      // 1. Update LikesCount in Livestream table
+      let res = await client
+        .from('Livestream')
+        .update({ LikesCount: likesCount })
+        .eq('LivestreamID', streamUuid);
+
+      if (res.error) {
+        // Try lowercase column 'likes_count'
+        if (res.error.code === '42703' || res.error.message?.includes('column')) {
+          res = await client
+            .from('Livestream')
+            .update({ likes_count: likesCount })
+            .eq('LivestreamID', streamUuid);
+        }
+        // Try lowercase table 'livestreams'
+        if (res.error && (res.error.code === '42P01' || res.error.message?.includes('does not exist'))) {
+          res = await client
+            .from('livestreams')
+            .update({ likes_count: likesCount })
+            .eq('id', streamUuid);
+        }
+      }
+
+      // 2. Optionally insert like event row if LivestreamLike table exists
+      if (userId) {
+        try {
+          const userUuid = toUuid(userId);
+          await client.from('LivestreamLike').upsert({
+            LikeID: generateUuid(),
+            LiveStreamID: streamUuid,
+            UserID: userUuid,
+            LikedAt: new Date().toISOString(),
+          }, { onConflict: 'LiveStreamID,UserID' });
+        } catch {}
+      }
+
+      return !res?.error;
+    } catch (e) {
+      console.warn('recordLiveStreamLike fallback:', e);
+      return false;
+    }
+  },
+
+  // In-memory cache of recorded stream viewers to eliminate repeated inserts and protect Disk IO
+  recordedViewersSet: new Set<string>(),
+
+  async recordLivestreamViewer(streamId: string, viewerId: string, viewerUser?: Partial<User>): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !streamId || !viewerId) return false;
+
+    const streamUuid = toUuid(streamId);
+    const viewerUuid = toUuid(viewerId);
+    const sessionKey = `${streamUuid}_${viewerUuid}`;
+
+    // Protect Disk IO: only insert once per viewer per stream session!
+    if (this.recordedViewersSet.has(sessionKey)) {
+      return true;
+    }
+    this.recordedViewersSet.add(sessionKey);
+
+    try {
+      const nowIso = new Date().toISOString();
+      const recordUuid = generateUuid();
+
+      // Ensure viewer user exists in User table to satisfy FK constraints if any
+      if (viewerUser && viewerUser.id) {
+        try {
+          await this.ensureUserExists(viewerUser as User);
+        } catch {}
+      }
+
+      // Try 1: PascalCase 'LivestreamViewer' with ViewerRecordID
+      let res = await client.from('LivestreamViewer').insert({
+        ViewerRecordID: recordUuid,
         LiveStreamID: streamUuid,
         ViewerID: viewerUuid,
-        JoinedAt: new Date().toISOString(),
+        JoinedAt: nowIso,
       });
 
-      return !error;
-    } catch {
+      // Try 2: If ViewerRecordID is an unrecognized column, insert with standard columns
+      if (res.error && (res.error.code === '42703' || res.error.message?.includes('column'))) {
+        res = await client.from('LivestreamViewer').insert({
+          LiveStreamID: streamUuid,
+          ViewerID: viewerUuid,
+          JoinedAt: nowIso,
+        });
+      }
+
+      // Try 3: Case variation 'LiveStreamViewer'
+      if (res.error && (res.error.code === '42P01' || res.error.message?.includes('does not exist'))) {
+        res = await client.from('LiveStreamViewer').insert({
+          LiveStreamID: streamUuid,
+          ViewerID: viewerUuid,
+          JoinedAt: nowIso,
+        });
+      }
+
+      // Try 4: snake_case 'livestream_viewers' or 'livestream_viewer'
+      if (res.error && (res.error.code === '42P01' || res.error.message?.includes('does not exist'))) {
+        res = await client.from('livestream_viewers').insert({
+          live_stream_id: streamUuid,
+          viewer_id: viewerUuid,
+          joined_at: nowIso,
+        });
+        if (res.error) {
+          res = await client.from('livestream_viewer').insert({
+            live_stream_id: streamUuid,
+            viewer_id: viewerUuid,
+            joined_at: nowIso,
+          });
+        }
+      }
+
+      if (res.error) {
+        console.warn('recordLivestreamViewer note:', res.error.message);
+      }
+      return !res.error;
+    } catch (e) {
+      console.warn('recordLivestreamViewer exception:', e);
       return false;
     }
   },
@@ -5860,6 +6014,7 @@ CREATE TABLE IF NOT EXISTS public."Livestream" (
   "LivestreamID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "HostUserID" UUID,
   "Title" TEXT NOT NULL DEFAULT 'Live Stream',
+  "LikesCount" INTEGER DEFAULT 0,
   "StartedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   "EndedAt" TIMESTAMP WITH TIME ZONE
 );
@@ -5881,6 +6036,9 @@ CREATE TABLE IF NOT EXISTS public."LivestreamViewer" (
   "ViewerID" UUID,
   "JoinedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- Safely add LikesCount column if Livestream was already created previously
+ALTER TABLE IF EXISTS public."Livestream" ADD COLUMN IF NOT EXISTS "LikesCount" INTEGER DEFAULT 0;
 
 -- Safely add rich author columns if the tables were already created previously
 ALTER TABLE IF EXISTS public."LiveComment" ADD COLUMN IF NOT EXISTS "Username" TEXT;
@@ -6003,6 +6161,7 @@ CREATE TABLE IF NOT EXISTS public."Livestream" (
   "LivestreamID" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "HostUserID" UUID,
   "Title" TEXT NOT NULL DEFAULT 'Live Stream',
+  "LikesCount" INTEGER DEFAULT 0,
   "StartedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
   "EndedAt" TIMESTAMP WITH TIME ZONE
 );
@@ -6024,6 +6183,9 @@ CREATE TABLE IF NOT EXISTS public."LivestreamViewer" (
   "ViewerID" UUID,
   "JoinedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
+
+-- Safely add LikesCount column if Livestream table already exists
+ALTER TABLE IF EXISTS public."Livestream" ADD COLUMN IF NOT EXISTS "LikesCount" INTEGER DEFAULT 0;
 
 -- Safely add rich author columns if the tables were already created previously
 ALTER TABLE IF EXISTS public."LiveComment" ADD COLUMN IF NOT EXISTS "Username" TEXT;

@@ -53,6 +53,7 @@ import {
   Move,
   UserPlus,
   Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface LiveStreamHostStudioProps {
@@ -2240,6 +2241,27 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         <div className="relative z-20 px-3 pb-2 flex flex-col justify-end min-h-0 flex-1">
           <div className="max-h-56 overflow-y-auto space-y-1.5 pr-2 max-w-[85%] text-left pointer-events-auto scrollbar-none">
             {currentLiveStream.messages.slice(-16).map(msg => {
+              if (msg.isHostOnlyWarning) {
+                return (
+                  <div
+                    key={msg.id}
+                    className="bg-red-950/90 border border-amber-500/80 backdrop-blur-md text-[11px] text-white p-2.5 rounded-2xl w-full max-w-xs shadow-2xl flex flex-col gap-1 pointer-events-auto"
+                  >
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="flex items-center gap-1 text-amber-400 font-bold text-[11px]">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>Stream Warning</span>
+                      </span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-500/30 text-amber-300">
+                        HOST ONLY
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-neutral-200 leading-snug">{msg.text}</p>
+                    <span className="text-[9px] text-neutral-400 italic">Only you as host see this warning.</span>
+                  </div>
+                );
+              }
+
               if (msg.isSystemEvent) {
                 if (msg.isLikeEvent) {
                   return (
@@ -3272,6 +3294,32 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
                     </div>
                   ) : (
                     currentLiveStream.messages.map(msg => {
+                      if (msg.isHostOnlyWarning) {
+                        return (
+                          <div
+                            key={msg.id}
+                            className="p-3.5 rounded-2xl bg-gradient-to-br from-red-950/80 via-neutral-900 to-amber-950/70 border-2 border-amber-500/60 text-left shadow-xl space-y-1.5"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="flex items-center gap-1.5 text-amber-400 font-bold text-xs">
+                                <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 animate-pulse" />
+                                <span>Stream Moderation Notice</span>
+                              </span>
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                                HOST ONLY
+                              </span>
+                            </div>
+                            <p className="text-xs text-neutral-200 leading-relaxed font-medium">
+                              {msg.text}
+                            </p>
+                            <div className="flex items-center justify-between text-[10px] text-neutral-400 pt-1.5 border-t border-amber-500/20">
+                              <span className="italic">Only you as the host can see this warning.</span>
+                              <span className="font-mono">{msg.timestamp}</span>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       if (msg.isSystemEvent) {
                         if (msg.isLikeEvent) {
                           return (
