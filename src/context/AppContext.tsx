@@ -427,6 +427,7 @@ interface AppContextType {
   setActiveTab: (tab: AppTab) => void;
   selectedUserId: string | null;
   navigateToUserProfile: (userId: string) => void;
+  navigateToUserProfileByUsername: (username: string) => void;
 
   // Data
   users: User[];
@@ -1354,8 +1355,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           );
           if (!inRemote) {
             remoteUsers.unshift(activeUser);
-            // Gently ensure they are recorded in database in the background without blocking
-            supabaseDb.upsertUser(activeUser).catch(() => {});
+            // Gently ensure they are recorded in database in the background without overwriting profile data
+            supabaseDb.ensureUserExists(activeUser).catch(() => {});
           }
         }
 
@@ -1479,17 +1480,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             const targetRole = (freshMe?.role === 'admin' || currentActiveOnDevice.role === 'admin') ? 'admin' : (freshMe?.role || currentActiveOnDevice.role || 'creator');
 
+            const hasProfileChanged = Boolean(
+              freshMe && (
+                freshMe.displayName !== currentActiveOnDevice.displayName ||
+                freshMe.avatar !== currentActiveOnDevice.avatar ||
+                freshMe.username !== currentActiveOnDevice.username ||
+                freshMe.bio !== currentActiveOnDevice.bio ||
+                freshMe.isPrivate !== currentActiveOnDevice.isPrivate
+              )
+            );
+
             if (
               finalIsBanned !== currentActiveOnDevice.isBanned ||
               finalAppealStatus !== currentActiveOnDevice.appealStatus ||
               targetRole !== currentActiveOnDevice.role ||
-              (freshMe && (freshMe.displayName !== currentActiveOnDevice.displayName || freshMe.avatar !== currentActiveOnDevice.avatar))
+              hasProfileChanged
             ) {
               const updatedCurr: User = {
                 ...currentActiveOnDevice,
                 ...(freshMe || {}),
                 id: currentActiveOnDevice.id, // Strictly preserve active account ID
                 email: currentActiveOnDevice.email || freshMe?.email || '',
+                displayName: (freshMe?.displayName && freshMe.displayName !== 'User')
+                  ? freshMe.displayName
+                  : currentActiveOnDevice.displayName,
+                username: (freshMe?.username && !freshMe.username.startsWith('user_'))
+                  ? freshMe.username
+                  : currentActiveOnDevice.username,
+                avatar: (freshMe?.avatar && !freshMe.avatar.startsWith('blob:') && freshMe.avatar.trim() !== '')
+                  ? freshMe.avatar
+                  : currentActiveOnDevice.avatar,
+                bio: (freshMe?.bio !== undefined && freshMe.bio.trim() !== '')
+                  ? freshMe.bio
+                  : currentActiveOnDevice.bio,
                 role: targetRole,
                 isBanned: finalIsBanned,
                 banReason: finalBanReason,
@@ -1501,6 +1524,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               currentUserRef.current = updatedCurr;
               setCurrentUser(updatedCurr);
               storage.set('currentUser', updatedCurr);
+              recordSavedAccount(updatedCurr);
             }
           }
         }
@@ -1902,11 +1926,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const username = rawUsername.replace(/[^a-zA-Z0-9._]/g, '').toLowerCase() || `user_${sbUser.id.slice(0, 6)}`;
     const avatar = meta.avatar_url || meta.picture || '';
 
-    // Check memory first (instant, 0 DB roundtrip)
+    // Check database or memory first to preserve custom profile edits (avatar, bio, display name, username)
     let existingUser: User | null =
       users.find(u => u.id === sbUser.id || (email && u.email && u.email.trim().toLowerCase() === email)) ||
       savedAccounts.find(u => u.id === sbUser.id || (email && u.email && u.email.trim().toLowerCase() === email)) ||
       null;
+
+    let isBrandNewUser = false;
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const uUuid = toUuid(sbUser.id);
+        let { data: dbRow } = await client
+          .from('User')
+          .select('UserID, Username, DisplayName, ProfilePictureURL, Bio, Role, IsPublic, Email')
+          .or(`UserID.eq.${sbUser.id},UserID.eq.${uUuid}${email ? `,Email.ilike.${email}` : ''}`)
+          .limit(1)
+          .maybeSingle();
+
+        if (!dbRow) {
+          const { data: snakeRow } = await client
+            .from('users')
+            .select('id, username, display_name, avatar_url, bio, role, is_public, email')
+            .or(`id.eq.${sbUser.id},id.eq.${uUuid}${email ? `,email.ilike.${email}` : ''}`)
+            .limit(1)
+            .maybeSingle();
+          if (snakeRow) {
+            dbRow = {
+              UserID: snakeRow.id,
+              Username: snakeRow.username,
+              DisplayName: snakeRow.display_name,
+              ProfilePictureURL: snakeRow.avatar_url,
+              Bio: snakeRow.bio,
+              Role: snakeRow.role,
+              IsPublic: snakeRow.is_public,
+              Email: snakeRow.email,
+            };
+          }
+        }
+
+        if (dbRow) {
+          existingUser = {
+            id: dbRow.UserID || sbUser.id,
+            username: dbRow.Username || existingUser?.username || username,
+            displayName: (dbRow.DisplayName && dbRow.DisplayName !== 'User') ? dbRow.DisplayName : (existingUser?.displayName || displayName),
+            email: dbRow.Email || email,
+            avatar: dbRow.ProfilePictureURL || existingUser?.avatar || avatar,
+            bio: dbRow.Bio !== undefined && dbRow.Bio !== null ? dbRow.Bio : (existingUser?.bio || ''),
+            role: dbRow.Role === 'admin' ? 'admin' : (dbRow.Role || existingUser?.role || 'creator'),
+            isPrivate: dbRow.IsPublic !== undefined ? !dbRow.IsPublic : (existingUser?.isPrivate || false),
+            followingCount: existingUser?.followingCount || 0,
+            followersCount: existingUser?.followersCount || 0,
+            likesCount: existingUser?.likesCount || '0',
+          };
+        } else {
+          isBrandNewUser = true;
+        }
+      } catch {
+        // fallback
+      }
+    }
 
     if (!existingUser) {
       try {
@@ -1964,13 +2043,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     markAccountLoggedInOnDevice(finalUserId, sbUser.email || email);
 
+    const activeStored = storage.get<User | null>('currentUser', null);
+    const isSameActive = Boolean(activeStored && isSameUser(activeStored.id, finalUserId));
+
+    const resolvedAvatar = (existingUser?.avatar && !existingUser.avatar.startsWith('blob:') && existingUser.avatar.trim() !== '')
+      ? existingUser.avatar
+      : (isSameActive && activeStored?.avatar && !activeStored.avatar.startsWith('blob:') && activeStored.avatar.trim() !== '')
+      ? activeStored.avatar
+      : (meta.avatar_url || meta.picture || avatar);
+
+    const resolvedDisplayName = (existingUser?.displayName && existingUser.displayName !== 'User')
+      ? existingUser.displayName
+      : (isSameActive && activeStored?.displayName && activeStored.displayName !== 'User')
+      ? activeStored.displayName
+      : displayName;
+
+    const resolvedUsername = (existingUser?.username && !existingUser.username.startsWith('user_'))
+      ? existingUser.username
+      : (isSameActive && activeStored?.username && !activeStored.username.startsWith('user_'))
+      ? activeStored.username
+      : username;
+
+    const resolvedBio = (existingUser?.bio !== undefined && existingUser.bio.trim() !== '')
+      ? existingUser.bio
+      : (isSameActive && activeStored?.bio)
+      ? activeStored.bio
+      : (meta.bio || '');
+
     const finalUser: User = {
       id: finalUserId,
-      username: existingUser?.username || username,
-      displayName: existingUser?.displayName || displayName,
+      username: resolvedUsername,
+      displayName: resolvedDisplayName,
       email: sbUser.email || email,
-      avatar: existingUser?.avatar || avatar,
-      bio: existingUser?.bio || '',
+      avatar: resolvedAvatar,
+      bio: resolvedBio,
       followingCount: existingUser?.followingCount || 0,
       followersCount: existingUser?.followersCount || 0,
       likesCount: existingUser?.likesCount || '0',
@@ -2011,8 +2117,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     setIsAuthLoading(false);
 
-    // Record user profile in Supabase database
-    await supabaseDb.upsertUser(finalUser);
+    // Only record in Supabase if this is a brand new user signup!
+    // NEVER overwrite existing account profiles with Google metadata defaults!
+    if (isBrandNewUser) {
+      await supabaseDb.upsertUser(finalUser);
+    }
   };
 
   // Listen to real Supabase Auth events (Google OAuth redirects, session tokens, sign out)
@@ -3435,15 +3544,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Profile update (BR-002)
+  const navigateToUserProfileByUsername = (username: string) => {
+    if (!username) return;
+    const clean = username.replace(/^@/, '').toLowerCase().trim();
+    const target = users.find(
+      u => (u.username || '').toLowerCase() === clean
+    );
+    if (target) {
+      navigateToUserProfile(target.id);
+    } else {
+      setSearchQuery(`@${clean}`);
+      setActiveTab('explore');
+    }
+  };
+
+  // Profile update (BR-002) - guarantees persistence across devices and prevents reverting
   const updateUserProfile = async (updates: Partial<User>) => {
     if (!currentUser) return;
     const updated = { ...currentUser, ...updates };
+    currentUserRef.current = updated;
     setCurrentUser(updated);
     storage.set('currentUser', updated);
     recordSavedAccount(updated);
-    setUsers(prev => prev.map(u => (u.id === currentUser.id ? updated : u)));
-    await supabaseDb.upsertUser(updated);
+
+    // Update users array immediately
+    setUsers(prev => prev.map(u => (isSameUser(u.id, currentUser.id) ? updated : u)));
+
+    // Update creator details in all videos state immediately so cards and feeds show new avatar/names
+    setVideos(prev =>
+      prev.map(v =>
+        isSameUser(v.creator.id, currentUser.id) || isSameUser(v.creatorId, currentUser.id)
+          ? {
+              ...v,
+              creator: {
+                ...v.creator,
+                ...(updates.username ? { username: updates.username } : {}),
+                ...(updates.displayName ? { displayName: updates.displayName } : {}),
+                ...(updates.avatar ? { avatar: updates.avatar } : {}),
+                ...(updates.bio !== undefined ? { bio: updates.bio } : {}),
+              },
+            }
+          : v
+      )
+    );
+
+    // Target explicit UPDATE in Supabase database
+    await supabaseDb.updateUserProfileExplicit(currentUser.id, {
+      username: updates.username,
+      displayName: updates.displayName,
+      bio: updates.bio,
+      avatar: updates.avatar,
+      isPrivate: updates.isPrivate,
+      email: updates.email || currentUser.email,
+    });
+
+    // Also update Supabase Auth user_metadata so tokens and sessions on any device keep the new profile!
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const authData: Record<string, any> = {};
+        if (updates.displayName) {
+          authData.full_name = updates.displayName;
+          authData.name = updates.displayName;
+          authData.display_name = updates.displayName;
+        }
+        if (updates.username) {
+          authData.user_name = updates.username;
+          authData.preferred_username = updates.username;
+        }
+        if (updates.avatar && !updates.avatar.startsWith('blob:') && updates.avatar.trim() !== '') {
+          authData.avatar_url = updates.avatar;
+          authData.picture = updates.avatar;
+        }
+        if (updates.bio !== undefined) {
+          authData.bio = updates.bio;
+        }
+        if (Object.keys(authData).length > 0) {
+          await client.auth.updateUser({ data: authData });
+        }
+      } catch (authErr) {
+        console.warn('client.auth.updateUser sync note:', authErr);
+      }
+    }
   };
 
   // Follow & Relationship System (BR-011, BR-012, Friends mutual follow, Private requests)
@@ -7608,6 +7790,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab,
         selectedUserId,
         navigateToUserProfile,
+        navigateToUserProfileByUsername,
         users,
         videos: activeVideos,
         audioTracks,

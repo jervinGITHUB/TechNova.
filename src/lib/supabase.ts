@@ -1021,12 +1021,17 @@ let preferredAudioBucket: string | null = null;
 let preferredCoverBucket: string | null = null;
 let workingAudioTable: 'AudioLibrary' | 'AudioTrack' | 'audio_tracks' | null = null;
 
+// Registry of known existing users to eliminate redundant Supabase writes and protect disk IO
+export const knownUsersSet = new Set<string>();
+
 /**
  * Injects or updates an authenticated user in memory cache immediately.
  * Guarantees zero disk IO overhead and prevents any race condition on login.
  */
 export const injectUserIntoCache = (user: User) => {
   if (!user || !user.id) return;
+  knownUsersSet.add(user.id);
+  knownUsersSet.add(toUuid(user.id));
   if (!cachedUsersResult) {
     cachedUsersResult = { data: [user], timestamp: Date.now() };
     return;
@@ -1134,11 +1139,38 @@ export const supabaseDb = {
             if (isAdminUser) {
               existing.role = 'admin';
             }
-            if (row.ProfilePictureURL && !existing.avatar) {
-              existing.avatar = row.ProfilePictureURL;
+            // Custom avatar logic: prefer uploaded/custom avatars over Google avatar or empty avatar
+            const rowAvatar = row.ProfilePictureURL || row.avatar_url || '';
+            if (rowAvatar) {
+              const isExistingCustom = existing.avatar && (existing.avatar.includes('/storage/') || existing.avatar.includes('avatar_') || !existing.avatar.includes('googleusercontent.com'));
+              const isRowCustom = rowAvatar.includes('/storage/') || rowAvatar.includes('avatar_') || !rowAvatar.includes('googleusercontent.com');
+              if (!existing.avatar || (!isExistingCustom && isRowCustom)) {
+                existing.avatar = rowAvatar;
+              }
             }
-            if (row.DisplayName && (!existing.displayName || existing.displayName === 'User')) {
-              existing.displayName = row.DisplayName;
+
+            // Custom Display Name logic: never overwrite with 'User'
+            const rowDisplayName = row.DisplayName || row.display_name || '';
+            if (rowDisplayName && rowDisplayName !== 'User') {
+              if (!existing.displayName || existing.displayName === 'User') {
+                existing.displayName = rowDisplayName;
+              }
+            }
+
+            // Custom Username logic: never overwrite with 'user_...'
+            const rowUsername = row.Username || row.username || '';
+            if (rowUsername && !rowUsername.startsWith('user_')) {
+              if (!existing.username || existing.username.startsWith('user_')) {
+                existing.username = rowUsername;
+              }
+            }
+
+            // Bio logic: never overwrite non-empty bio with empty bio
+            const rowBio = row.Bio || row.bio || '';
+            if (rowBio && rowBio.trim()) {
+              if (!existing.bio || !existing.bio.trim()) {
+                existing.bio = rowBio;
+              }
             }
             if (row.IsBanned || row.is_banned) {
               if (row.AppealStatus !== 'approved') {
@@ -1240,6 +1272,194 @@ export const supabaseDb = {
     }
   },
 
+  /**
+   * Ensures a user row exists in Supabase User table without overwriting any existing profile data.
+   * If user already exists in memory or in the database, DOES NOTHING (0 disk IO, 0 risk of wiping bio/avatar).
+   */
+  async ensureUserExists(user: User): Promise<void> {
+    if (!user || !user.id) return;
+    const uUuid = toUuid(user.id);
+
+    // Fast memory check (0 disk IO, 0 database queries)
+    if (knownUsersSet.has(user.id) || knownUsersSet.has(uUuid)) {
+      return;
+    }
+
+    injectUserIntoCache(user);
+    const client = getSupabaseClient();
+    if (!client) return;
+
+    try {
+      const cleanEmail = (user.email || '').trim().toLowerCase();
+      // 1. Fast existence check in PascalCase User table
+      const { data: existingUserRow } = await client
+        .from('User')
+        .select('UserID')
+        .or(`UserID.eq.${user.id},UserID.eq.${uUuid}${cleanEmail ? `,Email.ilike.${cleanEmail}` : ''}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingUserRow?.UserID) {
+        knownUsersSet.add(user.id);
+        knownUsersSet.add(uUuid);
+        knownUsersSet.add(existingUserRow.UserID);
+        return; // User already exists! Never overwrite profile data!
+      }
+
+      // 2. Fast existence check in lowercase users table
+      const { data: existingSnakeRow } = await client
+        .from('users')
+        .select('id')
+        .or(`id.eq.${user.id},id.eq.${uUuid}${cleanEmail ? `,email.ilike.${cleanEmail}` : ''}`)
+        .limit(1)
+        .maybeSingle();
+
+      if (existingSnakeRow?.id) {
+        knownUsersSet.add(user.id);
+        knownUsersSet.add(uUuid);
+        knownUsersSet.add(existingSnakeRow.id);
+        return; // User already exists! Never overwrite profile data!
+      }
+
+      // Brand new user only: do minimal insertion
+      await this.upsertUser(user);
+      knownUsersSet.add(user.id);
+      knownUsersSet.add(uUuid);
+    } catch {
+      // ignore
+    }
+  },
+
+  /**
+   * Explicitly updates a user's profile across all devices.
+   * Targeted UPDATE with verified row confirmation (.select()) across User and users tables.
+   */
+  async updateUserProfileExplicit(
+    userId: string,
+    updates: {
+      username?: string;
+      displayName?: string;
+      bio?: string;
+      avatar?: string;
+      isPrivate?: boolean;
+      email?: string;
+    }
+  ): Promise<{ success: boolean; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { success: true };
+
+    try {
+      const uUuid = toUuid(userId);
+      const cleanUsername = updates.username !== undefined
+        ? updates.username.replace(/[^a-zA-Z0-9._]/g, '').toLowerCase()
+        : undefined;
+
+      const pascalPayload: Record<string, any> = {};
+      if (cleanUsername !== undefined && cleanUsername.length > 0) pascalPayload.Username = cleanUsername;
+      if (updates.displayName !== undefined && updates.displayName.trim().length > 0) {
+        pascalPayload.DisplayName = updates.displayName.trim();
+      }
+      if (updates.bio !== undefined) pascalPayload.Bio = updates.bio;
+      if (updates.avatar !== undefined && !updates.avatar.startsWith('blob:')) {
+        pascalPayload.ProfilePictureURL = updates.avatar;
+      }
+      if (updates.isPrivate !== undefined) pascalPayload.IsPublic = !updates.isPrivate;
+      if (updates.email) pascalPayload.Email = updates.email.trim().toLowerCase();
+
+      let isUpdated = false;
+
+      // 1. Try updating in PascalCase 'User' table with .select() to verify rows were modified!
+      try {
+        let updateRes = await client.from('User').update(pascalPayload).eq('UserID', userId).select('UserID');
+        if (!updateRes.error && updateRes.data && updateRes.data.length > 0) {
+          isUpdated = true;
+        }
+
+        // 2. Try by UUID format
+        if (!isUpdated) {
+          const retryUuid = await client.from('User').update(pascalPayload).eq('UserID', uUuid).select('UserID');
+          if (!retryUuid.error && retryUuid.data && retryUuid.data.length > 0) {
+            isUpdated = true;
+          }
+        }
+
+        // 3. Try by Email
+        if (!isUpdated && updates.email) {
+          const retryEmail = await client.from('User').update(pascalPayload).ilike('Email', updates.email.trim().toLowerCase()).select('UserID');
+          if (!retryEmail.error && retryEmail.data && retryEmail.data.length > 0) {
+            isUpdated = true;
+          }
+        }
+
+        // 4. Try by Username
+        if (!isUpdated && cleanUsername) {
+          const retryUser = await client.from('User').update(pascalPayload).ilike('Username', cleanUsername).select('UserID');
+          if (!retryUser.error && retryUser.data && retryUser.data.length > 0) {
+            isUpdated = true;
+          }
+        }
+      } catch (errUser) {
+        console.warn('User table update attempt note:', errUser);
+      }
+
+      // 5. Also update lowercase 'users' table if it exists or if User didn't match
+      try {
+        const snakePayload: Record<string, any> = {};
+        if (cleanUsername !== undefined) snakePayload.username = cleanUsername;
+        if (updates.displayName !== undefined) snakePayload.display_name = updates.displayName.trim();
+        if (updates.bio !== undefined) snakePayload.bio = updates.bio;
+        if (updates.avatar !== undefined && !updates.avatar.startsWith('blob:')) {
+          snakePayload.avatar_url = updates.avatar;
+        }
+        if (updates.isPrivate !== undefined) snakePayload.is_public = !updates.isPrivate;
+        if (updates.email) snakePayload.email = updates.email.trim().toLowerCase();
+
+        if (Object.keys(snakePayload).length > 0) {
+          const u1 = await client.from('users').update(snakePayload).eq('id', userId).select('id');
+          if (!u1.error && u1.data && u1.data.length > 0) {
+            isUpdated = true;
+          } else {
+            const u2 = await client.from('users').update(snakePayload).eq('id', uUuid).select('id');
+            if (!u2.error && u2.data && u2.data.length > 0) {
+              isUpdated = true;
+            } else if (updates.email) {
+              const u3 = await client.from('users').update(snakePayload).ilike('email', updates.email.trim().toLowerCase()).select('id');
+              if (!u3.error && u3.data && u3.data.length > 0) {
+                isUpdated = true;
+              }
+            }
+          }
+        }
+      } catch (errSnake) {
+        console.warn('users table update attempt note:', errSnake);
+      }
+
+      // Invalidate and immediately update memory cache so subsequent fetchUsers immediately reflects the fresh data
+      if (cachedUsersResult) {
+        const emailLower = updates.email?.trim().toLowerCase();
+        const idx = cachedUsersResult.data.findIndex(
+          u => isSameUser(u.id, userId) || (emailLower && u.email && u.email.trim().toLowerCase() === emailLower)
+        );
+        if (idx >= 0) {
+          cachedUsersResult.data[idx] = {
+            ...cachedUsersResult.data[idx],
+            ...(cleanUsername !== undefined && cleanUsername.length > 0 ? { username: cleanUsername } : {}),
+            ...(updates.displayName !== undefined ? { displayName: updates.displayName.trim() } : {}),
+            ...(updates.bio !== undefined ? { bio: updates.bio } : {}),
+            ...(updates.avatar !== undefined && !updates.avatar.startsWith('blob:') ? { avatar: updates.avatar } : {}),
+            ...(updates.isPrivate !== undefined ? { isPrivate: updates.isPrivate } : {}),
+          };
+          cachedUsersResult.timestamp = Date.now();
+        }
+      }
+
+      return { success: true };
+    } catch (e: any) {
+      console.warn('updateUserProfileExplicit handled note:', e?.message || e);
+      return { success: false, error: e?.message };
+    }
+  },
+
   async upsertUser(user: User, password?: string): Promise<{ success: boolean; error?: string }> {
     // Immediately ensure user is cached in memory (0 disk IO, instant availability across all components)
     injectUserIntoCache(user);
@@ -1258,19 +1478,50 @@ export const supabaseDb = {
       // 1. Check if user already exists in User table by Email or by UserID to NEVER create duplicates!
       let existingUserId: string | null = null;
       let existingRole: string | null = null;
-      if (cleanEmail) {
+      let existingBio: string | null = null;
+      let existingAvatar: string | null = null;
+      let existingDisplayName: string | null = null;
+      let existingUsername: string | null = null;
+
+      try {
+        const { data: existingRow } = await client
+          .from('User')
+          .select('UserID, Role, Bio, ProfilePictureURL, DisplayName, Username')
+          .or(`UserID.eq.${user.id},UserID.eq.${userId}${cleanEmail ? `,Email.ilike.${cleanEmail}` : ''}`)
+          .limit(1)
+          .maybeSingle();
+
+        if (existingRow?.UserID) {
+          existingUserId = existingRow.UserID;
+          existingRole = existingRow.Role;
+          existingBio = existingRow.Bio;
+          existingAvatar = existingRow.ProfilePictureURL;
+          existingDisplayName = existingRow.DisplayName;
+          existingUsername = existingRow.Username;
+          userId = existingRow.UserID; // Re-use the existing UserID!
+        }
+      } catch {
+        // ignore
+      }
+
+      // Check lowercase users table if not found in User
+      if (!existingUserId) {
         try {
-          const { data: existingByEmail } = await client
-            .from('User')
-            .select('UserID, Role, RegistrationDate')
-            .ilike('Email', cleanEmail)
+          const { data: snakeRow } = await client
+            .from('users')
+            .select('id, role, bio, avatar_url, display_name, username')
+            .or(`id.eq.${user.id},id.eq.${userId}${cleanEmail ? `,email.ilike.${cleanEmail}` : ''}`)
             .limit(1)
             .maybeSingle();
 
-          if (existingByEmail?.UserID) {
-            existingUserId = existingByEmail.UserID;
-            existingRole = existingByEmail.Role;
-            userId = existingByEmail.UserID; // Re-use the existing UserID!
+          if (snakeRow?.id) {
+            existingUserId = snakeRow.id;
+            existingRole = snakeRow.role;
+            existingBio = snakeRow.bio;
+            existingAvatar = snakeRow.avatar_url;
+            existingDisplayName = snakeRow.display_name;
+            existingUsername = snakeRow.username;
+            userId = snakeRow.id;
           }
         } catch {
           // ignore
@@ -1279,44 +1530,71 @@ export const supabaseDb = {
 
       const finalRole = (existingRole === 'admin' || user.role === 'admin') ? 'admin' : (user.role || 'creator');
 
-      // If user already exists by email, UPDATE in-place instead of inserting duplicate!
+      // If user already exists, UPDATE preserving existing non-empty bio, avatar, and custom username
       if (existingUserId) {
         const updatePayload: Record<string, any> = {
-          Username: cleanUsername,
-          Email: user.email || cleanEmail,
-          DisplayName: user.displayName || user.username || 'User',
-          Bio: user.bio || '',
-          ProfilePictureURL: user.avatar || '',
           Role: finalRole,
           IsPublic: isPublic,
         };
+
+        // Existing database values take absolute priority so background operations NEVER revert bio!
+        if (existingBio && existingBio.trim() !== '') {
+          updatePayload.Bio = existingBio;
+        } else if (user.bio !== undefined && user.bio.trim() !== '') {
+          updatePayload.Bio = user.bio;
+        }
+
+        // Existing database custom avatar takes priority over older or default avatar
+        if (existingAvatar && existingAvatar.trim() !== '' && !existingAvatar.startsWith('blob:')) {
+          updatePayload.ProfilePictureURL = existingAvatar;
+        } else if (user.avatar && !user.avatar.startsWith('blob:') && user.avatar.trim() !== '') {
+          updatePayload.ProfilePictureURL = user.avatar;
+        }
+
+        // Keep custom display name
+        if (existingDisplayName && existingDisplayName !== 'User') {
+          updatePayload.DisplayName = existingDisplayName;
+        } else if (user.displayName && user.displayName !== 'User') {
+          updatePayload.DisplayName = user.displayName;
+        }
+
+        // Keep custom username
+        if (existingUsername && !existingUsername.startsWith('user_')) {
+          updatePayload.Username = existingUsername;
+        } else if (cleanUsername && !cleanUsername.startsWith('user_')) {
+          updatePayload.Username = cleanUsername;
+        }
+
+        if (user.email || cleanEmail) {
+          updatePayload.Email = user.email || cleanEmail;
+        }
         if (password) updatePayload.Password = password;
 
         let updateRes = await client.from('User').update(updatePayload).eq('UserID', existingUserId);
         if (updateRes.error && (updateRes.error.code === '42703' || updateRes.error.message?.includes('column'))) {
           // Retry with core columns only
           updateRes = await client.from('User').update({
-            Username: cleanUsername,
+            Username: updatePayload.Username || cleanUsername,
             Email: user.email || cleanEmail,
-            DisplayName: user.displayName || user.username || 'User',
-            Bio: user.bio || '',
-            ProfilePictureURL: user.avatar || '',
+            DisplayName: updatePayload.DisplayName || user.displayName || 'User',
+            Bio: updatePayload.Bio || '',
+            ProfilePictureURL: updatePayload.ProfilePictureURL || '',
           }).eq('UserID', existingUserId);
         } else if (updateRes.error && (updateRes.error.code === '42P01' || updateRes.error.message?.includes('does not exist'))) {
           // Fallback to snake_case users table
           await client.from('users').update({
-            username: cleanUsername,
+            username: updatePayload.Username || cleanUsername,
             email: user.email || cleanEmail,
-            display_name: user.displayName || user.username || 'User',
-            bio: user.bio || '',
-            avatar_url: user.avatar || '',
+            display_name: updatePayload.DisplayName || user.displayName || 'User',
+            bio: updatePayload.Bio || '',
+            avatar_url: updatePayload.ProfilePictureURL || '',
           }).eq('id', existingUserId);
         }
         injectUserIntoCache(user);
         return { success: true };
       }
 
-      // Otherwise do upsert on UserID
+      // Otherwise do initial insert on UserID
       const payloadPascal: Record<string, any> = {
         UserID: userId,
         Username: cleanUsername,
@@ -1325,7 +1603,7 @@ export const supabaseDb = {
         RegistrationDate: new Date().toISOString(),
         DisplayName: user.displayName || user.username || 'User',
         Bio: user.bio || '',
-        ProfilePictureURL: user.avatar || '',
+        ProfilePictureURL: (user.avatar && !user.avatar.startsWith('blob:')) ? user.avatar : '',
         IsPublic: isPublic,
         Role: finalRole,
       };
@@ -1340,7 +1618,7 @@ export const supabaseDb = {
           Email: user.email || `${cleanUsername}@viralhub.app`,
           DisplayName: user.displayName || user.username || 'User',
           Bio: user.bio || '',
-          ProfilePictureURL: user.avatar || '',
+          ProfilePictureURL: (user.avatar && !user.avatar.startsWith('blob:')) ? user.avatar : '',
         };
         const retryPascal = await client.from('User').upsert(minimalPascal, { onConflict: 'UserID' });
         error = retryPascal.error;
@@ -1354,7 +1632,7 @@ export const supabaseDb = {
           email: user.email || `${cleanUsername}@viralhub.app`,
           display_name: user.displayName || user.username || 'User',
           bio: user.bio || '',
-          avatar_url: user.avatar || '',
+          avatar_url: (user.avatar && !user.avatar.startsWith('blob:')) ? user.avatar : '',
           is_public: isPublic,
           created_at: new Date().toISOString(),
         };
@@ -1365,7 +1643,7 @@ export const supabaseDb = {
             username: cleanUsername,
             email: user.email || `${cleanUsername}@viralhub.app`,
             display_name: user.displayName || user.username || 'User',
-            avatar_url: user.avatar || '',
+            avatar_url: (user.avatar && !user.avatar.startsWith('blob:')) ? user.avatar : '',
           }, { onConflict: 'id' });
         }
         error = resSnake.error;
@@ -1950,7 +2228,7 @@ export const supabaseDb = {
         }
 
         // Thumbnail must strictly be an image, NEVER a video file (.mp4, .webm, blob:)!
-        const rawThumb = row.ThumbnailURL || row.thumbnail_url || '';
+        const rawThumb = row.ThumbnailURL || row.thumbnail_url || row.CoverURL || row.cover_url || '';
         const isThumbVid = Boolean(
           rawThumb &&
           (rawThumb.startsWith('blob:') || /\.(mp4|webm|mov|mkv|ogg|m4v)($|\?)/i.test(rawThumb))
@@ -1960,9 +2238,7 @@ export const supabaseDb = {
           // If rawThumb is identical to creator.avatar or contains avatar_, it is an avatar, NOT a video thumbnail!
           if (
             (creator.avatar && rawThumb.trim().toLowerCase() === creator.avatar.trim().toLowerCase()) ||
-            rawThumb.includes('avatar_') ||
-            rawThumb.includes('profile%20picture') ||
-            rawThumb.includes('profile-picture')
+            rawThumb.includes('avatar_')
           ) {
             safeThumbnailUrl = '';
           } else {
@@ -2008,9 +2284,9 @@ export const supabaseDb = {
       const videoUuid = toUuid(video.id);
       let userUuid = toUuid(video.creatorId || video.creator?.id);
 
-      // 1. Ensure creator exists in User table and resolve true UserID
+      // 1. Ensure creator exists in User table and resolve true UserID without overwriting creator profile!
       if (video.creator) {
-        await this.upsertUser(video.creator);
+        await this.ensureUserExists(video.creator);
         if (video.creator.email) {
           try {
             const { data: dbUser } = await client
@@ -2036,6 +2312,11 @@ export const supabaseDb = {
         ViewCount: parseInt(video.viewsCount || '0', 10) || 0,
       };
 
+      // Persist ThumbnailURL so other devices render visual card instead of black box!
+      if (video.thumbnailUrl && !video.thumbnailUrl.startsWith('blob:')) {
+        corePayload.ThumbnailURL = video.thumbnailUrl;
+      }
+
       // Only attach AudioTrackID if provided and valid UUID to avoid foreign key errors on unseeded track
       if (video.audioTrack?.id && isUuid(video.audioTrack.id)) {
         corePayload.AudioTrackID = toUuid(video.audioTrack.id);
@@ -2047,6 +2328,9 @@ export const supabaseDb = {
         Status: video.status || 'approved',
         Audience: video.audience || 'public',
       };
+      if (video.thumbnailUrl && !video.thumbnailUrl.startsWith('blob:')) {
+        extendedPayload.ThumbnailURL = video.thumbnailUrl;
+      }
       if (video.rejectionReason) {
         extendedPayload.RejectionReason = video.rejectionReason;
       }
@@ -2835,6 +3119,70 @@ export const supabaseDb = {
     }
   },
 
+  async uploadThumbnailImage(dataUrlOrFile: string | File, videoId?: string): Promise<{ url: string | null; error?: string }> {
+    const client = getSupabaseClient();
+    if (!client) return { url: null, error: 'Supabase client is not connected' };
+
+    try {
+      let fileBlob: Blob;
+      let ext = 'jpg';
+      let mimeType = 'image/jpeg';
+
+      if (typeof dataUrlOrFile === 'string') {
+        if (!dataUrlOrFile.startsWith('data:image/')) {
+          return { url: dataUrlOrFile };
+        }
+        const matches = dataUrlOrFile.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
+        if (!matches) return { url: null, error: 'Invalid data URL' };
+        mimeType = matches[1];
+        ext = mimeType.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+        const byteCharacters = atob(matches[2]);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        fileBlob = new Blob([byteArray], { type: mimeType });
+      } else {
+        fileBlob = dataUrlOrFile;
+        ext = dataUrlOrFile.name.split('.').pop()?.toLowerCase() || 'jpg';
+        mimeType = dataUrlOrFile.type || 'image/jpeg';
+      }
+
+      const cleanFileName = `thumb_${videoId || Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+      // Candidate buckets
+      let candidateBuckets = ['thumbnails', 'profile picture', 'profile-picture', 'images', 'public', 'videos'];
+      try {
+        const { data: bucketList } = await client.storage.listBuckets();
+        if (bucketList && bucketList.length > 0) {
+          const discovered = bucketList.map(b => b.name || b.id).filter(Boolean);
+          candidateBuckets = Array.from(new Set([...discovered, ...candidateBuckets]));
+        }
+      } catch {}
+
+      for (const bucket of candidateBuckets) {
+        try {
+          const { data, error } = await client.storage.from(bucket).upload(cleanFileName, fileBlob, {
+            contentType: mimeType,
+            cacheControl: '86400',
+            upsert: true,
+          });
+          if (!error && data?.path) {
+            const { data: pubData } = client.storage.from(bucket).getPublicUrl(cleanFileName);
+            if (pubData?.publicUrl) {
+              return { url: pubData.publicUrl };
+            }
+          }
+        } catch {}
+      }
+
+      return { url: null, error: 'Could not upload thumbnail image' };
+    } catch (e: any) {
+      return { url: null, error: e?.message || 'Thumbnail upload failed' };
+    }
+  },
+
   async deleteVideoFileFromStorage(mediaUrl?: string | null): Promise<boolean> {
     if (!mediaUrl) return false;
     const client = getSupabaseClient();
@@ -3220,8 +3568,8 @@ export const supabaseDb = {
     if (!client) return false;
 
     try {
-      // Ensure user exists
-      await this.upsertUser(user);
+      // Ensure user exists without overwriting profile data
+      await this.ensureUserExists(user);
 
       const cUuid = toUuid(commentId);
       const vUuid = toUuid(videoId);
@@ -4377,7 +4725,7 @@ export const supabaseDb = {
       // 1. Crucial: Ensure the host account exists in the User table first so foreign key is NEVER violated!
       if (stream.host) {
         try {
-          await this.upsertUser(stream.host);
+          await this.ensureUserExists(stream.host);
         } catch {}
       }
 
@@ -4727,7 +5075,7 @@ export const supabaseDb = {
       // Ensure commenter exists in User table to avoid FK violation (code 23503)
       if (user) {
         try {
-          await this.upsertUser(user);
+          await this.ensureUserExists(user);
         } catch {}
       }
 

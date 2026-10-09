@@ -38,6 +38,111 @@ const formatCount = (count?: number | string): string => {
   return num.toString();
 };
 
+export const ExploreThumbnailCard: React.FC<{ video: Video }> = ({ video }) => {
+  const [imgError, setImgError] = useState(false);
+  const [videoLoaded, setVideoLoaded] = useState(false);
+  const [videoError, setVideoError] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Check if thumbnailUrl is a valid image URL
+  const hasValidImage = Boolean(
+    video.thumbnailUrl &&
+    !imgError &&
+    !isVideoUrl(video.thumbnailUrl) &&
+    !video.thumbnailUrl.startsWith('blob:') &&
+    video.thumbnailUrl !== video.creator?.avatar &&
+    !video.thumbnailUrl.includes('avatar_') &&
+    (
+      video.thumbnailUrl.startsWith('data:image/') ||
+      /\.(jpe?g|png|webp|gif|svg)($|\?)/i.test(video.thumbnailUrl) ||
+      video.thumbnailUrl.includes('/storage/v1/object/public/') ||
+      video.thumbnailUrl.includes('thumbnail') ||
+      video.thumbnailUrl.includes('images') ||
+      video.thumbnailUrl.startsWith('http')
+    )
+  );
+
+  // Clean media url (never append #t=0.001 which causes 416 range errors on iOS/Safari/Android)
+  const videoSourceUrl = video.mediaUrl ? video.mediaUrl.trim() : '';
+
+  // Has valid video stream
+  const canPlayVideo = Boolean(videoSourceUrl && !videoError && !videoSourceUrl.startsWith('blob:'));
+
+  return (
+    <div
+      className="relative w-full h-full overflow-hidden bg-gradient-to-br from-[#1a1226] via-[#12121c] to-[#0a0a10]"
+      onMouseEnter={() => {
+        if (videoRef.current && canPlayVideo) {
+          videoRef.current.play().catch(() => {});
+        }
+      }}
+      onMouseLeave={() => {
+        if (videoRef.current && canPlayVideo) {
+          videoRef.current.pause();
+          try {
+            videoRef.current.currentTime = 0;
+          } catch {}
+        }
+      }}
+    >
+      {/* 1. Verified Image Thumbnail */}
+      {hasValidImage ? (
+        <img
+          src={video.thumbnailUrl}
+          alt={video.caption || 'Video'}
+          loading="lazy"
+          onError={() => setImgError(true)}
+          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out"
+        />
+      ) : canPlayVideo ? (
+        <>
+          {/* HTML5 Video Element with metadata preload so browsers don't run out of decoders */}
+          <video
+            ref={videoRef}
+            src={videoSourceUrl}
+            preload="metadata"
+            muted
+            loop
+            playsInline
+            onLoadedData={() => setVideoLoaded(true)}
+            onCanPlay={() => setVideoLoaded(true)}
+            onError={() => setVideoError(true)}
+            className={`w-full h-full object-cover pointer-events-none group-hover:scale-105 transition-all duration-500 ease-out ${
+              videoLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+
+          {/* Visual Branded Poster Backdrop while video is preparing or in mobile viewports */}
+          {!videoLoaded && (
+            <div className="absolute inset-0 bg-gradient-to-br from-[#271037] via-[#161624] to-[#0c0c14] flex flex-col items-center justify-center p-3 text-center">
+              <div className="w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-2 shadow-inner group-hover:scale-110 group-hover:bg-[#ff007a]/20 transition-all">
+                <Play className="w-5 h-5 text-[#ff007a] fill-[#ff007a] ml-0.5" />
+              </div>
+              <div className="text-[11px] font-bold text-neutral-300 line-clamp-1 max-w-[120px]">
+                {video.creator?.displayName || video.creator?.username || 'ViralHub'}
+              </div>
+              <div className="text-[9px] text-pink-400 font-semibold mt-0.5">
+                {video.hashtags && video.hashtags[0] ? video.hashtags[0] : '#viral'}
+              </div>
+            </div>
+          )}
+        </>
+      ) : (
+        /* 3. Fallback Card with Stylish Gradient & Branding (Guarantees NO plain black boxes!) */
+        <div className="w-full h-full bg-gradient-to-br from-[#251233] via-[#161626] to-[#0a0a12] flex flex-col items-center justify-center p-3 text-center">
+          <div className="w-12 h-12 rounded-full bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center mb-2 shadow-lg">
+            <Play className="w-5 h-5 text-[#ff007a] fill-[#ff007a] ml-0.5" />
+          </div>
+          <span className="text-[11px] font-bold text-white line-clamp-1 max-w-[110px]">
+            {video.caption || 'Video'}
+          </span>
+          <span className="text-[9px] text-pink-400 font-mono mt-1">ViralHub Clip</span>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ExploreGrid: React.FC = () => {
   const {
     currentUser,
@@ -480,37 +585,7 @@ export const ExploreGrid: React.FC = () => {
               className="group relative bg-[#13131a] rounded-2xl overflow-hidden border border-neutral-800/90 hover:border-[#ff007a]/70 shadow-lg hover:shadow-[0_8px_24px_rgba(255,0,122,0.2)] transition-all duration-300 flex flex-col aspect-[9/15] cursor-pointer"
             >
               {/* Thumbnail / Video Preview */}
-              <div className="relative w-full h-full overflow-hidden bg-gradient-to-b from-[#181826] to-[#0d0d14]">
-                {video.thumbnailUrl &&
-                !isVideoUrl(video.thumbnailUrl) &&
-                video.thumbnailUrl !== video.creator?.avatar &&
-                !video.thumbnailUrl.includes('avatar_') &&
-                !video.thumbnailUrl.includes('profile%20picture') &&
-                !video.thumbnailUrl.includes('profile-picture') &&
-                (video.thumbnailUrl.startsWith('data:image/') ||
-                  video.thumbnailUrl.endsWith('.jpg') ||
-                  video.thumbnailUrl.endsWith('.jpeg') ||
-                  video.thumbnailUrl.endsWith('.png') ||
-                  video.thumbnailUrl.endsWith('.webp')) ? (
-                  <img
-                    src={video.thumbnailUrl}
-                    alt={video.caption}
-                    loading="lazy"
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out"
-                  />
-                ) : video.mediaUrl ? (
-                  <video
-                    src={video.mediaUrl}
-                    preload="metadata"
-                    muted
-                    playsInline
-                    className="w-full h-full object-cover pointer-events-none group-hover:scale-105 transition-transform duration-500 ease-out"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-neutral-600">
-                    <Play className="w-8 h-8" />
-                  </div>
-                )}
+              <ExploreThumbnailCard video={video} />
 
                 {/* Subtle dark gradient overlay */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent pointer-events-none" />
@@ -566,7 +641,6 @@ export const ExploreGrid: React.FC = () => {
                   </div>
                 </div>
               </div>
-            </div>
           ))}
         </div>
       ) : (

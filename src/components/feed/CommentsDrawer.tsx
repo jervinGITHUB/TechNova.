@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
-import { X, Send, Heart, ChevronUp, ChevronDown, MessageSquare, Trash2, RefreshCw } from 'lucide-react';
+import { X, Send, Heart, ChevronUp, ChevronDown, MessageSquare, Trash2, RefreshCw, AtSign } from 'lucide-react';
 import { formatRealtimeAgo } from '../../utils/time';
 import { isSameUser } from '../../lib/supabase';
+import { MentionAutocomplete } from '../common/MentionAutocomplete';
+import { User } from '../../types';
 
 export const CommentsDrawer: React.FC = () => {
   const {
@@ -16,6 +18,10 @@ export const CommentsDrawer: React.FC = () => {
     videos,
     commentsMap,
     fetchCommentsForVideo,
+    users,
+    getFollowStatus,
+    isTargetFollowingMe,
+    navigateToUserProfileByUsername,
   } = useApp();
 
   // Bottom-sheet height state for mobile (starts at 50% = half of video)
@@ -25,6 +31,11 @@ export const CommentsDrawer: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+
+  // Mention autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionStartIndex, setMentionStartIndex] = useState<number>(-1);
+  const commentInputRef = useRef<HTMLInputElement>(null);
 
   // Desktop viewport check (>= 768px docks on the right side)
   const [isDesktop, setIsDesktop] = useState<boolean>(() =>
@@ -69,6 +80,68 @@ export const CommentsDrawer: React.FC = () => {
     0
   );
 
+  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setInputVal(val);
+
+    const cursorPos = e.target.selectionStart || val.length;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const match = textBeforeCursor.match(/(?:^|\s)@([a-zA-Z0-9._]*)$/);
+
+    if (match) {
+      const q = match[1];
+      const atIndex = textBeforeCursor.lastIndexOf('@');
+      setMentionQuery(q);
+      setMentionStartIndex(atIndex);
+    } else {
+      setMentionQuery(null);
+      setMentionStartIndex(-1);
+    }
+  };
+
+  const handleSelectMentionUser = (user: User) => {
+    if (mentionStartIndex < 0) return;
+    const beforeAt = inputVal.slice(0, mentionStartIndex);
+    const cursorPos = commentInputRef.current?.selectionStart || inputVal.length;
+    const afterCursor = inputVal.slice(cursorPos);
+    const inserted = `@${user.username} `;
+    const newVal = `${beforeAt}${inserted}${afterCursor}`;
+    setInputVal(newVal);
+    setMentionQuery(null);
+    setMentionStartIndex(-1);
+    setTimeout(() => {
+      if (commentInputRef.current) {
+        commentInputRef.current.focus();
+        const nextPos = beforeAt.length + inserted.length;
+        commentInputRef.current.setSelectionRange(nextPos, nextPos);
+      }
+    }, 50);
+  };
+
+  const renderCommentText = (text: string) => {
+    const tokens = text.split(/(\s+)/);
+    return tokens.map((token, idx) => {
+      if (token.startsWith('@') && token.length > 1) {
+        const cleanUsername = token.slice(1).replace(/[^a-zA-Z0-9._]/g, '');
+        return (
+          <button
+            key={idx}
+            type="button"
+            onClick={e => {
+              e.stopPropagation();
+              setCommentsVideoId(null);
+              navigateToUserProfileByUsername(cleanUsername);
+            }}
+            className="font-bold text-cyan-400 hover:text-cyan-300 transition-colors cursor-pointer mr-0.5 inline-block drop-shadow hover:underline"
+          >
+            @{cleanUsername}
+          </button>
+        );
+      }
+      return <span key={idx}>{token}</span>;
+    });
+  };
+
   const handleRefresh = async () => {
     if (!commentsVideoId || isLoading) return;
     setIsLoading(true);
@@ -87,6 +160,8 @@ export const CommentsDrawer: React.FC = () => {
     const replyTarget = replyingTo;
     setInputVal('');
     setReplyingTo(null);
+    setMentionQuery(null);
+    setMentionStartIndex(-1);
     setIsSubmitting(true);
     try {
       await addCommentToVideo(commentsVideoId, text, replyTarget || undefined);
@@ -350,7 +425,7 @@ export const CommentsDrawer: React.FC = () => {
                         </div>
 
                         <p className="text-xs text-neutral-200 mt-0.5 leading-relaxed break-words">
-                          {comment.text}
+                          {renderCommentText(comment.text)}
                         </p>
 
                         <button
@@ -432,7 +507,7 @@ export const CommentsDrawer: React.FC = () => {
                                   </div>
                                 </div>
                                 <p className="text-xs text-neutral-300 mt-0.5 break-words">
-                                  {reply.text}
+                                  {renderCommentText(reply.text)}
                                 </p>
                               </div>
                             </div>
@@ -464,11 +539,28 @@ export const CommentsDrawer: React.FC = () => {
           )}
 
           {/* Input Form at bottom of drawer */}
-          <form
-            onSubmit={handleSubmit}
-            className="p-3 sm:px-4 border-t border-neutral-800 bg-[#14141c] shrink-0"
-          >
-            <div className="flex items-center gap-2 bg-[#1b1b26] rounded-2xl px-3.5 py-2 border border-neutral-700/80 focus-within:border-[#ff007a] transition-all">
+          <div className="relative border-t border-neutral-800 bg-[#14141c] shrink-0 p-3 sm:px-4">
+            {/* Mention Autocomplete Popup */}
+            {mentionQuery !== null && (
+              <MentionAutocomplete
+                query={mentionQuery}
+                users={users}
+                currentUser={currentUser}
+                getFollowStatus={getFollowStatus}
+                isTargetFollowingMe={isTargetFollowingMe}
+                onSelect={handleSelectMentionUser}
+                onClose={() => {
+                  setMentionQuery(null);
+                  setMentionStartIndex(-1);
+                }}
+                positionClassName="bottom-full mb-2 left-3 right-3"
+              />
+            )}
+
+            <form
+              onSubmit={handleSubmit}
+              className="flex items-center gap-2 bg-[#1b1b26] rounded-2xl px-3.5 py-2 border border-neutral-700/80 focus-within:border-[#ff007a] transition-all"
+            >
               {currentUser && (
                 <Avatar
                   src={currentUser.avatar}
@@ -477,14 +569,34 @@ export const CommentsDrawer: React.FC = () => {
                 />
               )}
               <input
+                ref={commentInputRef}
                 type="text"
                 placeholder={
-                  currentVideo ? `Add a comment for @${currentVideo.creator.username}...` : 'Add comment...'
+                  currentVideo ? `Comment for @${currentVideo.creator.username}... (type @ to tag)` : 'Add comment... (type @ to tag)'
                 }
                 value={inputVal}
-                onChange={e => setInputVal(e.target.value)}
+                onChange={handleInputChange}
                 className="flex-1 bg-transparent text-xs sm:text-sm text-white placeholder-neutral-500 outline-none"
               />
+              <button
+                type="button"
+                onClick={() => {
+                  const newVal = inputVal.endsWith(' ') || inputVal === '' ? `${inputVal}@` : `${inputVal} @`;
+                  setInputVal(newVal);
+                  setMentionQuery('');
+                  setMentionStartIndex(newVal.lastIndexOf('@'));
+                  setTimeout(() => {
+                    if (commentInputRef.current) {
+                      commentInputRef.current.focus();
+                      commentInputRef.current.setSelectionRange(newVal.length, newVal.length);
+                    }
+                  }, 50);
+                }}
+                className="p-1 rounded-lg text-neutral-400 hover:text-[#ff007a] hover:bg-neutral-800 transition-colors cursor-pointer"
+                title="Tag a user using @"
+              >
+                <AtSign className="w-4 h-4" />
+              </button>
               <button
                 type="submit"
                 disabled={!inputVal.trim() || isSubmitting}
@@ -493,8 +605,8 @@ export const CommentsDrawer: React.FC = () => {
               >
                 <Send className="w-3.5 h-3.5" />
               </button>
-            </div>
-          </form>
+            </form>
+          </div>
         </div>
     </div>
   );

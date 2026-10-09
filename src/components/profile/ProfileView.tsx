@@ -4,6 +4,7 @@ import { Video } from '../../types';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { AudienceSettingsModal } from '../modals/AudienceSettingsModal';
 import { VideoCaptionWithTags } from '../feed/VideoCaptionWithTags';
+import { ExploreThumbnailCard } from '../feed/ExploreGrid';
 import { Avatar } from '../common/Avatar';
 import { DEFAULT_USER } from '../../services/storage';
 import {
@@ -642,43 +643,13 @@ export const ProfileView: React.FC = () => {
               )}
             </div>
           ) : (
-            (activeTabSub === 'videos' ? userVideos : activeTabSub === 'only_me' ? onlyMeVideos : likedVideos).map((video, idx) => {
-              const isImageThumbnail =
-                Boolean(video.thumbnailUrl) &&
-                !isVideoUrl(video.thumbnailUrl) &&
-                video.thumbnailUrl !== video.creator?.avatar &&
-                !video.thumbnailUrl.includes('avatar_') &&
-                !video.thumbnailUrl.includes('profile%20picture') &&
-                !video.thumbnailUrl.includes('profile-picture') &&
-                (video.thumbnailUrl.startsWith('data:image/') ||
-                  video.thumbnailUrl.endsWith('.jpg') ||
-                  video.thumbnailUrl.endsWith('.jpeg') ||
-                  video.thumbnailUrl.endsWith('.png') ||
-                  video.thumbnailUrl.endsWith('.webp'));
-
-              return (
+            (activeTabSub === 'videos' ? userVideos : activeTabSub === 'only_me' ? onlyMeVideos : likedVideos).map((video, idx) => (
                 <div
                   key={`${video.id}_${idx}`}
                   onClick={() => handleOpenVideo(video)}
                   className="group relative aspect-[9/13] bg-[#181824] rounded-2xl overflow-hidden cursor-pointer border border-neutral-800 hover:border-[#ff007a]/60 transition-all shadow-md flex items-center justify-center"
                 >
-                  {isImageThumbnail ? (
-                    <img
-                      src={video.thumbnailUrl}
-                      alt={video.caption}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                    />
-                  ) : video.mediaUrl ? (
-                    <video
-                      src={video.mediaUrl}
-                      preload="metadata"
-                      muted
-                      playsInline
-                      className="w-full h-full object-cover pointer-events-none group-hover:scale-105 transition-transform duration-300"
-                    />
-                  ) : (
-                    <Play className="w-8 h-8 text-neutral-600" />
-                  )}
+                  <ExploreThumbnailCard video={video} />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
 
                   {/* Audience Badges */}
@@ -781,8 +752,7 @@ export const ProfileView: React.FC = () => {
                     </div>
                   )}
                 </div>
-              );
-            })
+              ))
           )}
         </div>
       )}

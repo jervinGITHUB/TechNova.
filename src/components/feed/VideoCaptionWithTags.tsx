@@ -14,7 +14,7 @@ export const VideoCaptionWithTags: React.FC<VideoCaptionWithTagsProps> = ({
   maxChars = 60,
   className = '',
 }) => {
-  const { setSearchQuery, setActiveTab } = useApp();
+  const { setSearchQuery, setActiveTab, navigateToUserProfileByUsername } = useApp();
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Normalize all hashtags to have leading '#'
@@ -41,7 +41,12 @@ export const VideoCaptionWithTags: React.FC<VideoCaptionWithTagsProps> = ({
     setActiveTab('explore');
   };
 
-  // Helper to render tokens with clickable hashtags
+  const handleMentionClick = (e: React.MouseEvent, username: string) => {
+    e.stopPropagation();
+    navigateToUserProfileByUsername(username);
+  };
+
+  // Helper to render tokens with clickable hashtags and @mentions
   const renderTokens = (text: string) => {
     const tokens = text.split(/(\s+)/);
     return tokens.map((token, idx) => {
@@ -51,9 +56,22 @@ export const VideoCaptionWithTags: React.FC<VideoCaptionWithTagsProps> = ({
             key={idx}
             type="button"
             onClick={e => handleTagClick(e, token)}
-            className="font-bold text-white hover:text-[#ff007a] transition-colors cursor-pointer mr-1 inline-block drop-shadow"
+            className="font-bold text-white hover:text-[#ff007a] transition-colors cursor-pointer mr-0.5 inline-block drop-shadow"
           >
             {token}
+          </button>
+        );
+      }
+      if (token.startsWith('@') && token.length > 1) {
+        const cleanUsername = token.slice(1).replace(/[^a-zA-Z0-9._]/g, '');
+        return (
+          <button
+            key={idx}
+            type="button"
+            onClick={e => handleMentionClick(e, cleanUsername)}
+            className="font-bold text-cyan-400 hover:text-cyan-300 transition-colors cursor-pointer mr-0.5 inline-block drop-shadow hover:underline"
+          >
+            @{cleanUsername}
           </button>
         );
       }

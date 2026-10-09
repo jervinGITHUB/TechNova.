@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
-import { AudioTrack } from '../../types';
+import { AudioTrack, User } from '../../types';
 import { supabaseDb, getSupabaseConfig } from '../../lib/supabase';
 import { getCuratedCoverForTrack, resolveTrackCover } from '../../utils/audio';
 import { AudioWaveformTrimmer, parseTrackDuration } from './AudioWaveformTrimmer';
+import { MentionAutocomplete } from '../common/MentionAutocomplete';
 import {
   Film,
   Music,
@@ -19,10 +20,20 @@ import {
   Globe,
   Users,
   Lock,
+  AtSign,
 } from 'lucide-react';
 
 export const UploadView: React.FC = () => {
-  const { uploadVideo, openAudioLibrary, setActiveTab, videos, users } = useApp();
+  const {
+    uploadVideo,
+    openAudioLibrary,
+    setActiveTab,
+    videos,
+    users,
+    currentUser,
+    getFollowStatus,
+    isTargetFollowingMe,
+  } = useApp();
 
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
@@ -51,6 +62,49 @@ export const UploadView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgAudioRef = useRef<HTMLAudioElement>(null);
+  const captionRef = useRef<HTMLTextAreaElement>(null);
+
+  // Mention autocomplete state
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionStartIndex, setMentionStartIndex] = useState<number>(-1);
+
+  const handleCaptionChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const val = e.target.value.slice(0, 250);
+    setCaption(val);
+
+    const cursorPos = e.target.selectionStart || val.length;
+    const textBeforeCursor = val.slice(0, cursorPos);
+    const match = textBeforeCursor.match(/(?:^|\s)@([a-zA-Z0-9._]*)$/);
+
+    if (match) {
+      const q = match[1];
+      const atIndex = textBeforeCursor.lastIndexOf('@');
+      setMentionQuery(q);
+      setMentionStartIndex(atIndex);
+    } else {
+      setMentionQuery(null);
+      setMentionStartIndex(-1);
+    }
+  };
+
+  const handleSelectMentionUser = (user: User) => {
+    if (mentionStartIndex < 0) return;
+    const beforeAt = caption.slice(0, mentionStartIndex);
+    const cursorPos = captionRef.current?.selectionStart || caption.length;
+    const afterCursor = caption.slice(cursorPos);
+    const inserted = `@${user.username} `;
+    const newCaption = `${beforeAt}${inserted}${afterCursor}`.slice(0, 250);
+    setCaption(newCaption);
+    setMentionQuery(null);
+    setMentionStartIndex(-1);
+    setTimeout(() => {
+      if (captionRef.current) {
+        captionRef.current.focus();
+        const nextPos = Math.min(newCaption.length, beforeAt.length + inserted.length);
+        captionRef.current.setSelectionRange(nextPos, nextPos);
+      }
+    }, 50);
+  };
 
   const handleSelectAudioTrack = (track: AudioTrack) => {
     setSelectedAudio(track);
@@ -159,6 +213,55 @@ export const UploadView: React.FC = () => {
     }
   };
 
+  // Generate a high-energy branded fallback poster if video frame capture cannot be extracted
+  const createFallbackPoster = (title?: string): string => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = 360;
+      canvas.height = 640;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const grad = ctx.createLinearGradient(0, 0, 360, 640);
+        grad.addColorStop(0, '#22112d');
+        grad.addColorStop(0.5, '#13131c');
+        grad.addColorStop(1, '#09090e');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, 360, 640);
+
+        // Neon ambient glow
+        ctx.beginPath();
+        ctx.arc(180, 260, 56, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 0, 122, 0.25)';
+        ctx.fill();
+
+        // Play triangle icon
+        ctx.beginPath();
+        ctx.moveTo(170, 240);
+        ctx.lineTo(198, 260);
+        ctx.lineTo(170, 280);
+        ctx.closePath();
+        ctx.fillStyle = '#ff007a';
+        ctx.fill();
+
+        // Text branding
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 22px system-ui, -apple-system, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('ViralHub', 180, 350);
+
+        if (title) {
+          ctx.fillStyle = '#d4d4d8';
+          ctx.font = '14px system-ui, -apple-system, sans-serif';
+          const cleanTitle = title.length > 28 ? title.slice(0, 28) + '...' : title;
+          ctx.fillText(cleanTitle, 180, 385);
+        }
+
+        return canvas.toDataURL('image/jpeg', 0.85);
+      }
+    } catch {}
+    return '';
+  };
+
   // Extract a real snapshot thumbnail from the video first frame via canvas
   const captureThumbnail = (): Promise<string> => {
     return new Promise(resolve => {
@@ -170,7 +273,7 @@ export const UploadView: React.FC = () => {
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
             if (dataUrl && dataUrl.length > 50) {
               resolve(dataUrl);
               return;
@@ -185,8 +288,17 @@ export const UploadView: React.FC = () => {
           tempVideo.playsInline = true;
           const tempUrl = URL.createObjectURL(videoFile);
           tempVideo.src = tempUrl;
+
+          let resolved = false;
+          const finish = (result: string) => {
+            if (resolved) return;
+            resolved = true;
+            try { URL.revokeObjectURL(tempUrl); } catch {}
+            resolve(result || createFallbackPoster(caption));
+          };
+
           tempVideo.onloadeddata = () => {
-            tempVideo.currentTime = 0.5;
+            tempVideo.currentTime = 0.2;
           };
           tempVideo.onseeked = () => {
             try {
@@ -196,29 +308,27 @@ export const UploadView: React.FC = () => {
               const ctx = canvas.getContext('2d');
               if (ctx) {
                 ctx.drawImage(tempVideo, 0, 0, canvas.width, canvas.height);
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-                URL.revokeObjectURL(tempUrl);
-                resolve(dataUrl);
-                return;
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                if (dataUrl && dataUrl.length > 50) {
+                  finish(dataUrl);
+                  return;
+                }
               }
             } catch {}
-            URL.revokeObjectURL(tempUrl);
-            resolve('');
+            finish(createFallbackPoster(caption));
           };
           tempVideo.onerror = () => {
-            URL.revokeObjectURL(tempUrl);
-            resolve('');
+            finish(createFallbackPoster(caption));
           };
           setTimeout(() => {
-            URL.revokeObjectURL(tempUrl);
-            resolve('');
-          }, 3000);
+            finish(createFallbackPoster(caption));
+          }, 3500);
           return;
         }
       } catch {
-        resolve('');
+        resolve(createFallbackPoster(caption));
       }
-      resolve('');
+      resolve(createFallbackPoster(caption));
     });
   };
 
@@ -246,6 +356,7 @@ export const UploadView: React.FC = () => {
 
     // Capture visual image thumbnail for Profile and Explore grids
     const generatedThumbnail = await captureThumbnail();
+    let finalThumbnailUrl = generatedThumbnail || finalMediaUrl;
 
     // Upload video file directly to the cloud storage bucket
     if (getSupabaseConfig().isConnected) {
@@ -258,6 +369,18 @@ export const UploadView: React.FC = () => {
         }
       } catch (err: any) {
         console.warn('Storage upload exception:', err);
+      }
+
+      // Upload generated image thumbnail to storage so all devices render it instantly
+      if (generatedThumbnail && generatedThumbnail.startsWith('data:image/')) {
+        try {
+          const thumbRes = await supabaseDb.uploadThumbnailImage(generatedThumbnail);
+          if (thumbRes.url) {
+            finalThumbnailUrl = thumbRes.url;
+          }
+        } catch (err: any) {
+          console.warn('Thumbnail storage upload note:', err);
+        }
       }
     }
 
@@ -290,7 +413,7 @@ export const UploadView: React.FC = () => {
           }
         : undefined,
       mediaUrl: finalMediaUrl,
-      thumbnailUrl: generatedThumbnail || finalMediaUrl,
+      thumbnailUrl: finalThumbnailUrl,
       audioVolume: bgAudioVolume,
       originalAudioMuted: isRawAudioMuted,
       originalAudioVolume: isRawAudioMuted ? 0 : rawAudioVolume,
@@ -702,24 +825,66 @@ export const UploadView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Caption */}
-              <div>
+              {/* Caption with @ Mention autocomplete */}
+              <div className="relative">
                 <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-xs font-semibold text-neutral-300">
-                    Caption
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-semibold text-neutral-300">
+                      Caption
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const newCaption = caption.endsWith(' ') || caption === '' ? `${caption}@` : `${caption} @`;
+                        if (newCaption.length <= 250) {
+                          setCaption(newCaption);
+                          setMentionQuery('');
+                          setMentionStartIndex(newCaption.lastIndexOf('@'));
+                          setTimeout(() => {
+                            if (captionRef.current) {
+                              captionRef.current.focus();
+                              captionRef.current.setSelectionRange(newCaption.length, newCaption.length);
+                            }
+                          }, 50);
+                        }
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-[#ff007a]/15 hover:bg-[#ff007a]/25 text-[#ff007a] border border-[#ff007a]/30 text-[11px] font-bold transition-all cursor-pointer"
+                      title="Mention a friend or creator using @"
+                    >
+                      <AtSign className="w-3 h-3" />
+                      <span>Tag / Mention</span>
+                    </button>
+                  </div>
                   <span className={`text-[10px] ${caption.length >= 250 ? 'text-pink-400 font-bold' : 'text-neutral-500'}`}>
                     {caption.length}/250
                   </span>
                 </div>
                 <textarea
+                  ref={captionRef}
                   value={caption}
-                  onChange={e => setCaption(e.target.value.slice(0, 250))}
-                  placeholder="Describe your video, ask a question, or drop viral thoughts..."
+                  onChange={handleCaptionChange}
+                  placeholder="Describe your video, tag friends using @, ask questions..."
                   rows={3}
                   maxLength={250}
                   className="w-full bg-[#181824] text-xs text-white placeholder-neutral-500 p-3.5 rounded-2xl border border-neutral-700/80 focus:border-[#ff007a] outline-none resize-none transition-colors"
                 />
+
+                {/* Floating Mention Autocomplete Suggestion Dropdown */}
+                {mentionQuery !== null && (
+                  <MentionAutocomplete
+                    query={mentionQuery}
+                    users={users}
+                    currentUser={currentUser}
+                    getFollowStatus={getFollowStatus}
+                    isTargetFollowingMe={isTargetFollowingMe}
+                    onSelect={handleSelectMentionUser}
+                    onClose={() => {
+                      setMentionQuery(null);
+                      setMentionStartIndex(-1);
+                    }}
+                    positionClassName="top-full mt-1.5"
+                  />
+                )}
               </div>
 
               {/* Hashtags */}
