@@ -19,6 +19,8 @@ import { ReportHistoryView } from './components/modals/ReportHistoryView';
 import { AudioLibraryModal } from './components/modals/AudioLibraryModal';
 import { SupabaseVercelModal } from './components/modals/SupabaseVercelModal';
 import { SwitchAccountModal } from './components/modals/SwitchAccountModal';
+import { BlockedUsersModal } from './components/modals/BlockedUsersModal';
+import { ResetPasswordModal } from './components/modals/ResetPasswordModal';
 import { AdminDashboardView } from './components/admin/AdminDashboardView';
 import { BannedAccountView } from './components/auth/BannedAccountView';
 import { InAppNotificationToast } from './components/notifications/InAppNotificationToast';
@@ -39,6 +41,10 @@ const AppContent: React.FC = () => {
     switchAccountModalOpen,
     setSwitchAccountModalOpen,
     resolvedTheme,
+    blockedUsersModalOpen,
+    setBlockedUsersModalOpen,
+    resetPasswordModalOpen,
+    setResetPasswordModalOpen,
   } = useApp();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
@@ -57,7 +63,15 @@ const AppContent: React.FC = () => {
 
   // If user is not authenticated, show Auth Page first
   if (!currentUser) {
-    return <AuthPage />;
+    return (
+      <>
+        <AuthPage />
+        <ResetPasswordModal
+          isOpen={resetPasswordModalOpen}
+          onClose={() => setResetPasswordModalOpen(false)}
+        />
+      </>
+    );
   }
 
   // If user account is suspended/banned, show Banned Account View with appeal capability
@@ -216,6 +230,14 @@ const AppContent: React.FC = () => {
       <SwitchAccountModal
         isOpen={switchAccountModalOpen}
         onClose={() => setSwitchAccountModalOpen(false)}
+      />
+      <BlockedUsersModal
+        isOpen={blockedUsersModalOpen}
+        onClose={() => setBlockedUsersModalOpen(false)}
+      />
+      <ResetPasswordModal
+        isOpen={resetPasswordModalOpen}
+        onClose={() => setResetPasswordModalOpen(false)}
       />
       <SupabaseVercelModal
         isOpen={supabaseModalOpen}

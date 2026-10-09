@@ -17,6 +17,7 @@ import {
   CommentEntry,
   LiveViewer,
   ThemeMode,
+  BlockRelation,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -60,6 +61,9 @@ import {
   isAccountLoggedInOnDevice,
   markAccountLoggedInOnDevice,
   markAccountLoggedOutOnDevice,
+  fetchUserBlocksFromSupabase,
+  saveUserBlockToSupabase,
+  deleteUserBlockFromSupabase,
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
 import { toTimestampMillis, getConversationLastActivityTime, formatConversationTime, formatMessageTime } from '../utils/time';
@@ -604,6 +608,20 @@ interface AppContextType {
   feedRefreshKey: number;
   refreshFeed: () => void;
 
+  // Block System
+  blockRelations: BlockRelation[];
+  isUserBlockedByMe: (userId: string) => boolean;
+  isUserBlockedMe: (userId: string) => boolean;
+  isBlockedEitherWay: (userId: string) => boolean;
+  blockUser: (userId: string) => Promise<void>;
+  unblockUser: (userId: string) => Promise<void>;
+  blockedUsersModalOpen: boolean;
+  setBlockedUsersModalOpen: (open: boolean) => void;
+
+  // Password Recovery Modal
+  resetPasswordModalOpen: boolean;
+  setResetPasswordModalOpen: (open: boolean) => void;
+
   // Appearance & Theme Mode (Auto, Dark, Light)
   themeMode: ThemeMode;
   setThemeMode: (mode: ThemeMode) => void;
@@ -985,6 +1003,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setFeedRefreshKey(k => k + 1);
     syncWithSupabase(overrideUser);
   };
+
+  // Block relations: [{ blockerId, blockedId, createdAt }]
+  const [blockRelations, setBlockRelations] = useState<BlockRelation[]>(() => {
+    return storage.get<BlockRelation[]>('block_relations', []);
+  });
+  const [blockedUsersModalOpen, setBlockedUsersModalOpen] = useState<boolean>(false);
+  const [resetPasswordModalOpen, setResetPasswordModalOpen] = useState<boolean>(false);
+
+  useEffect(() => {
+    storage.set('block_relations', blockRelations);
+  }, [blockRelations]);
 
   // Appearance & Theme Mode (Default is strictly Dark mode as requested)
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => {
@@ -2281,8 +2310,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } else if (event === 'SIGNED_OUT') {
         setIsAuthLoading(false);
+      } else if (event === 'PASSWORD_RECOVERY') {
+        setResetPasswordModalOpen(true);
+        setIsAuthLoading(false);
+        clearTimeout(safetyTimer);
       }
     });
+
+    // Check if URL contains password recovery hash or params on initial load
+    if (typeof window !== 'undefined') {
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+      if (hash.includes('type=recovery') || search.includes('type=recovery')) {
+        setResetPasswordModalOpen(true);
+      }
+    }
 
     return () => {
       clearTimeout(safetyTimer);
@@ -4030,8 +4072,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return users.filter(u => followingIds.some(fid => isSameUser(fid, u.id)));
   };
 
+  const isUserBlockedByMe = useCallback((targetUserId: string): boolean => {
+    if (!currentUser || !targetUserId) return false;
+    return blockRelations.some(
+      r => isSameUser(r.blockerId, currentUser.id) && isSameUser(r.blockedId, targetUserId)
+    );
+  }, [currentUser, blockRelations]);
+
+  const isUserBlockedMe = useCallback((targetUserId: string): boolean => {
+    if (!currentUser || !targetUserId) return false;
+    return blockRelations.some(
+      r => isSameUser(r.blockerId, targetUserId) && isSameUser(r.blockedId, currentUser.id)
+    );
+  }, [currentUser, blockRelations]);
+
+  const isBlockedEitherWay = useCallback((targetUserId: string): boolean => {
+    return isUserBlockedByMe(targetUserId) || isUserBlockedMe(targetUserId);
+  }, [isUserBlockedByMe, isUserBlockedMe]);
+
+  const blockUser = async (targetUserId: string) => {
+    if (!currentUser || !targetUserId || isSameUser(currentUser.id, targetUserId)) return;
+    const newRel: BlockRelation = {
+      blockerId: currentUser.id,
+      blockedId: targetUserId,
+      createdAt: new Date().toISOString(),
+    };
+    setBlockRelations(prev => {
+      if (prev.some(r => isSameUser(r.blockerId, currentUser.id) && isSameUser(r.blockedId, targetUserId))) {
+        return prev;
+      }
+      return [...prev, newRel];
+    });
+
+    // Automatically remove follow relationships in both directions
+    setFollowRelations(prev =>
+      prev.filter(
+        f =>
+          !(isSameUser(f.followerId, currentUser.id) && isSameUser(f.followingId, targetUserId)) &&
+          !(isSameUser(f.followerId, targetUserId) && isSameUser(f.followingId, currentUser.id))
+      )
+    );
+
+    // Sync to Supabase in background (safe, non-blocking)
+    saveUserBlockToSupabase(currentUser.id, targetUserId);
+  };
+
+  const unblockUser = async (targetUserId: string) => {
+    if (!currentUser || !targetUserId) return;
+    setBlockRelations(prev =>
+      prev.filter(
+        r => !(isSameUser(r.blockerId, currentUser.id) && isSameUser(r.blockedId, targetUserId))
+      )
+    );
+    // Sync to Supabase in background (safe, non-blocking)
+    deleteUserBlockFromSupabase(currentUser.id, targetUserId);
+  };
+
   const canMessageUser = (targetUserId: string): boolean => {
     if (!currentUser || currentUser.id === targetUserId) return false;
+    // Strict block check: neither the blocked nor blocker can message
+    if (isBlockedEitherWay(targetUserId)) return false;
     const target = users.find(u => u.id === targetUserId);
     if (!target) return false;
     if (!target.isPrivate) return true;
@@ -8000,6 +8100,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setThemeMode,
         resolvedTheme,
         addCustomNotification,
+        blockRelations,
+        isUserBlockedByMe,
+        isUserBlockedMe,
+        isBlockedEitherWay,
+        blockUser,
+        unblockUser,
+        blockedUsersModalOpen,
+        setBlockedUsersModalOpen,
+        resetPasswordModalOpen,
+        setResetPasswordModalOpen,
       }}
     >
       {children}

@@ -224,6 +224,11 @@ export const MessagesView: React.FC = () => {
     navigateToUserProfile,
     openReportModal,
     canMessageUser,
+    isUserBlockedByMe,
+    isUserBlockedMe,
+    isBlockedEitherWay,
+    blockUser,
+    unblockUser,
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -759,18 +764,37 @@ export const MessagesView: React.FC = () => {
                         <Flag className="w-3.5 h-3.5 text-[#ff007a]" />
                         <span>Report User</span>
                       </button>
-                      <button
-                        onClick={() => {
-                          setMenuOpen(false);
-                          const msg = `${activeParticipant.displayName} has been blocked.`;
-                          setToastMessage(msg);
-                          setTimeout(() => setToastMessage(''), 3000);
-                        }}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 rounded-xl transition-colors cursor-pointer"
-                      >
-                        <Ban className="w-3.5 h-3.5 text-red-400" />
-                        <span>Block User</span>
-                      </button>
+                      {activeParticipant && isUserBlockedByMe(activeParticipant.id) ? (
+                        <button
+                          onClick={async () => {
+                            setMenuOpen(false);
+                            await unblockUser(activeParticipant.id);
+                            const msg = `${activeParticipant.displayName} has been unblocked.`;
+                            setToastMessage(msg);
+                            setTimeout(() => setToastMessage(''), 3000);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-800 rounded-xl transition-colors cursor-pointer"
+                        >
+                          <Ban className="w-3.5 h-3.5 text-neutral-400" />
+                          <span>Unblock User</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            setMenuOpen(false);
+                            if (activeParticipant) {
+                              await blockUser(activeParticipant.id);
+                              const msg = `${activeParticipant.displayName} has been blocked.`;
+                              setToastMessage(msg);
+                              setTimeout(() => setToastMessage(''), 3000);
+                            }
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 rounded-xl transition-colors cursor-pointer"
+                        >
+                          <Ban className="w-3.5 h-3.5 text-red-400" />
+                          <span>Block User</span>
+                        </button>
+                      )}
                       
                       {/* Delete Conversation added directly below "Block User" as requested */}
                       <div className="h-px bg-neutral-700/60 my-0.5" />
@@ -935,8 +959,41 @@ export const MessagesView: React.FC = () => {
 
             {/* Bottom Send Input Bar */}
             <form onSubmit={handleSend} className="pt-2 border-t border-neutral-800 shrink-0">
-              {/* Private account friend restriction banner */}
-              {activeParticipant && !canMessageUser(activeParticipant.id) && (
+              {/* Blocked by other user banner */}
+              {activeParticipant && isUserBlockedMe(activeParticipant.id) && (
+                <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-2xl flex items-center gap-2.5 text-xs text-red-400 mb-2">
+                  <Ban className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>
+                    You cannot send messages to this user because they have blocked you.
+                  </span>
+                </div>
+              )}
+
+              {/* Blocked by current user banner */}
+              {activeParticipant && isUserBlockedByMe(activeParticipant.id) && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-between text-xs text-amber-300 mb-2">
+                  <div className="flex items-center gap-2.5">
+                    <Ban className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>
+                      You have blocked this user. Unblock them to chat.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await unblockUser(activeParticipant.id);
+                      setToastMessage(`${activeParticipant.displayName} has been unblocked.`);
+                      setTimeout(() => setToastMessage(''), 3000);
+                    }}
+                    className="px-2.5 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded-lg text-xs font-semibold cursor-pointer"
+                  >
+                    Unblock
+                  </button>
+                </div>
+              )}
+
+              {/* Private account friend restriction banner (only if not blocked) */}
+              {activeParticipant && !isBlockedEitherWay(activeParticipant.id) && !canMessageUser(activeParticipant.id) && (
                 <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center gap-2.5 text-xs text-amber-300 mb-2">
                   <Lock className="w-4 h-4 text-amber-400 shrink-0" />
                   <span>
@@ -970,9 +1027,13 @@ export const MessagesView: React.FC = () => {
                 <input
                   type="text"
                   maxLength={200}
-                  disabled={Boolean(activeParticipant && !canMessageUser(activeParticipant.id))}
+                  disabled={Boolean(activeParticipant && (!canMessageUser(activeParticipant.id) || isBlockedEitherWay(activeParticipant.id)))}
                   placeholder={
-                    activeParticipant && !canMessageUser(activeParticipant.id)
+                    activeParticipant && isUserBlockedMe(activeParticipant.id)
+                      ? 'You cannot message this user (blocked by user)'
+                      : activeParticipant && isUserBlockedByMe(activeParticipant.id)
+                      ? 'You blocked this user. Unblock to message.'
+                      : activeParticipant && !canMessageUser(activeParticipant.id)
                       ? 'Messaging restricted to friends only'
                       : replyingTo
                       ? `Replying to ${replyingTo.senderName}...`
@@ -995,9 +1056,9 @@ export const MessagesView: React.FC = () => {
                 </span>
                 <button
                   type="submit"
-                  disabled={!inputText.trim() || Boolean(activeParticipant && !canMessageUser(activeParticipant.id))}
+                  disabled={!inputText.trim() || Boolean(activeParticipant && (!canMessageUser(activeParticipant.id) || isBlockedEitherWay(activeParticipant.id)))}
                   className={`p-2 rounded-xl transition-all ${
-                    inputText.trim() && (!activeParticipant || canMessageUser(activeParticipant.id))
+                    inputText.trim() && (!activeParticipant || (canMessageUser(activeParticipant.id) && !isBlockedEitherWay(activeParticipant.id)))
                       ? 'bg-[#ff007a] text-white hover:bg-[#e0006c] cursor-pointer shadow-[0_0_12px_rgba(255,0,122,0.4)]'
                       : 'text-neutral-600 cursor-not-allowed'
                   }`}

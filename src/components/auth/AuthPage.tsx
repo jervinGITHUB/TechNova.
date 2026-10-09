@@ -14,7 +14,7 @@ import {
   X,
   Users,
 } from 'lucide-react';
-import { resendConfirmationEmail, isGoogleAccount, isAccountLoggedInOnDevice } from '../../lib/supabase';
+import { resendConfirmationEmail, sendPasswordResetEmail, isGoogleAccount, isAccountLoggedInOnDevice } from '../../lib/supabase';
 
 export const AuthPage: React.FC = () => {
   const {
@@ -65,6 +65,35 @@ export const AuthPage: React.FC = () => {
   const [confirmationPendingEmail, setConfirmationPendingEmail] = useState<string | null>(null);
   const [isResending, setIsResending] = useState(false);
   const [resendStatus, setResendStatus] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Forgot password view state
+  const [isForgotPasswordView, setIsForgotPasswordView] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [isSendingReset, setIsSendingReset] = useState(false);
+  const [forgotSuccessMessage, setForgotSuccessMessage] = useState('');
+
+  const handleForgotSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!forgotEmail.trim()) {
+      setErrorMessage('Please enter your email address.');
+      return;
+    }
+    setErrorMessage('');
+    setForgotSuccessMessage('');
+    setIsSendingReset(true);
+    try {
+      const res = await sendPasswordResetEmail(forgotEmail);
+      if (res.success) {
+        setForgotSuccessMessage(res.message);
+      } else {
+        setErrorMessage(res.message || 'Failed to dispatch password reset email.');
+      }
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Error sending password reset email.');
+    } finally {
+      setIsSendingReset(false);
+    }
+  };
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -296,8 +325,110 @@ export const AuthPage: React.FC = () => {
               </div>
             </div>
           ) : authView === 'login' ? (
-            /* Login View: Show logged-in device accounts if present, or credentials form */
-            validSavedAccounts.length > 0 && !showManualLoginForm ? (
+            /* Forgot Password View */
+            isForgotPasswordView ? (
+              <form onSubmit={handleForgotSubmit} className="flex flex-col animate-fadeIn text-left">
+                <div className="text-center mb-6">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsForgotPasswordView(false);
+                      setErrorMessage('');
+                      setForgotSuccessMessage('');
+                    }}
+                    className="text-xs text-[#ff007a] hover:underline mb-2 inline-flex items-center gap-1 font-semibold cursor-pointer"
+                  >
+                    ← Back to Login
+                  </button>
+                  <h2 className="text-2xl sm:text-3xl font-extrabold font-brand tracking-wide text-white">
+                    Forgot Password
+                  </h2>
+                  <p className="text-xs sm:text-sm text-neutral-400 mt-1">
+                    Enter your email to receive a password reset link
+                  </p>
+                </div>
+
+                {forgotSuccessMessage ? (
+                  <div className="space-y-4">
+                    <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs flex items-start gap-3">
+                      <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <span className="font-bold text-white block">Email Sent!</span>
+                        <p>{forgotSuccessMessage}</p>
+                        <p className="text-neutral-400 text-[11px] pt-1">
+                          Click the link inside your email to choose your new password. For security, changing your password will automatically log you out on all other devices.
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsForgotPasswordView(false);
+                        setForgotSuccessMessage('');
+                        setErrorMessage('');
+                      }}
+                      className="w-full py-3 px-4 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-white font-semibold text-xs transition-colors cursor-pointer"
+                    >
+                      Return to Log In
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    <div className="p-3 rounded-xl bg-neutral-800/60 border border-neutral-700/80 text-neutral-300 text-[11px] leading-relaxed">
+                      We'll send a password recovery link to your inbox. Make sure to check your spam or junk folder if you don't see it within a couple minutes.
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-neutral-300 block mb-1.5">
+                        Registered Email
+                      </label>
+                      <div className="relative flex items-center">
+                        <div className="absolute left-4 text-neutral-400">
+                          <Mail className="w-4 h-4" />
+                        </div>
+                        <input
+                          type="email"
+                          required
+                          placeholder="Your email address"
+                          value={forgotEmail}
+                          onChange={e => setForgotEmail(e.target.value)}
+                          className="w-full bg-[#181822] text-sm text-white placeholder-neutral-500 pl-11 pr-4 py-3.5 rounded-xl border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSendingReset}
+                      className="mt-2 w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-semibold text-sm shadow-[0_0_20px_rgba(255,0,122,0.4)] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isSendingReset ? (
+                        <>
+                          <RotateCw className="w-4 h-4 animate-spin" />
+                          <span>Sending Reset Link...</span>
+                        </>
+                      ) : (
+                        <span>Send Password Reset Link</span>
+                      )}
+                    </button>
+
+                    <div className="text-center pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPasswordView(false);
+                          setErrorMessage('');
+                        }}
+                        className="text-xs text-neutral-400 hover:text-white transition-colors cursor-pointer"
+                      >
+                        Cancel and return to login
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </form>
+            ) : validSavedAccounts.length > 0 && !showManualLoginForm ? (
               /* ============================================================= */
               /* SCENARIO A: Saved Logged-In Accounts on this Device (Max 5)   */
               /* ============================================================= */
@@ -516,8 +647,13 @@ export const AuthPage: React.FC = () => {
                     <div className="flex justify-end mt-2">
                       <button
                         type="button"
-                        onClick={() => setErrorMessage('Password reset instructions will be sent to your registered email.')}
-                        className="text-[11px] text-neutral-400 hover:text-white transition-colors"
+                        onClick={() => {
+                          setForgotEmail(loginIdentifier.includes('@') ? loginIdentifier : '');
+                          setIsForgotPasswordView(true);
+                          setErrorMessage('');
+                          setInfoMessage('');
+                        }}
+                        className="text-[11px] text-neutral-400 hover:text-white transition-colors cursor-pointer"
                       >
                         Forgot password?
                       </button>

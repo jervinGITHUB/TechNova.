@@ -8,6 +8,7 @@ import {
   LIVESTREAM_SQL_SNIPPET,
   AUDIO_STORAGE_SQL_SNIPPET,
   PRE_BAN_APPEAL_SQL_SNIPPET,
+  USER_BLOCKS_SQL_SNIPPET,
 } from '../../lib/supabase';
 import {
   Database,
@@ -47,7 +48,7 @@ export const SupabaseVercelModal: React.FC<SupabaseVercelModalProps> = ({
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [activeSqlTab, setActiveSqlTab] = useState<'audio' | 'livestream' | 'appeal' | 'full'>('audio');
+  const [activeSqlTab, setActiveSqlTab] = useState<'audio' | 'livestream' | 'appeal' | 'block' | 'full'>('audio');
 
   if (!isOpen) return null;
 
@@ -360,6 +361,17 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
               </button>
               <button
                 type="button"
+                onClick={() => setActiveSqlTab('block')}
+                className={`py-1 px-2.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                  activeSqlTab === 'block'
+                    ? 'bg-red-500/20 text-red-400 border border-red-500/40 shadow-sm'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Blocked Users SQL
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveSqlTab('full')}
                 className={`py-1 px-2.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
                   activeSqlTab === 'full'
@@ -384,6 +396,10 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
                 <span>
                   <strong>100% Safe & Zero Disk IO:</strong> Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to create the <code className="text-emerald-400">Livestream</code> and <code className="text-emerald-400">LiveComment</code> tables with instant indexing and public access policies.
                 </span>
+              ) : activeSqlTab === 'block' ? (
+                <span>
+                  <strong>100% Safe & Zero Disk IO:</strong> Creates the <code className="text-red-400">user_blocks</code> table with composite primary key and B-Tree index. Guaranteed to never deplete disk IO and provides instant block lookups.
+                </span>
               ) : (
                 <span>
                   Paste this into your Supabase Dashboard (<span className="text-white font-medium">SQL Editor → New Query</span>) and click <span className="text-white font-medium">Run</span> to initialize all tables with Row Level Security.
@@ -391,7 +407,7 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
               )}
             </p>
             <div className="bg-[#0c0c10] p-3 rounded-xl border border-neutral-800 font-mono text-[11px] text-neutral-400 max-h-40 overflow-y-auto leading-relaxed">
-              <pre>{activeSqlTab === 'appeal' ? PRE_BAN_APPEAL_SQL_SNIPPET : activeSqlTab === 'audio' ? AUDIO_STORAGE_SQL_SNIPPET : activeSqlTab === 'livestream' ? LIVESTREAM_SQL_SNIPPET : SUPABASE_SQL_SCHEMA}</pre>
+              <pre>{activeSqlTab === 'appeal' ? PRE_BAN_APPEAL_SQL_SNIPPET : activeSqlTab === 'audio' ? AUDIO_STORAGE_SQL_SNIPPET : activeSqlTab === 'livestream' ? LIVESTREAM_SQL_SNIPPET : activeSqlTab === 'block' ? USER_BLOCKS_SQL_SNIPPET : SUPABASE_SQL_SCHEMA}</pre>
             </div>
           </div>
 

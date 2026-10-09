@@ -17,6 +17,7 @@ import {
   ArrowRightLeft,
   Shield,
   ShieldAlert,
+  Ban,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -36,6 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
     logout,
     navigateToUserProfile,
     setSwitchAccountModalOpen,
+    setBlockedUsersModalOpen,
     refreshFeed,
     loginWithGoogle,
     setAuthView,
@@ -222,6 +224,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
                   >
                     <ShieldAlert className="w-4 h-4 text-amber-400" />
                     <span>Report History</span>
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setBlockedUsersModalOpen(true);
+                      onNavigate?.();
+                    }}
+                    className="flex items-center gap-2.5 px-3 py-2 text-xs font-medium text-white hover:bg-[#252535] rounded-xl transition-colors cursor-pointer"
+                  >
+                    <Ban className="w-4 h-4 text-red-400" />
+                    <span>Blocked Accounts</span>
                   </button>
 
                   <div className="h-px bg-neutral-800 my-1" />

@@ -853,6 +853,7 @@ export const HomeFeed: React.FC = () => {
     getFollowStatus,
     toggleFollowUser,
     targetFeedVideoId,
+    isBlockedEitherWay,
   } = useApp();
 
   type FeedTab = 'friends' | 'following' | 'foryou';
@@ -860,7 +861,7 @@ export const HomeFeed: React.FC = () => {
 
   const [shareModalVideo, setShareModalVideo] = useState<Video | null>(null);
   const [activeVideoId, setActiveVideoId] = useState<string>('');
-  const [shuffleSeed, setShuffleSeed] = useState(0);
+  const [shuffleSeed, setShuffleSeed] = useState(() => Math.floor(Math.random() * 1000000) + 1);
 
   // Automatically refresh and re-shuffle feed whenever Home is clicked or feedRefreshKey increments
   useEffect(() => {
@@ -880,14 +881,16 @@ export const HomeFeed: React.FC = () => {
       if (v.status === 'rejected') return false;
       if (v.creator?.isBanned) return false;
       if (checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned) return false;
+      if (currentUser && isBlockedEitherWay(v.creatorId || v.creator?.id)) return false;
       const creatorUser = users.find(u => isSameUser(u.id, v.creatorId) || isSameUser(u.id, v.creator?.id));
       if (creatorUser?.isBanned || (creatorUser && checkIsUserBanned(creatorUser.id, creatorUser.email, creatorUser).isBanned)) return false;
+      if (currentUser && creatorUser && isBlockedEitherWay(creatorUser.id)) return false;
       if (v.status === 'pending') {
         return currentUser && v.creatorId === currentUser.id;
       }
       return true;
     });
-  }, [videos, users, currentUser]);
+  }, [videos, users, currentUser, isBlockedEitherWay]);
 
   // Following videos: videos from creators followed by currentUser (respecting audience)
   const followingVideos = useMemo(() => {
@@ -948,25 +951,19 @@ export const HomeFeed: React.FC = () => {
 
     if (eligibleForYou.length <= 1) return eligibleForYou;
 
-    // 1. Sort by upload date to find the most recent upload
-    const sortedByRecent = [...eligibleForYou].sort((a, b) => {
-      const timeA = new Date(a.createdAt || 0).getTime() || 0;
-      const timeB = new Date(b.createdAt || 0).getTime() || 0;
-      return timeB - timeA;
-    });
-
-    const newestVideo = sortedByRecent[0];
-    const otherVideos = sortedByRecent.slice(1);
-
-    // 2. Deterministic pseudo-random shuffle based on shuffleSeed so re-renders don't cause random reordering
+    // Full Fisher-Yates pseudo-random shuffle seeded by shuffleSeed:
+    // On every browser page refresh, shuffleSeed is randomized, so ALL videos (including the first video) are randomized!
+    const array = [...eligibleForYou];
     let s = (shuffleSeed + 1) * 9301;
-    const shuffledOthers = [...otherVideos].sort(() => {
+    const rng = () => {
       s = (s * 9301 + 49297) % 233280;
-      return (s / 233280) - 0.5;
-    });
-
-    // 3. Newest is strictly first, rest are shuffled
-    return [newestVideo, ...shuffledOthers];
+      return s / 233280;
+    };
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
   }, [visibleApprovedVideos, shuffleSeed, currentUser, getFollowStatus, targetFeedVideoId, videos]);
 
   // Active video list based on selected feed tab

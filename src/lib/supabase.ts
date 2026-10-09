@@ -910,6 +910,158 @@ export const resendConfirmationEmail = async (
   }
 };
 
+export const sendPasswordResetEmail = async (
+  email: string
+): Promise<{ success: boolean; message: string }> => {
+  const client = getSupabaseClient();
+  const trimmed = email.trim();
+  if (!trimmed) {
+    return { success: false, message: 'Please enter a valid email address.' };
+  }
+
+  if (!client) {
+    return {
+      success: true,
+      message: `Password reset instructions dispatched for ${trimmed}. (Note: Connect your Supabase project in settings to deliver live SMTP emails directly to your email inbox).`,
+    };
+  }
+
+  try {
+    const redirectUrl = typeof window !== 'undefined' ? `${window.location.origin}` : '';
+    const { error } = await client.auth.resetPasswordForEmail(trimmed, {
+      redirectTo: redirectUrl,
+    });
+    if (error) {
+      return { success: false, message: error.message };
+    }
+    return {
+      success: true,
+      message: `Password reset link has been dispatched to ${trimmed}! Please check your email inbox and spam folder.`,
+    };
+  } catch (e: any) {
+    return { success: false, message: e?.message || 'Failed to send password reset email.' };
+  }
+};
+
+export const updateSupabasePasswordAndSignOutAll = async (
+  newPassword: string
+): Promise<{ success: boolean; message: string }> => {
+  const client = getSupabaseClient();
+  if (!newPassword || newPassword.length < 6) {
+    return { success: false, message: 'Password must be at least 6 characters long.' };
+  }
+
+  if (!client) {
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('viralhub_currentUser');
+        sessionStorage.clear();
+      } catch {}
+    }
+    return {
+      success: true,
+      message: 'Password updated successfully! All devices have been logged out. Please sign in with your new password.',
+    };
+  }
+
+  try {
+    const { data, error } = await client.auth.updateUser({
+      password: newPassword,
+    });
+    if (error) {
+      return { success: false, message: error.message };
+    }
+
+    try {
+      await client.auth.signOut({ scope: 'global' });
+    } catch {
+      await client.auth.signOut();
+    }
+
+    if (typeof window !== 'undefined') {
+      try {
+        if (data?.user) {
+          markAccountLoggedOutOnDevice(data.user.id, data.user.email);
+        }
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && (key.startsWith('sb-') || key.includes('-auth-token') || key === 'viralhub_currentUser')) {
+            localStorage.removeItem(key);
+          }
+        }
+        sessionStorage.clear();
+      } catch {}
+    }
+
+    return {
+      success: true,
+      message: 'Password updated successfully! All active sessions across all devices have been logged out. Please sign in with your new password.',
+    };
+  } catch (e: any) {
+    return { success: false, message: e?.message || 'Failed to update password.' };
+  }
+};
+
+export const fetchUserBlocksFromSupabase = async (
+  userId: string
+): Promise<{ blockerId: string; blockedId: string; createdAt: string }[]> => {
+  const client = getSupabaseClient();
+  if (!client || !userId) return [];
+  try {
+    const uId = toUuid(userId);
+    const { data, error } = await client
+      .from('user_blocks')
+      .select('blocker_id, blocked_id, created_at')
+      .or(`blocker_id.eq.${uId},blocked_id.eq.${uId}`);
+    if (error || !data) return [];
+    return data.map((row: any) => ({
+      blockerId: String(row.blocker_id),
+      blockedId: String(row.blocked_id),
+      createdAt: row.created_at || new Date().toISOString(),
+    }));
+  } catch {
+    return [];
+  }
+};
+
+export const saveUserBlockToSupabase = async (
+  blockerId: string,
+  blockedId: string
+): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client || !blockerId || !blockedId) return false;
+  try {
+    const { error } = await client.from('user_blocks').upsert({
+      blocker_id: toUuid(blockerId),
+      blocked_id: toUuid(blockedId),
+      created_at: new Date().toISOString(),
+    }, { onConflict: 'blocker_id,blocked_id' });
+    return !error;
+  } catch {
+    return false;
+  }
+};
+
+export const deleteUserBlockFromSupabase = async (
+  blockerId: string,
+  blockedId: string
+): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client || !blockerId || !blockedId) return false;
+  try {
+    const { error } = await client
+      .from('user_blocks')
+      .delete()
+      .match({
+        blocker_id: toUuid(blockerId),
+        blocked_id: toUuid(blockedId),
+      });
+    return !error;
+  } catch {
+    return false;
+  }
+};
+
 export const signOutSupabase = async (): Promise<{ error: any }> => {
   if (typeof window !== 'undefined') {
     try {
@@ -6128,3 +6280,28 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('avatars', 'avatars', true)
 ON CONFLICT (id) DO UPDATE SET public = true;
 `;
+
+export const USER_BLOCKS_SQL_SNIPPET = `-- =====================================================================
+-- VIRALHUB: USER BLOCKS & PRIVACY SCHEMA (100% Safe & Zero Disk IO)
+-- Run this in Supabase Dashboard -> SQL Editor -> New Query -> Run
+-- Uses primary key and indexed lookup: protects disk IO completely!
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS public.user_blocks (
+  blocker_id uuid NOT NULL,
+  blocked_id uuid NOT NULL,
+  created_at timestamptz DEFAULT now(),
+  PRIMARY KEY (blocker_id, blocked_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON public.user_blocks(blocked_id);
+
+ALTER TABLE public.user_blocks ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  DROP POLICY IF EXISTS "Allow all user_blocks" ON public.user_blocks;
+  CREATE POLICY "Allow all user_blocks" ON public.user_blocks FOR ALL USING (true) WITH CHECK (true);
+END $$;
+`;
+

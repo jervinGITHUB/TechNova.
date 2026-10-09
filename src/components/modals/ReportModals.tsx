@@ -4,13 +4,20 @@ import { X, ChevronRight, CheckCircle2, ShieldAlert, Flag, Ban, UserCheck } from
 import { Avatar } from '../common/Avatar';
 
 export const ReportModals: React.FC = () => {
-  const { reportModal, closeReportModal, submitReport, setActiveTab } = useApp();
+  const {
+    reportModal,
+    closeReportModal,
+    submitReport,
+    setActiveTab,
+    isUserBlockedByMe,
+    blockUser,
+    unblockUser,
+  } = useApp();
 
   const [step, setStep] = useState<'scenarios' | 'more_reason' | 'submitted'>('scenarios');
   const [selectedScenario, setSelectedScenario] = useState('');
   const [customReason, setCustomReason] = useState('');
   const [description, setDescription] = useState('');
-  const [isBlocked, setIsBlocked] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
 
   // ALWAYS reset step to 'scenarios' whenever a report modal is opened!
@@ -20,12 +27,13 @@ export const ReportModals: React.FC = () => {
       setSelectedScenario('');
       setCustomReason('');
       setDescription('');
-      setIsBlocked(false);
       setToastMessage('');
     }
   }, [reportModal?.isOpen, reportModal?.targetId, reportModal?.type]);
 
   if (!reportModal || !reportModal.isOpen) return null;
+
+  const isTargetBlocked = isUserBlockedByMe(reportModal.targetId);
 
   // Video Scenarios matching Screenshot 1 bottom right
   const videoScenarios = [
@@ -97,12 +105,14 @@ export const ReportModals: React.FC = () => {
     setStep('submitted');
   };
 
-  const handleToggleBlock = () => {
-    setIsBlocked(prev => !prev);
-    const msg = !isBlocked
-      ? `${reportModal.targetName} has been blocked.`
-      : `${reportModal.targetName} has been unblocked.`;
-    setToastMessage(msg);
+  const handleToggleBlock = async () => {
+    if (isTargetBlocked) {
+      await unblockUser(reportModal.targetId);
+      setToastMessage(`${reportModal.targetName} has been unblocked.`);
+    } else {
+      await blockUser(reportModal.targetId);
+      setToastMessage(`${reportModal.targetName} has been blocked.`);
+    }
     setTimeout(() => setToastMessage(''), 3000);
   };
 
@@ -168,14 +178,14 @@ export const ReportModals: React.FC = () => {
                 type="button"
                 onClick={handleToggleBlock}
                 className={`py-1.5 px-2.5 rounded-xl border text-xs font-bold flex items-center gap-1 transition-colors cursor-pointer ${
-                  isBlocked
+                  isTargetBlocked
                     ? 'bg-red-500/20 border-red-500 text-red-400'
                     : 'bg-neutral-800 hover:bg-neutral-700 border-neutral-700 text-neutral-300 hover:text-white'
                 }`}
                 title="Block or Unblock user"
               >
                 <Ban className="w-3.5 h-3.5 text-red-400" />
-                <span>{isBlocked ? 'Blocked' : 'Block'}</span>
+                <span>{isTargetBlocked ? 'Blocked' : 'Block'}</span>
               </button>
             </div>
           </div>

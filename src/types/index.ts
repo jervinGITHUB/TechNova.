@@ -301,6 +301,12 @@ export interface CanvasSourceTransform {
   opacity?: number;
 }
 
+export interface BlockRelation {
+  blockerId: string;
+  blockedId: string;
+  createdAt: string;
+}
+
 export interface LiveStream {
   id: string;
   host: User;
