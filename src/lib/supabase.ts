@@ -2268,6 +2268,21 @@ export const supabaseDb = {
           appealReason: row.AppealReason || row.appeal_reason || undefined,
           audience: (row.Audience || row.audience || 'public') as any,
           privacy: (row.Audience === 'only_me' || row.audience === 'only_me' ? 'private' : row.Audience === 'friends' ? 'friends' : 'public') as any,
+          isPinned: (() => {
+            if (row.IsPinned || row.is_pinned) return true;
+            try {
+              if (typeof localStorage !== 'undefined') {
+                const rawPinned = localStorage.getItem('user_pinned_videos_map');
+                if (rawPinned) {
+                  const pMap = JSON.parse(rawPinned);
+                  const pList = pMap[row.UserID] || pMap[toUuid(row.UserID)] || [];
+                  if (pList.includes(row.VideoID) || pList.includes(toUuid(row.VideoID))) return true;
+                }
+              }
+            } catch {}
+            return false;
+          })(),
+          pinnedAt: row.PinnedAt || row.pinned_at || undefined,
         };
       });
     } catch (e) {
@@ -2572,6 +2587,38 @@ export const supabaseDb = {
       return true;
     } catch (e) {
       console.warn('Supabase updateVideoStatus error:', e);
+      return false;
+    }
+  },
+
+  async toggleVideoPin(videoId: string, isPinned: boolean): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !videoId) return false;
+    try {
+      const vUuid = toUuid(videoId);
+      const nowIso = new Date().toISOString();
+      const payload: Record<string, any> = {
+        IsPinned: isPinned,
+        PinnedAt: isPinned ? nowIso : null,
+      };
+      let res = await client
+        .from('Video')
+        .update(payload)
+        .or(`VideoID.eq.${vUuid},VideoID.eq.${videoId}`);
+
+      if (res.error && (res.error.code === '42703' || res.error.message?.includes('column'))) {
+        // Fallback for snake_case column names
+        res = await client
+          .from('videos')
+          .update({
+            is_pinned: isPinned,
+            pinned_at: isPinned ? nowIso : null,
+          })
+          .or(`id.eq.${vUuid},id.eq.${videoId}`);
+      }
+      return true;
+    } catch (e) {
+      console.warn('Supabase toggleVideoPin error:', e);
       return false;
     }
   },
@@ -3576,13 +3623,40 @@ export const supabaseDb = {
       const uUuid = toUuid(user.id);
       const parentUuid = replyToId ? toUuid(replyToId) : null;
 
-      const { error } = await client.from('Comment').insert({
+      const nowIso = new Date().toISOString();
+      let { error } = await client.from('Comment').insert({
         CommentID: cUuid,
         UserID: uUuid,
         VideoID: vUuid,
         ParentCommentID: parentUuid,
         CommentText: text,
+        CreatedAt: nowIso,
       });
+
+      if (error && (error.code === '42703' || error.message?.includes('column'))) {
+        // Fallback with created_at or without timestamp column if neither exists
+        const res2 = await client.from('Comment').insert({
+          CommentID: cUuid,
+          UserID: uUuid,
+          VideoID: vUuid,
+          ParentCommentID: parentUuid,
+          CommentText: text,
+        });
+        error = res2.error;
+      }
+
+      if (error && (error.code === '42P01' || error.message?.includes('does not exist'))) {
+        // Fallback for snake_case comments table
+        const res3 = await client.from('comments').insert({
+          id: cUuid,
+          user_id: uUuid,
+          video_id: vUuid,
+          parent_comment_id: parentUuid,
+          comment_text: text,
+          created_at: nowIso,
+        });
+        error = res3.error;
+      }
 
       if (error) {
         console.warn('Supabase insertComment error:', error.message);

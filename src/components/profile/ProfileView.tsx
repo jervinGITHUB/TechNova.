@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Video } from '../../types';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
@@ -32,6 +32,7 @@ import {
   CheckCircle2,
   Send,
   Loader2,
+  Pin,
 } from 'lucide-react';
 import { isSameUser, isVideoUrl, toUuid, checkIsUserBanned } from '../../lib/supabase';
 
@@ -61,6 +62,7 @@ export const ProfileView: React.FC = () => {
     getUserLikedVideos,
     deleteVideo,
     submitVideoAppeal,
+    togglePinVideo,
   } = useApp();
 
   const [activeTabSub, setActiveTabSub] = useState<'videos' | 'liked' | 'only_me'>('videos');
@@ -178,23 +180,43 @@ export const ProfileView: React.FC = () => {
   const areMutualFriends = targetFollowsMe && (followStatus === 'following' || followStatus === 'friends');
 
   // Videos associated with this user (matched reliably by UUID or string)
-  const userVideos = videos.filter(v => {
-    if (!isSameUser(v.creatorId || v.creator?.id, targetUser.id)) return false;
-    if (!isSelf && (v.status === 'pending' || v.status === 'rejected')) return false;
+  // Pinned videos (up to 3) are strictly ALWAYS FIRST on the "Videos" tab!
+  const userVideos = useMemo(() => {
+    const list = videos.filter(v => {
+      if (!isSameUser(v.creatorId || v.creator?.id, targetUser.id)) return false;
+      if (!isSelf && (v.status === 'pending' || v.status === 'rejected')) return false;
 
-    // "Only me" videos are strictly hidden from the public "Videos" tab and other users
-    if (v.audience === 'only_me' || v.privacy === 'private') {
-      return false;
-    }
+      // "Only me" videos are strictly hidden from the public "Videos" tab and other users
+      if (v.audience === 'only_me' || v.privacy === 'private') {
+        return false;
+      }
 
-    // "Friends Only" videos are only visible to the creator or mutual friends
-    if (v.audience === 'friends' || v.privacy === 'friends') {
-      if (isSelf) return true;
-      return areMutualFriends;
-    }
+      // "Friends Only" videos are only visible to the creator or mutual friends
+      if (v.audience === 'friends' || v.privacy === 'friends') {
+        if (isSelf) return true;
+        return areMutualFriends;
+      }
 
-    return true;
-  });
+      return true;
+    });
+
+    return [...list].sort((a, b) => {
+      const aPinned = Boolean(a.isPinned);
+      const bPinned = Boolean(b.isPinned);
+      if (aPinned && !bPinned) return -1;
+      if (!aPinned && bPinned) return 1;
+      if (aPinned && bPinned) {
+        // If both pinned, most recently pinned comes first
+        const timeAPinned = new Date(a.pinnedAt || a.createdAt || 0).getTime() || 0;
+        const timeBPinned = new Date(b.pinnedAt || b.createdAt || 0).getTime() || 0;
+        return timeBPinned - timeAPinned;
+      }
+      // Both unpinned: newest uploads first
+      const timeA = new Date(a.createdAt || 0).getTime() || 0;
+      const timeB = new Date(b.createdAt || 0).getTime() || 0;
+      return timeB - timeA;
+    });
+  }, [videos, targetUser.id, isSelf, areMutualFriends]);
 
   // "Only me" videos (strictly isolated to personal profile of currentUser, hidden from other users)
   const onlyMeVideos = isSelf
@@ -294,7 +316,13 @@ export const ProfileView: React.FC = () => {
       {/* Toast Alert */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 bg-[#1e1e2c] border border-neutral-700 text-white text-xs px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2 animate-bounce">
-          <Ban className="w-4 h-4 text-red-400" />
+          {toastMessage.toLowerCase().includes('pin') ? (
+            <Pin className="w-4 h-4 text-[#ff007a] fill-[#ff007a]" />
+          ) : toastMessage.toLowerCase().includes('success') ? (
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          ) : (
+            <Ban className="w-4 h-4 text-red-400" />
+          )}
           <span>{toastMessage}</span>
         </div>
       )}
@@ -652,15 +680,23 @@ export const ProfileView: React.FC = () => {
                   <ExploreThumbnailCard video={video} />
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
 
+                  {/* Pinned Badge (Prominently displayed first at top-left) */}
+                  {video.isPinned && (
+                    <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#ff007a] text-white text-[10px] font-extrabold shadow-md backdrop-blur-sm border border-white/20">
+                      <Pin className="w-2.5 h-2.5 fill-white rotate-45" />
+                      <span>Pinned</span>
+                    </div>
+                  )}
+
                   {/* Audience Badges */}
                   {(video.audience === 'only_me' || video.privacy === 'private') && (
-                    <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/80 border border-amber-500/50 text-amber-300 text-[10px] font-bold shadow backdrop-blur-sm">
+                    <div className={`absolute top-2 ${video.isPinned ? 'left-20' : 'left-2'} z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/80 border border-amber-500/50 text-amber-300 text-[10px] font-bold shadow backdrop-blur-sm`}>
                       <Lock className="w-2.5 h-2.5 text-amber-400" />
                       <span>Only me</span>
                     </div>
                   )}
                   {video.audience === 'friends' && isSelf && (
-                    <div className="absolute top-2 left-2 z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/80 border border-emerald-500/50 text-emerald-300 text-[10px] font-bold shadow backdrop-blur-sm">
+                    <div className={`absolute top-2 ${video.isPinned ? 'left-20' : 'left-2'} z-10 flex items-center gap-1 px-2 py-0.5 rounded-md bg-black/80 border border-emerald-500/50 text-emerald-300 text-[10px] font-bold shadow backdrop-blur-sm`}>
                       <Users className="w-2.5 h-2.5 text-emerald-400" />
                       <span>Friends</span>
                     </div>
@@ -722,8 +758,22 @@ export const ProfileView: React.FC = () => {
                       {activeGridMenuVideoId === video.id && (
                         <div
                           onClick={e => e.stopPropagation()}
-                          className="absolute right-0 top-8 z-30 w-52 bg-[#14141e]/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
+                          className="absolute right-0 top-8 z-30 w-56 bg-[#14141e]/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
                         >
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              setActiveGridMenuVideoId(null);
+                              const res = await togglePinVideo(video.id);
+                              setToastMessage(res.message || (res.isPinned ? 'Video pinned to profile' : 'Video unpinned from profile'));
+                              setTimeout(() => setToastMessage(''), 3500);
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                          >
+                            <Pin className={`w-3.5 h-3.5 ${video.isPinned ? 'text-[#ff007a] fill-[#ff007a]' : 'text-neutral-400'} shrink-0`} />
+                            <span>{video.isPinned ? 'Unpin from profile' : 'Pin to profile (up to 3)'}</span>
+                          </button>
+                          <div className="h-px bg-neutral-800 my-0.5" />
                           <button
                             type="button"
                             onClick={() => {
@@ -1157,12 +1207,29 @@ export const ProfileView: React.FC = () => {
                       More
                     </span>
 
-                    {/* Popover Menu with "Change Audience Settings" and "Delete" */}
+                    {/* Popover Menu with "Pin to Profile", "Change Audience Settings" and "Delete" */}
                     {videoOptionsMenuOpen && (
                       <div
                         onClick={e => e.stopPropagation()}
                         className="absolute right-14 bottom-0 z-50 w-56 bg-[#14141e]/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
                       >
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setVideoOptionsMenuOpen(false);
+                            const res = await togglePinVideo(selectedVideoModal.id);
+                            setSelectedVideoModal(prev => prev ? { ...prev, isPinned: res.isPinned } : null);
+                            setToastMessage(res.message || (res.isPinned ? 'Video pinned to profile' : 'Video unpinned from profile'));
+                            setTimeout(() => setToastMessage(''), 3500);
+                          }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                        >
+                          <Pin className={`w-4 h-4 ${selectedVideoModal.isPinned ? 'text-[#ff007a] fill-[#ff007a]' : 'text-neutral-400'} shrink-0`} />
+                          <span>{selectedVideoModal.isPinned ? 'Unpin from profile' : 'Pin to profile (up to 3)'}</span>
+                        </button>
+
+                        <div className="h-px bg-neutral-800 my-0.5" />
+
                         <button
                           type="button"
                           onClick={() => {

@@ -69,6 +69,15 @@ export const CommentsDrawer: React.FC = () => {
     }
   }, [commentsVideoId]);
 
+  // Live ticker to update relative comment/reply timestamps automatically in real time
+  const [, setTimestampTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTimestampTick(t => t + 1);
+    }, 15000);
+    return () => clearInterval(timer);
+  }, []);
+
   if (!commentsVideoId) return null;
 
   const currentComments = commentsMap[commentsVideoId] || [];
@@ -386,11 +395,9 @@ export const CommentsDrawer: React.FC = () => {
                             <span className="text-xs font-bold text-white truncate">
                               {comment.name}
                             </span>
-                            {comment.timestamp && (
-                              <span className="text-[10px] text-neutral-400 font-normal">
-                                {formatRealtimeAgo(comment.timestamp)}
-                              </span>
-                            )}
+                            <span className="text-[10px] text-neutral-400 font-normal">
+                              {formatRealtimeAgo(comment.timestamp || new Date().toISOString())}
+                            </span>
                           </div>
 
                           <div className="flex items-center gap-1.5">
@@ -468,11 +475,9 @@ export const CommentsDrawer: React.FC = () => {
                                     <span className="text-[11px] font-bold text-white">
                                       {reply.name}
                                     </span>
-                                    {reply.timestamp && (
-                                      <span className="text-[9px] text-neutral-400">
-                                        {formatRealtimeAgo(reply.timestamp)}
-                                      </span>
-                                    )}
+                                    <span className="text-[9px] text-neutral-400">
+                                      {formatRealtimeAgo(reply.timestamp || new Date().toISOString())}
+                                    </span>
                                   </div>
 
                                   <div className="flex items-center gap-1.5">

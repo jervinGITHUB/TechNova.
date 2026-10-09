@@ -428,6 +428,8 @@ interface AppContextType {
   selectedUserId: string | null;
   navigateToUserProfile: (userId: string) => void;
   navigateToUserProfileByUsername: (username: string) => void;
+  targetFeedVideoId: string | null;
+  navigateToVideo: (videoId: string, openComments?: boolean) => void;
 
   // Data
   users: User[];
@@ -472,6 +474,7 @@ interface AppContextType {
   shareVideoToUser: (video: Video, targetUserId: string, note?: string) => boolean;
   shareLiveStreamToUser: (stream: LiveStream, targetUserId: string, note?: string) => boolean;
   updateVideoAudience: (videoId: string, audience: 'public' | 'friends' | 'only_me') => Promise<boolean>;
+  togglePinVideo: (videoId: string) => Promise<{ success: boolean; message?: string; isPinned?: boolean }>;
   recordVideoView: (videoId: string) => void;
   uploadVideo: (newVideo: {
     caption: string;
@@ -983,9 +986,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     syncWithSupabase(overrideUser);
   };
 
-  // Appearance & Theme Mode (Auto, Dark, Light)
+  // Appearance & Theme Mode (Default is strictly Dark mode as requested)
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => {
-    return storage.get<ThemeMode>('viralhub_theme_mode', 'auto');
+    const saved = storage.get<string>('viralhub_theme_mode', 'dark');
+    if (saved === 'light') {
+      storage.set('viralhub_theme_mode', 'dark');
+      return 'dark';
+    }
+    return (saved as ThemeMode) || 'dark';
   });
 
   const [systemIsDark, setSystemIsDark] = useState<boolean>(() => {
@@ -1056,6 +1064,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Modals & Comments
   const [commentsVideoId, setCommentsVideoId] = useState<string | null>(null);
+  const [targetFeedVideoId, setTargetFeedVideoId] = useState<string | null>(null);
+
+  const navigateToVideo = useCallback((videoId: string, openComments = false) => {
+    if (!videoId) return;
+    setTargetFeedVideoId(videoId);
+    setActiveTab('home');
+    if (openComments) {
+      setCommentsVideoId(videoId);
+    }
+  }, []);
+
   const [commentsMap, setCommentsMap] = useState<Record<string, CommentEntry[]>>(() =>
     storage.get<Record<string, CommentEntry[]>>('video_comments_v2', {})
   );
@@ -1555,9 +1574,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               storedShares[toUuid(v.id)] || 0
             );
 
+            const localPinnedMap = storage.get<Record<string, string[]>>('user_pinned_videos_map', {});
+            const creatorPinnedList = (v.creatorId ? localPinnedMap[v.creatorId] : []) || (v.creator?.id ? localPinnedMap[v.creator.id] : []) || [];
+            const isLocallyPinned = creatorPinnedList.includes(v.id) || creatorPinnedList.includes(toUuid(v.id));
+            const existingV = existingVideosMap.get(v.id) || existingVideosMap.get(toUuid(v.id));
+
             const baseVideo = {
               ...v,
               sharesCount: preservedShares,
+              isPinned: v.isPinned || isLocallyPinned || Boolean(existingV?.isPinned),
+              pinnedAt: v.pinnedAt || existingV?.pinnedAt,
             };
 
             if (appeal) {
@@ -7187,6 +7213,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return true;
   };
 
+  const togglePinVideo = async (
+    videoId: string
+  ): Promise<{ success: boolean; message?: string; isPinned?: boolean }> => {
+    if (!currentUser || !videoId) return { success: false, message: 'Must be logged in to pin videos.' };
+    const video = videos.find(v => v.id === videoId || toUuid(v.id) === toUuid(videoId));
+    if (!video) return { success: false, message: 'Video not found.' };
+
+    const isOwner = isSameUser(video.creatorId, currentUser.id) || isSameUser(video.creator?.id, currentUser.id);
+    if (!isOwner) {
+      return { success: false, message: 'You can only pin your own videos on your profile.' };
+    }
+
+    const isCurrentlyPinned = Boolean(video.isPinned);
+    const willPin = !isCurrentlyPinned;
+
+    const currentPinnedCount = videos.filter(
+      v =>
+        (isSameUser(v.creatorId, currentUser.id) || isSameUser(v.creator?.id, currentUser.id)) &&
+        Boolean(v.isPinned) &&
+        v.id !== video.id &&
+        toUuid(v.id) !== toUuid(video.id)
+    ).length;
+
+    if (willPin) {
+      if (currentPinnedCount >= 3) {
+        return {
+          success: false,
+          message: 'You can pin up to 3 videos only. Please unpin a video first.',
+        };
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+
+    setVideos(prev => {
+      const next = prev.map(v => {
+        if (v.id === video.id || toUuid(v.id) === toUuid(video.id)) {
+          return {
+            ...v,
+            isPinned: willPin,
+            pinnedAt: willPin ? nowIso : undefined,
+          };
+        }
+        return v;
+      });
+      storage.set('videos', next);
+      return next;
+    });
+
+    const pinnedMap = storage.get<Record<string, string[]>>('user_pinned_videos_map', {});
+    const userPinnedList = pinnedMap[currentUser.id] || [];
+    const nextList = willPin
+      ? Array.from(new Set([video.id, ...userPinnedList])).slice(0, 3)
+      : userPinnedList.filter(id => id !== video.id && toUuid(id) !== toUuid(video.id));
+    pinnedMap[currentUser.id] = nextList;
+    pinnedMap[toUuid(currentUser.id)] = nextList;
+    storage.set('user_pinned_videos_map', pinnedMap);
+
+    supabaseDb.toggleVideoPin(video.id, willPin);
+
+    return {
+      success: true,
+      isPinned: willPin,
+      message: willPin
+        ? `Video pinned to your profile (${currentPinnedCount + 1}/3 max).`
+        : 'Video unpinned from your profile.',
+    };
+  };
+
   const deleteVideoAdmin = async (videoId: string): Promise<boolean> => {
     return deleteVideo(videoId);
   };
@@ -7791,6 +7886,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         selectedUserId,
         navigateToUserProfile,
         navigateToUserProfileByUsername,
+        targetFeedVideoId,
+        navigateToVideo,
         users,
         videos: activeVideos,
         audioTracks,
@@ -7829,6 +7926,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         shareVideoToUser,
         shareLiveStreamToUser,
         updateVideoAudience,
+        togglePinVideo,
         recordVideoView,
         uploadVideo,
         submitReport,

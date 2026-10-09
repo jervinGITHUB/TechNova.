@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
-import { isSameUser, checkIsUserBanned } from '../../lib/supabase';
+import { isSameUser, checkIsUserBanned, toUuid } from '../../lib/supabase';
 import { formatRealtimeAgo } from '../../utils/time';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { AudienceSettingsModal } from '../modals/AudienceSettingsModal';
@@ -29,6 +29,7 @@ import {
   Check,
   Lock,
   Trash2,
+  Pin,
 } from 'lucide-react';
 
 interface VideoFeedCardProps {
@@ -54,6 +55,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     getFollowStatus,
     toggleFollowUser,
     deleteVideo,
+    togglePinVideo,
   } = useApp();
 
   const [isPlaying, setIsPlaying] = useState(false);
@@ -63,6 +65,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   const [duration, setDuration] = useState(0);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(false);
+  const [pinToast, setPinToast] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
   const [audienceModalOpen, setAudienceModalOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -384,6 +387,22 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         </div>
       )}
 
+      {/* Pinned Badge */}
+      {video.isPinned && (
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#ff007a] text-white text-[10px] font-bold shadow-[0_0_10px_rgba(255,0,122,0.6)] backdrop-blur-md">
+          <Pin className="w-3 h-3 fill-white rotate-45" />
+          <span>Pinned</span>
+        </div>
+      )}
+
+      {/* Pin Action Feedback Toast */}
+      {pinToast && (
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#14141e]/95 border border-[#ff007a]/60 text-white text-xs font-bold shadow-2xl backdrop-blur-md whitespace-nowrap animate-fadeIn">
+          <Pin className="w-3.5 h-3.5 text-[#ff007a]" />
+          <span>{pinToast}</span>
+        </div>
+      )}
+
       {/* Right Action Rail (Avatar, Like, Comment, Share, Report) */}
       <div
         className="absolute right-3 bottom-24 z-20 flex flex-col items-center gap-5"
@@ -518,6 +537,22 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
               {currentUser && isSameUser(currentUser.id, video.creator.id) ? (
                 <>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setMoreMenuOpen(false);
+                      const res = await togglePinVideo(video.id);
+                      if (res.message) {
+                        setPinToast(res.message);
+                        setTimeout(() => setPinToast(''), 3000);
+                      }
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <Pin className={`w-4 h-4 ${video.isPinned ? 'text-[#ff007a] fill-[#ff007a]' : 'text-neutral-400'} shrink-0`} />
+                    <span>{video.isPinned ? 'Unpin from Profile' : 'Pin to Profile'}</span>
+                  </button>
+                  <div className="h-px bg-neutral-800 my-0.5" />
                   <button
                     type="button"
                     onClick={() => {
@@ -817,6 +852,7 @@ export const HomeFeed: React.FC = () => {
     followRelations,
     getFollowStatus,
     toggleFollowUser,
+    targetFeedVideoId,
   } = useApp();
 
   type FeedTab = 'friends' | 'following' | 'foryou';
@@ -899,6 +935,17 @@ export const HomeFeed: React.FC = () => {
       return true;
     });
 
+    // If targeted from a notification click, place that exact video at index 0 immediately!
+    if (targetFeedVideoId) {
+      const targeted =
+        eligibleForYou.find(v => v.id === targetFeedVideoId || toUuid(v.id) === toUuid(targetFeedVideoId)) ||
+        videos.find(v => v.id === targetFeedVideoId || toUuid(v.id) === toUuid(targetFeedVideoId));
+      if (targeted) {
+        const others = eligibleForYou.filter(v => v.id !== targeted.id && toUuid(v.id) !== toUuid(targeted.id));
+        return [targeted, ...others];
+      }
+    }
+
     if (eligibleForYou.length <= 1) return eligibleForYou;
 
     // 1. Sort by upload date to find the most recent upload
@@ -920,7 +967,7 @@ export const HomeFeed: React.FC = () => {
 
     // 3. Newest is strictly first, rest are shuffled
     return [newestVideo, ...shuffledOthers];
-  }, [visibleApprovedVideos, shuffleSeed, currentUser, getFollowStatus]);
+  }, [visibleApprovedVideos, shuffleSeed, currentUser, getFollowStatus, targetFeedVideoId, videos]);
 
   // Active video list based on selected feed tab
   const feedVideos = useMemo(() => {
@@ -936,6 +983,17 @@ export const HomeFeed: React.FC = () => {
   }, [feedTab, friendsVideos, followingVideos, forYouVideos]);
 
   const hasFriendsVideos = friendsVideos.length > 0;
+
+  // Jump and scroll to targeted video from notifications
+  useEffect(() => {
+    if (targetFeedVideoId) {
+      setActiveTab('home');
+      setActiveVideoId(targetFeedVideoId);
+      if (videoFeedRef.current) {
+        videoFeedRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    }
+  }, [targetFeedVideoId, setActiveTab]);
 
   // Set initial active video and reset scroll position when changing tabs
   useEffect(() => {

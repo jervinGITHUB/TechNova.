@@ -118,6 +118,8 @@ export interface Video {
   audioEndTime?: number;
   audience?: 'public' | 'friends' | 'only_me';
   privacy?: 'public' | 'friends' | 'private';
+  isPinned?: boolean;
+  pinnedAt?: string;
 }
 
 export interface MessageReplyInfo {

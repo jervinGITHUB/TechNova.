@@ -24,6 +24,7 @@ import {
   AtSign,
   Tag,
   Sparkles,
+  Film,
 } from 'lucide-react';
 import { Avatar } from '../common/Avatar';
 import { NotificationItem } from '../../types';
@@ -39,6 +40,7 @@ export const NotificationsView: React.FC = () => {
     markAllNotificationsAsRead,
     markNotificationAsRead,
     navigateToUserProfile,
+    navigateToVideo,
     acceptFollowRequest,
     declineFollowRequest,
     submitVideoAppeal,
@@ -388,6 +390,16 @@ export const NotificationsView: React.FC = () => {
                 if (item.isUnread) {
                   markNotificationAsRead(item.id);
                 }
+                if (item.videoId) {
+                  const isComment =
+                    item.type === 'comment' ||
+                    (item.targetText && (item.targetText.toLowerCase().includes('comment') || item.targetText.toLowerCase().includes('replied')));
+                  navigateToVideo(item.videoId, Boolean(isComment));
+                  return;
+                }
+                if (item.actor?.id && item.actor.id !== 'admin' && item.actor.id !== 'system_moderation') {
+                  navigateToUserProfile(item.actor.id);
+                }
               }}
               className={`flex items-start sm:items-center justify-between p-4 rounded-2xl border transition-all duration-300 cursor-pointer ${
                 item.type === 'video_revoked' || item.type === 'account_banned'
@@ -576,8 +588,27 @@ export const NotificationsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right Side: Status Badge & Dot if Unread */}
-              <div className="flex items-center gap-2 shrink-0 ml-2">
+              {/* Right Side: Video Thumbnail & Status Badge */}
+              <div className="flex items-center gap-2.5 shrink-0 ml-2">
+                {matchedVideo && (
+                  <div
+                    className="relative w-11 h-14 rounded-xl overflow-hidden shrink-0 border border-neutral-700/80 bg-[#161622] group-hover:border-[#ff007a]/50 shadow-sm transition-all"
+                    title="View video"
+                  >
+                    {matchedVideo.thumbnailUrl ? (
+                      <img
+                        src={matchedVideo.thumbnailUrl}
+                        alt="Video preview"
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center bg-neutral-800 text-neutral-400">
+                        <Film className="w-4 h-4 text-[#ff007a]" />
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {item.isUnread ? (
                   <div className="flex items-center gap-1.5">
                     <span className="hidden sm:inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-[#ff007a]/15 text-[#ff007a] border border-[#ff007a]/30 text-[10px] font-bold">

@@ -59,6 +59,14 @@ export const toTimestampMillis = (timestampOrDate?: string | number | null): num
     return d.getTime();
   }
 
+  // Handle pure digit epoch strings like "1791303782278" (milliseconds) or "1712658921" (seconds)
+  if (/^\d{10,14}$/.test(str)) {
+    const epochNum = parseInt(str, 10);
+    if (!isNaN(epochNum) && epochNum > 0) {
+      return str.length === 10 ? epochNum * 1000 : epochNum;
+    }
+  }
+
   // Handle message IDs like "m_1791303782278_..."
   if (str.startsWith('m_')) {
     const parts = str.split('_');
@@ -94,7 +102,10 @@ export const formatRealtimeAgo = (timestampOrDate?: string | number | null): str
 
   const millis = toTimestampMillis(timestampOrDate);
   if (!millis || millis <= 0) {
-    return str || 'Just now';
+    if (str && (/ago$/i.test(str) || /^yesterday/i.test(str) || /^today/i.test(str))) {
+      return str;
+    }
+    return 'Just now';
   }
 
   const now = Date.now();

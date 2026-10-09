@@ -25,6 +25,7 @@ export const InAppNotificationToast: React.FC = () => {
     setActiveTab,
     openConversationWithUser,
     navigateToUserProfile,
+    navigateToVideo,
     setCommentsVideoId,
   } = useApp();
 
@@ -83,8 +84,11 @@ export const InAppNotificationToast: React.FC = () => {
       return;
     }
 
-    if (notif.type === 'comment' && notif.videoId) {
-      setCommentsVideoId(notif.videoId);
+    if (notif.videoId) {
+      const isComment =
+        notif.type === 'comment' ||
+        (notif.targetText && (notif.targetText.toLowerCase().includes('comment') || notif.targetText.toLowerCase().includes('replied')));
+      navigateToVideo(notif.videoId, Boolean(isComment));
       return;
     }
 
