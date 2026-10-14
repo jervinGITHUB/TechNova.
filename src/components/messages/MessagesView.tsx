@@ -249,9 +249,11 @@ export const MessagesView: React.FC = () => {
   const accountConversations = useMemo(() => {
     if (!currentUser) return [];
     const valid = conversations.filter(conv => {
-      const isPart = conv.participantIds && conv.participantIds.length > 0
-        ? conv.participantIds.some(id => isSameUser(id, currentUser.id))
-        : conv.participant && !isSameUser(conv.participant.id, currentUser.id);
+      const isPart =
+        (conv.participantIds && conv.participantIds.length > 0 && conv.participantIds.some(id => isSameUser(id, currentUser.id))) ||
+        (conv.userAId && isSameUser(conv.userAId, currentUser.id)) ||
+        (conv.userBId && isSameUser(conv.userBId, currentUser.id)) ||
+        (conv.messages && conv.messages.some(m => isSameUser(m.senderId, currentUser.id)));
       if (!isPart) return false;
 
       // Check if user previously marked this conversation as deleted
@@ -297,7 +299,14 @@ export const MessagesView: React.FC = () => {
         if (found) return found;
       }
     }
-    if (conv.participant) {
+    if (conv.userAId && conv.userBId && currentUser) {
+      const otherId = isSameUser(conv.userAId, currentUser.id) ? conv.userBId : conv.userAId;
+      if (otherId) {
+        const found = users.find(u => isSameUser(u.id, otherId));
+        if (found) return found;
+      }
+    }
+    if (conv.participant && (!currentUser || !isSameUser(conv.participant.id, currentUser.id))) {
       const found = users.find(u => isSameUser(u.id, conv.participant.id));
       if (found) return found;
       return conv.participant;

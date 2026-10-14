@@ -236,17 +236,37 @@ export const deduplicateConversations = (
   for (const c of convList) {
     if (!c) continue;
 
+    // Strict participant validation:
+    // If currentUserId is specified, ONLY keep conversations where currentUserId is actually a participant!
+    // Never re-assign, steal, or leak another user's conversation to currentUserId!
+    if (currentUserId) {
+      const isParticipant =
+        (c.participantIds && c.participantIds.length > 0 && c.participantIds.some(id => isSameUser(id, currentUserId))) ||
+        (c.userAId && isSameUser(c.userAId, currentUserId)) ||
+        (c.userBId && isSameUser(c.userBId, currentUserId)) ||
+        (c.messages && c.messages.some(m => isSameUser(m.senderId, currentUserId)));
+
+      if (!isParticipant) {
+        continue;
+      }
+    }
+
     // Find the other participant in this conversation
     let partnerId = '';
     if (currentUserId && c.participantIds && c.participantIds.length > 0) {
       partnerId = c.participantIds.find(id => !isSameUser(id, currentUserId)) || '';
     }
+    if (!partnerId && c.userAId && c.userBId && currentUserId) {
+      partnerId = isSameUser(c.userAId, currentUserId) ? c.userBId : c.userAId;
+    }
     if (!partnerId && c.participant?.id && (!currentUserId || !isSameUser(c.participant.id, currentUserId))) {
       partnerId = c.participant.id;
     }
     if (!partnerId && c.participantIds && c.participantIds.length > 0) {
-      partnerId = c.participantIds.find(id => !currentUserId || !isSameUser(id, currentUserId)) || c.participantIds[0];
+      partnerId = c.participantIds.find(id => !currentUserId || !isSameUser(id, currentUserId)) || '';
     }
+
+    if (!partnerId) continue;
 
     // Determine stable canonical partner key
     const canonicalKey = (currentUserId && partnerId)
@@ -316,9 +336,7 @@ export const deduplicateConversations = (
       partnerMap.set(canonicalKey, {
         ...c,
         id: canonicalId,
-        participantIds: (c.participantIds && c.participantIds.length > 0)
-          ? c.participantIds
-          : [currentUserId || '', partnerId].filter(Boolean),
+        participantIds: [currentUserId || '', partnerId].filter(Boolean),
       });
     }
   }
@@ -921,15 +939,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return Array.from(map.values()).filter(t => !isDeprecatedDefaultTrack(t));
   }, [audioTracksList, videos, users]);
   const [conversations, setConversations] = useState<Conversation[]>(() => {
-    const resetDone = storage.get<boolean>('conversations_reset_zero_v6', false);
-    if (!resetDone) {
-      storage.set('conversations_reset_zero_v6', true);
-      storage.set('conversations', []);
-      return [];
+    const current = storage.get<User | null>('currentUser', null);
+    if (!current?.id) return [];
+    const userScoped = storage.get<Conversation[]>(`conversations_${toUuid(current.id)}`, null as any);
+    if (userScoped !== null && Array.isArray(userScoped)) {
+      return deduplicateConversations(userScoped, current.id);
     }
     const raw = storage.get<Conversation[]>('conversations', []);
-    const current = storage.get<User | null>('currentUser', null);
-    const deduped = deduplicateConversations(raw, current?.id);
+    const deduped = deduplicateConversations(raw, current.id);
+    storage.set(`conversations_${toUuid(current.id)}`, deduped);
     storage.set('conversations', deduped);
     return deduped;
   });
@@ -1704,11 +1722,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       // 4. Sync Conversations and Messages across devices
-      if (remoteConvs !== null) {
+      if (remoteConvs !== null && activeUser) {
         if (remoteConvs.length === 0) {
           setConversations([]);
+          storage.set(`conversations_${toUuid(activeUser.id)}`, []);
           storage.set('conversations', []);
-        } else if (activeUser) {
+        } else {
           setConversations(prev => {
             const remoteMapped: Conversation[] = remoteConvs.map((rc: any) => {
               const partnerId = isSameUser(rc.userAId, activeUser.id)
@@ -1898,9 +1917,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               };
             });
 
-            // Retain any purely local conversations that don't match any remote partner
+            // Retain any purely local conversations that strictly belong to activeUser and don't match any remote partner
             const remainingLocal = prev.filter(lc => {
+              const isLocalUserPart =
+                (lc.participantIds && lc.participantIds.length > 0 && lc.participantIds.some(id => isSameUser(id, activeUser.id))) ||
+                (lc.userAId && isSameUser(lc.userAId, activeUser.id)) ||
+                (lc.userBId && isSameUser(lc.userBId, activeUser.id)) ||
+                (lc.messages && lc.messages.some(m => isSameUser(m.senderId, activeUser.id)));
+              if (!isLocalUserPart) return false;
+
               const localPartnerId = lc.participantIds?.find(id => !isSameUser(id, activeUser.id)) || lc.participant?.id;
+              if (!localPartnerId) return false;
+
               return !remoteMapped.some(rc => {
                 const remotePartnerId = rc.participantIds?.find(id => !isSameUser(id, activeUser.id)) || rc.participant?.id;
                 return isSameUser(localPartnerId, remotePartnerId) || rc.id === lc.id || toUuid(rc.id) === toUuid(lc.id);
@@ -1909,6 +1937,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             const combined = [...remoteMapped, ...remainingLocal];
             const deduped = deduplicateConversations(combined, activeUser.id);
+            storage.set(`conversations_${toUuid(activeUser.id)}`, deduped);
             storage.set('conversations', deduped);
             return deduped;
           });
@@ -2218,6 +2247,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     storage.set('currentUser', finalUser);
     recordSavedAccount(finalUser);
     setSwitchAccountModalOpen(false);
+
+    // Switch conversations cleanly to the authenticated user
+    const userConvKey = `conversations_${toUuid(finalUserId)}`;
+    const savedForUser = storage.get<Conversation[]>(userConvKey, null as any);
+    if (savedForUser !== null && Array.isArray(savedForUser)) {
+      setConversations(deduplicateConversations(savedForUser, finalUserId));
+    } else {
+      const raw = storage.get<Conversation[]>('conversations', []);
+      const deduped = deduplicateConversations(raw, finalUserId);
+      setConversations(deduped);
+    }
 
     setUsers(prev => {
       // Filter out any duplicates with same id or email
@@ -3068,8 +3108,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [videos]);
 
   useEffect(() => {
-    storage.set('conversations', conversations);
-  }, [conversations]);
+    if (currentUser?.id) {
+      const userConvs = deduplicateConversations(conversations, currentUser.id);
+      storage.set(`conversations_${toUuid(currentUser.id)}`, userConvs);
+      storage.set('conversations', userConvs);
+    } else {
+      storage.set('conversations', []);
+    }
+  }, [conversations, currentUser?.id]);
 
   useEffect(() => {
     storage.set('follow_relations_v2', followRelations);
@@ -3096,9 +3142,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const userConversations = useMemo(() => {
     if (!currentUser) return [];
     const valid = conversations.filter(c => {
-      const isParticipant = (c.participantIds && c.participantIds.length > 0)
-        ? c.participantIds.some(id => isSameUser(id, currentUser.id))
-        : !isSameUser(c.participant?.id, currentUser.id);
+      const isParticipant =
+        (c.participantIds && c.participantIds.length > 0 && c.participantIds.some(id => isSameUser(id, currentUser.id))) ||
+        (c.userAId && isSameUser(c.userAId, currentUser.id)) ||
+        (c.userBId && isSameUser(c.userBId, currentUser.id)) ||
+        (c.messages && c.messages.some(m => isSameUser(m.senderId, currentUser.id)));
       if (!isParticipant) return false;
 
       // If currentUser deleted this conversation, check if new messages arrived
@@ -3313,6 +3361,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (isAdminRecord) setIsAdmin(true);
             recordSavedAccount(loggedInUser);
             markAccountLoggedInOnDevice(loggedInUser.id, loggedInUser.email);
+            const userConvKey = `conversations_${toUuid(loggedInUser.id)}`;
+            const savedForUser = storage.get<Conversation[]>(userConvKey, null as any);
+            const initialConvs = (savedForUser && Array.isArray(savedForUser))
+              ? deduplicateConversations(savedForUser, loggedInUser.id)
+              : deduplicateConversations(storage.get<Conversation[]>('conversations', []), loggedInUser.id);
+            setConversations(initialConvs);
             setActiveConversationId(null);
             setMessagesMobileView('list');
             setSelectedUserId(null);
@@ -3352,6 +3406,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       recordSavedAccount(patchedFound);
       markAccountLoggedInOnDevice(patchedFound.id, patchedFound.email);
       if (patchedFound.role === 'admin') setIsAdmin(true);
+      const userConvKey = `conversations_${toUuid(patchedFound.id)}`;
+      const savedForUser = storage.get<Conversation[]>(userConvKey, null as any);
+      const initialConvs = (savedForUser && Array.isArray(savedForUser))
+        ? deduplicateConversations(savedForUser, patchedFound.id)
+        : deduplicateConversations(storage.get<Conversation[]>('conversations', []), patchedFound.id);
+      setConversations(initialConvs);
       setActiveConversationId(null);
       setMessagesMobileView('list');
       setSelectedUserId(null);
@@ -3460,6 +3520,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUsers(prev => [newUser, ...prev]);
     setCurrentUser(newUser);
     storage.set('currentUser', newUser);
+    setConversations([]);
+    storage.set(`conversations_${toUuid(newUser.id)}`, []);
+    storage.set('conversations', []);
     recordSavedAccount(newUser);
     markAccountLoggedInOnDevice(newUser.id, newUser.email);
     setActiveConversationId(null);
@@ -3541,7 +3604,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Clear active session
     currentUserRef.current = null;
     setCurrentUser(null);
+    setConversations([]);
     storage.remove('currentUser');
+    storage.set('conversations', []);
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setSelectedUserId(null);
@@ -3634,6 +3699,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setCommentsVideoId(null);
     setSwitchAccountModalOpen(false);
 
+    // Switch conversations to target account
+    const userConvKey = `conversations_${toUuid(updatedTarget.id)}`;
+    const savedForUser = storage.get<Conversation[]>(userConvKey, null as any);
+    if (savedForUser !== null && Array.isArray(savedForUser)) {
+      setConversations(deduplicateConversations(savedForUser, updatedTarget.id));
+    } else {
+      const raw = storage.get<Conversation[]>('conversations', []);
+      setConversations(deduplicateConversations(raw, updatedTarget.id));
+    }
+
     // Refresh feed directly with updatedTarget so syncWithSupabase uses new user!
     refreshFeed(updatedTarget);
 
@@ -3655,7 +3730,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     currentUserRef.current = null;
     setCurrentUser(null);
+    setConversations([]);
     storage.remove('currentUser');
+    storage.set('conversations', []);
+    setActiveConversationId(null);
+    setMessagesMobileView('list');
     setAuthView('login');
   };
 

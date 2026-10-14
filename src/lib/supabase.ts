@@ -4071,8 +4071,13 @@ export const supabaseDb = {
         .select('*')
         .or(`UserIDA.eq.${currentUuid},UserIDB.eq.${currentUuid},UserIDA.eq.${currentUserId},UserIDB.eq.${currentUserId}`);
 
-      if (convError || !convData || convData.length === 0) {
+      if (convError) {
+        console.warn('Supabase fetchConversationsAndMessages error:', convError);
         return null;
+      }
+
+      if (!convData || convData.length === 0) {
+        return [];
       }
 
       const convIds = convData.map((c: any) => c.ConversationID || c.id);
