@@ -1251,13 +1251,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (remote !== null) {
         setCommentsMap(prev => {
           const existing = prev[videoId] || [];
-          const existingMap = new Map<string, { isLiked?: boolean; likesCount?: number; likedBy?: string[] }>();
+          const existingMap = new Map<string, { isLiked?: boolean; likesCount?: number; likedBy?: string[]; timestamp?: string }>();
           existing.forEach(c => {
-            existingMap.set(c.id, { isLiked: c.isLiked, likesCount: c.likesCount, likedBy: c.likedBy });
-            if (toUuid(c.id) !== c.id) existingMap.set(toUuid(c.id), { isLiked: c.isLiked, likesCount: c.likesCount, likedBy: c.likedBy });
+            existingMap.set(c.id, { isLiked: c.isLiked, likesCount: c.likesCount, likedBy: c.likedBy, timestamp: c.timestamp });
+            if (toUuid(c.id) !== c.id) existingMap.set(toUuid(c.id), { isLiked: c.isLiked, likesCount: c.likesCount, likedBy: c.likedBy, timestamp: c.timestamp });
             (c.replies || []).forEach(r => {
-              existingMap.set(r.id, { isLiked: r.isLiked, likesCount: r.likesCount, likedBy: r.likedBy });
-              if (toUuid(r.id) !== r.id) existingMap.set(toUuid(r.id), { isLiked: r.isLiked, likesCount: r.likesCount, likedBy: r.likedBy });
+              existingMap.set(r.id, { isLiked: r.isLiked, likesCount: r.likesCount, likedBy: r.likedBy, timestamp: r.timestamp });
+              if (toUuid(r.id) !== r.id) existingMap.set(toUuid(r.id), { isLiked: r.isLiked, likesCount: r.likesCount, likedBy: r.likedBy, timestamp: r.timestamp });
             });
           });
 
@@ -1287,8 +1287,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             }).map(r => {
               const exR = existingMap.get(r.id) || existingMap.get(toUuid(r.id));
               const mInfo = mergeLikes(r.likedBy, exR?.likedBy, Math.max(r.likesCount || 0, exR?.likesCount || 0));
+
+              // Preserve valid historical timestamp if remote is missing, newly generated, or 'Just now'
+              let finalReplyTimestamp = r.timestamp;
+              if (exR?.timestamp && exR.timestamp.toLowerCase() !== 'just now') {
+                if (!finalReplyTimestamp || finalReplyTimestamp.toLowerCase() === 'just now') {
+                  finalReplyTimestamp = exR.timestamp;
+                } else {
+                  const remoteMs = toTimestampMillis(finalReplyTimestamp);
+                  const localMs = toTimestampMillis(exR.timestamp);
+                  if (localMs > 0 && (remoteMs <= 0 || (remoteMs > localMs && remoteMs - localMs > 60000))) {
+                    finalReplyTimestamp = exR.timestamp;
+                  }
+                }
+              }
+
               return {
                 ...r,
+                timestamp: finalReplyTimestamp,
                 likedBy: mInfo.likedBy,
                 likesCount: mInfo.likesCount,
                 isLiked: mInfo.isLiked || Boolean(exR?.isLiked),
@@ -1297,8 +1313,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
             const exC = existingMap.get(c.id) || existingMap.get(toUuid(c.id));
             const mInfo = mergeLikes(c.likedBy, exC?.likedBy, Math.max(c.likesCount || 0, exC?.likesCount || 0));
+
+            // Preserve valid historical timestamp if remote is missing, newly generated, or 'Just now'
+            let finalCommentTimestamp = c.timestamp;
+            if (exC?.timestamp && exC.timestamp.toLowerCase() !== 'just now') {
+              if (!finalCommentTimestamp || finalCommentTimestamp.toLowerCase() === 'just now') {
+                finalCommentTimestamp = exC.timestamp;
+              } else {
+                const remoteMs = toTimestampMillis(finalCommentTimestamp);
+                const localMs = toTimestampMillis(exC.timestamp);
+                if (localMs > 0 && (remoteMs <= 0 || (remoteMs > localMs && remoteMs - localMs > 60000))) {
+                  finalCommentTimestamp = exC.timestamp;
+                }
+              }
+            }
+
             return {
               ...c,
+              timestamp: finalCommentTimestamp,
               replies: cleanReplies,
               likedBy: mInfo.likedBy,
               likesCount: mInfo.likesCount,

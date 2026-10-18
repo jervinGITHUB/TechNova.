@@ -9,6 +9,7 @@ import {
   AUDIO_STORAGE_SQL_SNIPPET,
   PRE_BAN_APPEAL_SQL_SNIPPET,
   USER_BLOCKS_SQL_SNIPPET,
+  COMMENTS_TIMESTAMP_SQL_SNIPPET,
 } from '../../lib/supabase';
 import {
   Database,
@@ -45,10 +46,11 @@ export const SupabaseVercelModal: React.FC<SupabaseVercelModalProps> = ({
   const [copiedLivestreamSql, setCopiedLivestreamSql] = useState(false);
   const [copiedAudioSql, setCopiedAudioSql] = useState(false);
   const [copiedAppealSql, setCopiedAppealSql] = useState(false);
+  const [copiedCommentSql, setCopiedCommentSql] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
-  const [activeSqlTab, setActiveSqlTab] = useState<'audio' | 'livestream' | 'appeal' | 'block' | 'full'>('audio');
+  const [activeSqlTab, setActiveSqlTab] = useState<'comments' | 'appeal' | 'audio' | 'livestream' | 'block' | 'full'>('comments');
 
   if (!isOpen) return null;
 
@@ -280,7 +282,19 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
                 <span>2. Supabase SQL Schema (Tables & Policies)</span>
               </h3>
               <div className="flex items-center gap-2">
-                {activeSqlTab === 'audio' ? (
+                {activeSqlTab === 'comments' ? (
+                  <button
+                    onClick={() => {
+                      navigator.clipboard?.writeText(COMMENTS_TIMESTAMP_SQL_SNIPPET);
+                      setCopiedCommentSql(true);
+                      setTimeout(() => setCopiedCommentSql(false), 2000);
+                    }}
+                    className="py-1 px-3 rounded-xl bg-gradient-to-r from-pink-500 to-rose-600 hover:from-pink-400 hover:to-rose-500 text-white font-bold text-[11px] flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                  >
+                    {copiedCommentSql ? <Check className="w-3.5 h-3.5 text-white" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedCommentSql ? 'Copied Comment Timestamps SQL!' : 'Copy Comment Timestamps SQL'}</span>
+                  </button>
+                ) : activeSqlTab === 'audio' ? (
                   <button
                     onClick={() => {
                       navigator.clipboard?.writeText(AUDIO_STORAGE_SQL_SNIPPET);
@@ -324,8 +338,19 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
               </div>
             </div>
 
-            {/* Sub-tabs for Audio vs Livestream vs Appeal vs Full Schema */}
+            {/* Sub-tabs for Comments vs Audio vs Livestream vs Appeal vs Full Schema */}
             <div className="flex items-center gap-1.5 mb-2 bg-[#0d0d14] p-1 rounded-xl border border-neutral-800 w-fit flex-wrap">
+              <button
+                type="button"
+                onClick={() => setActiveSqlTab('comments')}
+                className={`py-1 px-2.5 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                  activeSqlTab === 'comments'
+                    ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40 shadow-sm'
+                    : 'text-neutral-400 hover:text-white'
+                }`}
+              >
+                Comments Timestamps (0 Disk IO)
+              </button>
               <button
                 type="button"
                 onClick={() => setActiveSqlTab('appeal')}
@@ -384,7 +409,11 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
             </div>
 
             <p className="text-neutral-400 mb-2">
-              {activeSqlTab === 'appeal' ? (
+              {activeSqlTab === 'comments' ? (
+                <span>
+                  <strong>100% Safe & Zero Disk IO:</strong> Adds non-blocking <code className="text-rose-400">CreatedAt</code> and <code className="text-rose-400">created_at</code> columns to the <code className="text-white">Comment</code> table with automatic UTC timestamp defaults, safely updates any rows where timestamp was null, and creates a B-Tree index on <code className="text-rose-400">(VideoID, CreatedAt)</code> to eliminate disk IO and sequential table scans.
+                </span>
+              ) : activeSqlTab === 'appeal' ? (
                 <span>
                   <strong>100% Safe & Zero Disk IO:</strong> Adds non-blocking columns to the <code className="text-amber-400">User</code> table for pre-ban warnings and appeal counter-proofs, with lightweight B-Tree indexes that protect disk IO and guarantee instant lookups.
                 </span>
@@ -407,7 +436,7 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
               )}
             </p>
             <div className="bg-[#0c0c10] p-3 rounded-xl border border-neutral-800 font-mono text-[11px] text-neutral-400 max-h-40 overflow-y-auto leading-relaxed">
-              <pre>{activeSqlTab === 'appeal' ? PRE_BAN_APPEAL_SQL_SNIPPET : activeSqlTab === 'audio' ? AUDIO_STORAGE_SQL_SNIPPET : activeSqlTab === 'livestream' ? LIVESTREAM_SQL_SNIPPET : activeSqlTab === 'block' ? USER_BLOCKS_SQL_SNIPPET : SUPABASE_SQL_SCHEMA}</pre>
+              <pre>{activeSqlTab === 'comments' ? COMMENTS_TIMESTAMP_SQL_SNIPPET : activeSqlTab === 'appeal' ? PRE_BAN_APPEAL_SQL_SNIPPET : activeSqlTab === 'audio' ? AUDIO_STORAGE_SQL_SNIPPET : activeSqlTab === 'livestream' ? LIVESTREAM_SQL_SNIPPET : activeSqlTab === 'block' ? USER_BLOCKS_SQL_SNIPPET : SUPABASE_SQL_SCHEMA}</pre>
             </div>
           </div>
 

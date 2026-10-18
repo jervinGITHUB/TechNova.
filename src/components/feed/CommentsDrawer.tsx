@@ -396,7 +396,7 @@ export const CommentsDrawer: React.FC = () => {
                               {comment.name}
                             </span>
                             <span className="text-[10px] text-neutral-400 font-normal">
-                              {formatRealtimeAgo(comment.timestamp || new Date().toISOString())}
+                              {formatRealtimeAgo(comment.timestamp)}
                             </span>
                           </div>
 
@@ -476,7 +476,7 @@ export const CommentsDrawer: React.FC = () => {
                                       {reply.name}
                                     </span>
                                     <span className="text-[9px] text-neutral-400">
-                                      {formatRealtimeAgo(reply.timestamp || new Date().toISOString())}
+                                      {formatRealtimeAgo(reply.timestamp)}
                                     </span>
                                   </div>
 

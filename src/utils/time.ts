@@ -92,12 +92,51 @@ export const toTimestampMillis = (timestampOrDate?: string | number | null): num
 };
 
 /**
+ * Persistent Comment Timestamps Store in localStorage.
+ * Ensures that once a comment's creation time is determined, it remains STABLE
+ * across page reloads, drawer toggles, and Supabase syncs, and NEVER gets overwritten
+ * with a fresh "new Date()" timestamp!
+ */
+export const getCommentTimestampCache = (): Record<string, string> => {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem('viralhub_comment_timestamps_v1');
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+};
+
+export const getCommentTimestampFromCache = (id?: string | null): string | null => {
+  if (!id) return null;
+  const cache = getCommentTimestampCache();
+  const cleanId = String(id).toLowerCase().trim();
+  return cache[cleanId] || null;
+};
+
+export const saveCommentTimestampToCache = (id?: string | null, timestamp?: string | null): void => {
+  if (typeof window === 'undefined' || !id || !timestamp) return;
+  try {
+    const cleanId = String(id).toLowerCase().trim();
+    const cleanTimestamp = String(timestamp).trim();
+    if (!cleanId || !cleanTimestamp || cleanTimestamp.toLowerCase() === 'just now') return;
+    const cache = getCommentTimestampCache();
+    // Only save if not already present or if current entry is invalid
+    if (!cache[cleanId] || toTimestampMillis(cache[cleanId]) <= 0) {
+      cache[cleanId] = cleanTimestamp;
+      localStorage.setItem('viralhub_comment_timestamps_v1', JSON.stringify(cache));
+    }
+  } catch {}
+};
+
+/**
  * Realtime relative time formatter for social feeds & comments.
  */
 export const formatRealtimeAgo = (timestampOrDate?: string | number | null): string => {
   if (!timestampOrDate) return 'Just now';
 
   const str = typeof timestampOrDate === 'string' ? timestampOrDate.trim() : '';
+  if (!str) return 'Just now';
   if (str.toLowerCase() === 'just now') return 'Just now';
 
   const millis = toTimestampMillis(timestampOrDate);
