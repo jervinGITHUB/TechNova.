@@ -61,7 +61,7 @@ export const BottomNav: React.FC = () => {
         </span>
       </button>
 
-      {/* 3. Iconic TikTok Center (+) Create Button */}
+      {/* 3. ViralHub System Branded (+) Create / Upload Button */}
       <div className="flex items-center justify-center flex-1 h-full">
         <button
           type="button"
@@ -70,16 +70,12 @@ export const BottomNav: React.FC = () => {
           aria-label="Create Video"
           title="Create Video"
         >
-          {/* TikTok Cyan & Pink 3D Accent Borders */}
-          <div className="relative w-11 h-7 flex items-center justify-center">
-            {/* Cyan layer (left) */}
-            <div className="absolute inset-0 bg-[#00f2fe] rounded-lg -translate-x-1" />
-            {/* Magenta/Pink layer (right) */}
-            <div className="absolute inset-0 bg-[#ff007a] rounded-lg translate-x-1" />
-            {/* Black / Dark Center Box */}
-            <div className="relative z-10 w-9 h-7 bg-white text-black rounded-lg flex items-center justify-center shadow-md">
-              <Plus className="w-5 h-5 stroke-[3] text-black" />
-            </div>
+          {/* ViralHub Ambient Brand Glow */}
+          <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] opacity-40 blur-sm group-hover:opacity-75 transition-opacity" />
+
+          {/* ViralHub Signature Pink & Magenta Core Button */}
+          <div className="relative w-11 h-7.5 rounded-xl bg-gradient-to-r from-[#ff007a] via-[#ff1a8c] to-[#d00062] border border-pink-400/35 flex items-center justify-center shadow-[0_0_14px_rgba(255,0,122,0.45)] group-hover:shadow-[0_0_20px_rgba(255,0,122,0.7)] transition-all">
+            <Plus className="w-5 h-5 stroke-[3] text-white" />
           </div>
         </button>
       </div>

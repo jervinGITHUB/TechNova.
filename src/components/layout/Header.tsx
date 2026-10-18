@@ -140,7 +140,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             className="cursor-pointer py-1 px-1 hover:opacity-90 transition-opacity"
             title="ViralHub Home"
           >
-            <ViralHubLogo size="sm" />
+            <ViralHubLogo size="sm" showText={false} />
           </div>
           <span className="text-xs font-bold font-brand text-white tracking-wider border-l border-neutral-800 pl-3">
             MESSAGES
@@ -206,6 +206,8 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
   };
 
   const isFeedTab = activeTab === 'home' || activeTab === 'following' || activeTab === 'friends';
+  const isExploreOrProfile = activeTab === 'explore' || activeTab === 'profile' || activeTab === 'edit_profile';
+  const showMobileLive = !isExploreOrProfile && (isFeedTab || activeTab === 'live' || activeTab === 'live_viewer');
 
   return (
     <header
@@ -471,21 +473,31 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
               <Menu className="w-5 h-5 text-neutral-300" />
             </button>
 
-            {/* Mobile LIVE Button (like TikTok top-left) */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('live')}
-              className={`md:hidden flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all text-xs font-bold cursor-pointer ${
-                activeTab === 'live' || activeTab === 'live_viewer'
-                  ? 'bg-[#ff007a]/20 border-[#ff007a] text-[#ff007a] shadow-[0_0_10px_rgba(255,0,122,0.4)]'
-                  : 'bg-black/35 backdrop-blur-md border-white/20 text-white hover:text-white drop-shadow'
-              }`}
-              title="Watch Live Streams"
-              aria-label="Live Streams"
-            >
-              <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse" />
-              <span>LIVE</span>
-            </button>
+            {/* Mobile: LIVE button on feed tabs, or iconic "V" logo emblem on left side on Explore, Profile, etc. */}
+            {showMobileLive ? (
+              <button
+                type="button"
+                onClick={() => setActiveTab('live')}
+                className={`md:hidden flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all text-xs font-bold cursor-pointer ${
+                  activeTab === 'live' || activeTab === 'live_viewer'
+                    ? 'bg-[#ff007a]/20 border-[#ff007a] text-[#ff007a] shadow-[0_0_10px_rgba(255,0,122,0.4)]'
+                    : 'bg-black/35 backdrop-blur-md border-white/20 text-white hover:text-white drop-shadow'
+                }`}
+                title="Watch Live Streams"
+                aria-label="Live Streams"
+              >
+                <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse" />
+                <span>LIVE</span>
+              </button>
+            ) : (
+              <div
+                onClick={() => setActiveTab('home')}
+                className="md:hidden flex items-center cursor-pointer hover:opacity-90 active:scale-95 transition-all p-0.5"
+                title="ViralHub Home"
+              >
+                <ViralHubLogo size="sm" showText={false} />
+              </div>
+            )}
 
             {/* Desktop Search Bar (Strictly on the LEFT side like in TikTok / 3rd screenshot) */}
             <div ref={searchContainerRef} className="hidden md:block relative z-40 w-72 lg:w-96 xl:w-[420px]">
@@ -704,10 +716,10 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             </div>
           </div>
 
-          {/* Center Area: Desktop Spacer, Mobile Feed Switcher / Logo */}
+          {/* Center Area: Desktop Spacer, Mobile Feed Switcher */}
           <div className="flex-1 flex items-center justify-center min-w-0 px-1">
             {/* Mobile Top Feed Switcher: Following | Friends | For You */}
-            {(activeTab === 'home' || activeTab === 'following' || activeTab === 'friends') ? (
+            {(activeTab === 'home' || activeTab === 'following' || activeTab === 'friends') && (
               <div className="md:hidden flex items-center justify-center gap-3.5 sm:gap-5 text-sm font-semibold select-none drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]">
                 <button
                   type="button"
@@ -748,10 +760,6 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
                     <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.9)]" />
                   )}
                 </button>
-              </div>
-            ) : (
-              <div className="md:hidden flex items-center justify-center">
-                <ViralHubLogo size="sm" />
               </div>
             )}
           </div>
