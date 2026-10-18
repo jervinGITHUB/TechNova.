@@ -38,6 +38,30 @@ const formatCount = (count?: number | string): string => {
   return num.toString();
 };
 
+export const parseNumericCount = (val?: number | string): number => {
+  if (typeof val === 'number') return isNaN(val) ? 0 : val;
+  if (!val) return 0;
+  const str = String(val).trim().toUpperCase();
+  if (str.endsWith('M')) {
+    return (parseFloat(str.slice(0, -1)) || 0) * 1000000;
+  }
+  if (str.endsWith('K')) {
+    return (parseFloat(str.slice(0, -1)) || 0) * 1000;
+  }
+  const parsed = parseFloat(str.replace(/[^0-9.]/g, ''));
+  return isNaN(parsed) ? 0 : parsed;
+};
+
+// Composite Virality Score Formula:
+// Views are baseline reach (1x), with high weights on active engagement (Likes x5, Comments x8, Shares x10)
+export const getViralityScore = (video: Video): number => {
+  const views = parseNumericCount(video.viewsCount);
+  const likes = typeof video.likesCount === 'number' ? video.likesCount : parseNumericCount(video.likesCount);
+  const comments = typeof video.commentsCount === 'number' ? video.commentsCount : 0;
+  const shares = typeof video.sharesCount === 'number' ? video.sharesCount : 0;
+  return views + (likes * 5) + (comments * 8) + (shares * 10);
+};
+
 export const ExploreThumbnailCard: React.FC<{ video: Video }> = ({ video }) => {
   const [imgError, setImgError] = useState(false);
   const [videoLoaded, setVideoLoaded] = useState(false);
@@ -286,43 +310,60 @@ export const ExploreGrid: React.FC = () => {
     );
   }, [users, cleanQuery]);
 
-  // Filter videos by search query and trending tag filter
+  // Filter videos by search query and trending tag filter, SORTING ALL VIRALS TO THE VERY TOP
   const filteredVideos = useMemo(() => {
-    return deduplicateVideos(videos).filter(v => {
-      // Explore grid strictly features public videos only
-      if (v.audience === 'only_me' || v.privacy === 'private' || v.audience === 'friends' || v.privacy === 'friends') return false;
-      if (v.status === 'rejected') return false;
-      if (v.creator?.isBanned) return false;
-      if (checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned) return false;
-      const creatorUser = users.find(u => isSameUser(u.id, v.creatorId) || isSameUser(u.id, v.creator?.id));
-      if (creatorUser?.isBanned || (creatorUser && checkIsUserBanned(creatorUser.id, creatorUser.email, creatorUser).isBanned)) return false;
-      if (v.status === 'pending') {
-        if (!currentUser || v.creatorId !== currentUser.id) return false;
-      }
-
-      // Filter by active selected tag chip
-      if (selectedTag !== 'all') {
-        const tagToMatch = selectedTag.replace('#', '').toLowerCase();
-        const hasMatchingTag =
-          v.hashtags.some(t => t.toLowerCase().replace('#', '') === tagToMatch) ||
-          v.caption.toLowerCase().includes(`#${tagToMatch}`) ||
-          v.caption.toLowerCase().includes(tagToMatch);
-        if (!hasMatchingTag) return false;
-      }
-
-      // Filter by global search query
-      if (cleanQuery) {
-        const matchesCaption = v.caption.toLowerCase().includes(cleanQuery);
-        const matchesDisplayName = v.creator.displayName.toLowerCase().includes(cleanQuery);
-        const matchesUsername = v.creator.username.toLowerCase().includes(cleanQuery);
-        const matchesTags = v.hashtags.some(tag => tag.toLowerCase().includes(cleanQuery));
-        if (!matchesCaption && !matchesDisplayName && !matchesUsername && !matchesTags) {
-          return false;
+    return deduplicateVideos(videos)
+      .filter(v => {
+        // Explore grid strictly features public videos only
+        if (v.audience === 'only_me' || v.privacy === 'private' || v.audience === 'friends' || v.privacy === 'friends') return false;
+        if (v.status === 'rejected') return false;
+        if (v.creator?.isBanned) return false;
+        if (checkIsUserBanned(v.creatorId || v.creator?.id, v.creator?.email, v.creator).isBanned) return false;
+        const creatorUser = users.find(u => isSameUser(u.id, v.creatorId) || isSameUser(u.id, v.creator?.id));
+        if (creatorUser?.isBanned || (creatorUser && checkIsUserBanned(creatorUser.id, creatorUser.email, creatorUser).isBanned)) return false;
+        if (v.status === 'pending') {
+          if (!currentUser || v.creatorId !== currentUser.id) return false;
         }
-      }
 
-      return true;
-    });
+        // Filter by active selected tag chip
+        if (selectedTag !== 'all') {
+          const tagToMatch = selectedTag.replace('#', '').toLowerCase();
+          const hasMatchingTag =
+            v.hashtags.some(t => t.toLowerCase().replace('#', '') === tagToMatch) ||
+            v.caption.toLowerCase().includes(`#${tagToMatch}`) ||
+            v.caption.toLowerCase().includes(tagToMatch);
+          if (!hasMatchingTag) return false;
+        }
+
+        // Filter by global search query
+        if (cleanQuery) {
+          const matchesCaption = v.caption.toLowerCase().includes(cleanQuery);
+          const matchesDisplayName = v.creator.displayName.toLowerCase().includes(cleanQuery);
+          const matchesUsername = v.creator.username.toLowerCase().includes(cleanQuery);
+          const matchesTags = v.hashtags.some(tag => tag.toLowerCase().includes(cleanQuery));
+          if (!matchesCaption && !matchesDisplayName && !matchesUsername && !matchesTags) {
+            return false;
+          }
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        // 1. Primary: Highest composite virality score first (Views + Likes*5 + Comments*8 + Shares*10)
+        const scoreA = getViralityScore(a);
+        const scoreB = getViralityScore(b);
+        if (scoreB !== scoreA) {
+          return scoreB - scoreA;
+        }
+        // 2. Secondary: Raw views count
+        const viewsA = parseNumericCount(a.viewsCount);
+        const viewsB = parseNumericCount(b.viewsCount);
+        if (viewsB !== viewsA) {
+          return viewsB - viewsA;
+        }
+        // 3. Tertiary: Newest created video
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      });
   }, [videos, currentUser, selectedTag, cleanQuery]);
 
   // Keep modalVideo state in sync with updated video data (e.g. like count / like status)
@@ -575,17 +616,22 @@ export const ExploreGrid: React.FC = () => {
       {/* 4. Minimalist Edge-to-Edge Responsive Video Wall */}
       {filteredVideos.length > 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-2.5 sm:gap-4">
-          {filteredVideos.map(video => (
-            <div
-              key={video.id}
-              onClick={() => {
-                setModalVideo(video);
-                setIsPlaying(true);
-              }}
-              className="group relative bg-[#13131a] rounded-2xl overflow-hidden border border-neutral-800/90 hover:border-[#ff007a]/70 shadow-lg hover:shadow-[0_8px_24px_rgba(255,0,122,0.2)] transition-all duration-300 flex flex-col aspect-[9/15] cursor-pointer"
-            >
-              {/* Thumbnail / Video Preview */}
-              <ExploreThumbnailCard video={video} />
+          {filteredVideos.map((video, index) => {
+            const vScore = getViralityScore(video);
+            const isTopViral = index === 0 && vScore > 0;
+            const isTopTrending = index > 0 && index < 3 && vScore > 0;
+
+            return (
+              <div
+                key={video.id}
+                onClick={() => {
+                  setModalVideo(video);
+                  setIsPlaying(true);
+                }}
+                className="group relative bg-[#13131a] rounded-2xl overflow-hidden border border-neutral-800/90 hover:border-[#ff007a]/70 shadow-lg hover:shadow-[0_8px_24px_rgba(255,0,122,0.2)] transition-all duration-300 flex flex-col aspect-[9/15] cursor-pointer"
+              >
+                {/* Thumbnail / Video Preview */}
+                <ExploreThumbnailCard video={video} />
 
                 {/* Subtle dark gradient overlay */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent pointer-events-none" />
@@ -595,7 +641,25 @@ export const ExploreGrid: React.FC = () => {
                   <Play className="w-5 h-5 ml-0.5 fill-white" />
                 </div>
 
-                {/* Top Badges (Likes & Views) */}
+                {/* Viral Ranking Badge on Top Left */}
+                {isTopViral ? (
+                  <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full bg-gradient-to-r from-[#ff007a] to-amber-500 text-white text-[10px] font-extrabold shadow-[0_0_12px_rgba(255,0,122,0.7)] tracking-wide">
+                    <Flame className="w-3 h-3 fill-white" />
+                    <span>#1 VIRAL</span>
+                  </div>
+                ) : isTopTrending ? (
+                  <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1 px-2 py-0.5 rounded-full bg-black/70 backdrop-blur-md border border-[#ff007a]/60 text-pink-400 text-[10px] font-extrabold shadow-sm">
+                    <Flame className="w-3 h-3 text-[#ff007a]" />
+                    <span>#{index + 1} VIRAL</span>
+                  </div>
+                ) : vScore >= 100 ? (
+                  <div className="absolute top-2.5 left-2.5 z-10 flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-black/60 backdrop-blur-md border border-amber-500/40 text-amber-300 text-[10px] font-bold">
+                    <Flame className="w-2.5 h-2.5 text-amber-400" />
+                    <span>VIRAL</span>
+                  </div>
+                ) : null}
+
+                {/* Top Right Badges (Views) */}
                 <div className="absolute top-2.5 right-2.5 z-10 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-white text-[11px] font-semibold">
                   <Eye className="w-3 h-3 text-neutral-300" />
                   <span>{formatCount(video.viewsCount || 0)}</span>
@@ -641,7 +705,8 @@ export const ExploreGrid: React.FC = () => {
                   </div>
                 </div>
               </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <div className="text-center py-24 px-4 bg-[#12121a] rounded-3xl border border-neutral-800 text-neutral-400">

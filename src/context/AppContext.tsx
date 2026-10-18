@@ -507,6 +507,7 @@ interface AppContextType {
   logout: (saveToDevice?: boolean) => void;
   quickLoginAs: (userId: string) => void;
   prepareAddNewAccount: () => void;
+  switchingAccountTarget: User | null;
 
   // Navigation
   activeTab: AppTab;
@@ -1025,8 +1026,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     storage.get<Record<string, string[]>>('user_likes_map', {})
   );
 
-  // Account switcher modal
+  // Account switcher modal & animated switching loading screen
   const [switchAccountModalOpen, setSwitchAccountModalOpen] = useState<boolean>(false);
+  const [switchingAccountTarget, setSwitchingAccountTarget] = useState<User | null>(null);
 
   // Saved accounts list for switching accounts on this device
   const [savedAccounts, setSavedAccounts] = useState<User[]>(() => {
@@ -3713,10 +3715,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       appealSubmittedAt: banInfo.appealSubmittedAt,
     };
 
+    // 1. Immediately trigger the animated branded loading screen
+    setSwitchingAccountTarget(updatedTarget);
+    setSwitchAccountModalOpen(false);
+
+    // 2. Prepare user references, storage, and device session in memory immediately
     currentUserRef.current = updatedTarget;
-    setCurrentUser(updatedTarget);
     storage.set('currentUser', updatedTarget);
-    setIsAdmin(isTargetAdmin);
     recordSavedAccount(updatedTarget);
     markAccountLoggedInOnDevice(updatedTarget.id, updatedTarget.email);
 
@@ -3736,13 +3741,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    setActiveTab('home');
-    setSelectedUserId(null);
-    setActiveConversationId(null);
-    setMessagesMobileView('list');
-    setCommentsVideoId(null);
-    setSwitchAccountModalOpen(false);
-
     // Switch conversations to target account
     const userConvKey = `conversations_${toUuid(updatedTarget.id)}`;
     const savedForUser = storage.get<Conversation[]>(userConvKey, null as any);
@@ -3753,18 +3751,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setConversations(deduplicateConversations(raw, updatedTarget.id));
     }
 
-    // Refresh feed directly with updatedTarget so syncWithSupabase uses new user!
-    refreshFeed(updatedTarget);
+    // 3. Keep branded loading screen visible smoothly so switching is never plain or abrupt
+    setTimeout(() => {
+      setCurrentUser(updatedTarget);
+      setIsAdmin(isTargetAdmin);
+      setActiveTab('home');
+      setSelectedUserId(null);
+      setActiveConversationId(null);
+      setMessagesMobileView('list');
+      setCommentsVideoId(null);
 
-    // Also verify remote admin asynchronously in case not cached
-    if (!isTargetAdmin && updatedTarget.email) {
-      supabaseDb.checkIsAdmin(updatedTarget).then(remoteAdmin => {
-        if (remoteAdmin) {
-          setIsAdmin(true);
-          setCurrentUser(prev => (prev && isSameUser(prev.id, updatedTarget.id) ? { ...prev, role: 'admin' } : prev));
-        }
-      }).catch(() => {});
-    }
+      // Refresh feed directly with updatedTarget
+      refreshFeed(updatedTarget);
+
+      // Also verify remote admin asynchronously in case not cached
+      if (!isTargetAdmin && updatedTarget.email) {
+        supabaseDb.checkIsAdmin(updatedTarget).then(remoteAdmin => {
+          if (remoteAdmin) {
+            setIsAdmin(true);
+            setCurrentUser(prev => (prev && isSameUser(prev.id, updatedTarget.id) ? { ...prev, role: 'admin' } : prev));
+          }
+        }).catch(() => {});
+      }
+
+      // Smoothly dismiss loading screen after transition completes
+      setTimeout(() => {
+        setSwitchingAccountTarget(null);
+      }, 350);
+    }, 750);
   };
 
   const prepareAddNewAccount = () => {
@@ -8530,6 +8544,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         syncAllToSupabase,
         switchAccountModalOpen,
         setSwitchAccountModalOpen,
+        switchingAccountTarget,
         savedAccounts,
         removeSavedAccount,
         userLikes,

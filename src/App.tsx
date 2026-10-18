@@ -27,6 +27,7 @@ import { InAppNotificationToast } from './components/notifications/InAppNotifica
 import { PreBanWarningBanner } from './components/notifications/PreBanWarningBanner';
 import { PreBanAppealModal } from './components/modals/PreBanAppealModal';
 import { ViralHubLogo } from './components/common/ViralHubLogo';
+import { Avatar } from './components/common/Avatar';
 import { X } from 'lucide-react';
 
 const AppContent: React.FC = () => {
@@ -40,6 +41,7 @@ const AppContent: React.FC = () => {
     isAdmin,
     switchAccountModalOpen,
     setSwitchAccountModalOpen,
+    switchingAccountTarget,
     resolvedTheme,
     blockedUsersModalOpen,
     setBlockedUsersModalOpen,
@@ -257,6 +259,50 @@ const AppContent: React.FC = () => {
         onClose={() => setSupabaseModalOpen(false)}
         onConnected={syncWithSupabase}
       />
+
+      {/* Account Switching Loading Screen (guarantees switching is never plain) */}
+      {switchingAccountTarget && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#0a0a10]/95 backdrop-blur-2xl text-white select-none animate-fadeIn">
+          {/* Ambient radial glow in brand hot pink */}
+          <div className="absolute w-96 h-96 rounded-full bg-[#ff007a]/15 blur-[100px] pointer-events-none animate-pulse" />
+
+          <div className="relative z-10 flex flex-col items-center text-center p-6 max-w-sm">
+            <ViralHubLogo size="lg" />
+
+            {/* Glowing Avatar Frame with spinning gradient ring */}
+            <div className="relative mt-8 mb-5">
+              <div className="absolute -inset-2 rounded-full bg-gradient-to-r from-[#ff007a] via-purple-500 to-cyan-400 animate-spin blur-md opacity-75" />
+              <div className="relative p-1 rounded-full bg-[#12121c]">
+                <Avatar
+                  src={switchingAccountTarget.avatar}
+                  alt={switchingAccountTarget.displayName || 'User'}
+                  size="xl"
+                  className="w-20 h-20 rounded-full border-2 border-white/90 shadow-2xl"
+                />
+              </div>
+            </div>
+
+            <div className="text-xl font-extrabold text-white font-brand drop-shadow">
+              {switchingAccountTarget.displayName || 'Creator'}
+            </div>
+            <div className="text-xs text-pink-400 font-mono mt-0.5">
+              @{switchingAccountTarget.username || 'user'}
+            </div>
+
+            {/* Loading Badge */}
+            <div className="mt-6 flex items-center gap-3 px-5 py-2.5 rounded-full bg-[#161622]/90 border border-neutral-700/80 shadow-2xl backdrop-blur-md">
+              <div className="w-4 h-4 border-2 border-[#ff007a] border-t-transparent rounded-full animate-spin" />
+              <span className="text-xs font-bold text-white tracking-wide">
+                Switching accounts...
+              </span>
+            </div>
+
+            <p className="text-[11px] text-neutral-400 mt-3 font-medium">
+              Preparing your personalized feed & creator studio
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
