@@ -621,12 +621,12 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   );
 
   return (
-    <div className="flex items-center justify-center md:gap-4 w-full h-full max-h-full shrink-0 select-none relative p-1 md:p-3">
+    <div className="flex items-center justify-center md:gap-4 w-full h-full max-h-full shrink-0 select-none relative p-0 md:p-3">
       {/* 1. Main 9:16 Video Player Container */}
       <div
         onClick={() => togglePlayPause()}
         data-video-player="true"
-        className="video-feed-card relative aspect-[9/16] h-full max-h-[calc(100dvh-4.5rem)] md:max-h-[calc(100vh-5.5rem)] w-auto max-w-full bg-black rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between cursor-pointer"
+        className="video-feed-card relative aspect-[9/16] h-full max-h-full md:max-h-[calc(100vh-5.5rem)] w-auto max-w-full bg-black rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between cursor-pointer"
       >
         {/* Subtle Ambient Glow for Letterboxed areas on Desktop (TikTok web style) */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none hidden md:block">
@@ -734,7 +734,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
         {/* Audio Removed / Muted Notice Banner */}
         {isAudioRemoved && (
-          <div className="absolute top-14 left-4 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-950/85 border border-rose-500/50 text-rose-300 text-[11px] font-bold shadow-lg backdrop-blur-md pointer-events-none animate-fadeIn whitespace-nowrap">
+          <div className="absolute top-16 md:top-14 left-4 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-950/85 border border-rose-500/50 text-rose-300 text-[11px] font-bold shadow-lg backdrop-blur-md pointer-events-none animate-fadeIn whitespace-nowrap">
             <VolumeX className="w-3.5 h-3.5 text-rose-400 shrink-0" />
             <span>Audio muted · Sound removed by admin</span>
           </div>
@@ -742,7 +742,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
         {/* Pending Moderation Banner for Creator's POV */}
         {video.status === 'pending' && (
-          <div className="absolute top-14 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-extrabold shadow-lg backdrop-blur-md animate-pulse whitespace-nowrap">
+          <div className="absolute top-16 md:top-14 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/90 text-black text-[10px] font-extrabold shadow-lg backdrop-blur-md animate-pulse whitespace-nowrap">
             <Clock className="w-3 h-3" />
             <span>Awaiting Admin Approval (Only you see this)</span>
           </div>
@@ -750,7 +750,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
         {/* Pin Action Feedback Toast */}
         {pinToast && (
-          <div className="absolute top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#14141e]/95 border border-[#ff007a]/60 text-white text-xs font-bold shadow-2xl backdrop-blur-md whitespace-nowrap animate-fadeIn">
+          <div className="absolute top-16 md:top-14 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#14141e]/95 border border-[#ff007a]/60 text-white text-xs font-bold shadow-2xl backdrop-blur-md whitespace-nowrap animate-fadeIn">
             <Pin className="w-3.5 h-3.5 text-[#ff007a]" />
             <span>{pinToast}</span>
           </div>

@@ -129,7 +129,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
         <div className="flex items-center gap-3">
           <button
             onClick={onToggleMobileNav}
-            className="p-2 text-neutral-300 hover:text-white rounded-xl hover:bg-neutral-800/80 transition-colors flex items-center justify-center cursor-pointer border border-neutral-800 hover:border-neutral-700"
+            className="hidden p-2 text-neutral-300 hover:text-white rounded-xl hover:bg-neutral-800/80 transition-colors items-center justify-center cursor-pointer border border-neutral-800 hover:border-neutral-700"
             aria-label="Toggle navigation menu"
             title="Navigation Menu"
           >
@@ -205,8 +205,18 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     setActiveTab('explore');
   };
 
+  const isFeedTab = activeTab === 'home' || activeTab === 'following' || activeTab === 'friends';
+
   return (
-    <header className="h-16 px-3 sm:px-6 border-b border-neutral-800/80 bg-[#0d0d12] sticky top-0 z-[70] flex items-center justify-between gap-3 shadow-md">
+    <header
+      className={`h-14 sm:h-16 px-3 sm:px-6 flex items-center justify-between gap-3 select-none transition-all ${
+        mobileSearchOpen
+          ? 'bg-[#0d0d12] sticky top-0 z-[70] border-b border-neutral-800 shadow-md'
+          : isFeedTab
+          ? 'md:relative absolute top-0 left-0 right-0 z-40 bg-gradient-to-b from-black/85 via-black/35 to-transparent md:bg-[#0d0d12] border-0 md:border-b md:border-neutral-800/80 shadow-none md:shadow-md'
+          : 'sticky top-0 z-40 bg-[#0d0d12]/80 md:bg-[#0d0d12] backdrop-blur-md border-b border-neutral-800/60 md:border-neutral-800/80 shadow-none md:shadow-md'
+      }`}
+    >
       {/* Background Dim Backdrop: Ensures search is always in the foreground and NEVER "on the back" of videos or feeds */}
       {(dropdownOpen || mobileSearchOpen) && (
         <div
@@ -468,7 +478,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
               className={`md:hidden flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all text-xs font-bold cursor-pointer ${
                 activeTab === 'live' || activeTab === 'live_viewer'
                   ? 'bg-[#ff007a]/20 border-[#ff007a] text-[#ff007a] shadow-[0_0_10px_rgba(255,0,122,0.4)]'
-                  : 'bg-[#181822]/90 border-neutral-800 text-neutral-300 hover:text-white'
+                  : 'bg-black/35 backdrop-blur-md border-white/20 text-white hover:text-white drop-shadow'
               }`}
               title="Watch Live Streams"
               aria-label="Live Streams"
@@ -698,29 +708,29 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
           <div className="flex-1 flex items-center justify-center min-w-0 px-1">
             {/* Mobile Top Feed Switcher: Following | Friends | For You */}
             {(activeTab === 'home' || activeTab === 'following' || activeTab === 'friends') ? (
-              <div className="md:hidden flex items-center justify-center gap-3.5 sm:gap-5 text-sm font-semibold select-none">
+              <div className="md:hidden flex items-center justify-center gap-3.5 sm:gap-5 text-sm font-semibold select-none drop-shadow-[0_1px_4px_rgba(0,0,0,0.85)]">
                 <button
                   type="button"
                   onClick={() => setActiveTab('following')}
                   className={`relative py-1 transition-colors cursor-pointer text-xs sm:text-sm ${
-                    activeTab === 'following' ? 'text-white font-bold' : 'text-neutral-400 hover:text-neutral-200'
+                    activeTab === 'following' ? 'text-white font-bold drop-shadow' : 'text-white/70 hover:text-white'
                   }`}
                 >
                   Following
                   {activeTab === 'following' && (
-                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.8)]" />
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.9)]" />
                   )}
                 </button>
                 <button
                   type="button"
                   onClick={() => setActiveTab('friends')}
                   className={`relative py-1 transition-colors cursor-pointer text-xs sm:text-sm ${
-                    activeTab === 'friends' ? 'text-white font-bold' : 'text-neutral-400 hover:text-neutral-200'
+                    activeTab === 'friends' ? 'text-white font-bold drop-shadow' : 'text-white/70 hover:text-white'
                   }`}
                 >
                   Friends
                   {activeTab === 'friends' && (
-                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.8)]" />
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.9)]" />
                   )}
                 </button>
                 <button
@@ -730,12 +740,12 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
                     else setActiveTab('home');
                   }}
                   className={`relative py-1 transition-colors cursor-pointer text-xs sm:text-sm ${
-                    activeTab === 'home' ? 'text-white font-bold' : 'text-neutral-400 hover:text-neutral-200'
+                    activeTab === 'home' ? 'text-white font-bold drop-shadow' : 'text-white/70 hover:text-white'
                   }`}
                 >
                   For You
                   {activeTab === 'home' && (
-                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.8)]" />
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.9)]" />
                   )}
                 </button>
               </div>
@@ -746,7 +756,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             )}
           </div>
 
-          {/* Right Controls: Mobile Search + Notifications + Mobile More Drawer Button + Desktop Upload Button */}
+          {/* Right Controls: Mobile Search + Notifications + Desktop Upload Button (3-lines mobile button hidden) */}
           <div className="flex items-center justify-end gap-1 sm:gap-3.5 shrink-0">
             {/* Mobile Search Icon Button */}
             <button
@@ -755,11 +765,11 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
                 setMobileSearchOpen(true);
                 setDropdownOpen(true);
               }}
-              className="md:hidden p-2 text-neutral-300 hover:text-white rounded-full hover:bg-[#181822] transition-colors cursor-pointer"
+              className="md:hidden p-2 text-white hover:text-white rounded-full hover:bg-white/10 transition-colors cursor-pointer drop-shadow"
               aria-label="Search"
               title="Search"
             >
-              <Search className="w-5 h-5 text-neutral-200" />
+              <Search className="w-5 h-5 text-white drop-shadow" />
             </button>
 
             {/* Notification Bell */}
@@ -768,21 +778,21 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
               className={`relative p-2 sm:p-2.5 rounded-full transition-colors cursor-pointer ${
                 activeTab === 'notifications'
                   ? 'bg-[#ff007a]/20 text-[#ff007a]'
-                  : 'text-neutral-300 hover:text-white hover:bg-[#181822]'
+                  : 'text-white hover:text-white hover:bg-white/10 md:text-neutral-300 md:hover:text-white md:hover:bg-[#181822]'
               }`}
               title="Notifications"
             >
-              <Bell className="w-5 h-5 text-amber-400" />
+              <Bell className="w-5 h-5 text-amber-400 drop-shadow" />
               {totalUnreadNotifications > 0 && (
                 <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-[#ff007a] shadow-[0_0_8px_rgba(255,0,122,0.8)] animate-pulse" />
               )}
             </button>
 
-            {/* Mobile Options Drawer Button */}
+            {/* Mobile Options Drawer (3 lines) Button: Hidden per user request */}
             <button
               type="button"
               onClick={onToggleMobileNav}
-              className="md:hidden p-2 text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800/80 transition-colors cursor-pointer"
+              className="hidden p-2 text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800/80 transition-colors cursor-pointer"
               aria-label="More options"
               title="More options"
             >

@@ -239,7 +239,7 @@ html.light aside [class*="bg-[#16161f]"] {
 }
 
 /* 5. Header in Light Mode */
-html.light header {
+html.light header:not(.bg-transparent):not([class*="bg-gradient"]) {
   background-color: #ffffff !important;
   border-color: #e2e8f0 !important;
 }
