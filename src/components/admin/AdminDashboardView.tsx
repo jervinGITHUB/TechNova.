@@ -5,6 +5,7 @@ import {
   supabaseDb,
   isSameUser,
   toUuid,
+  isAudioTrackDeleted,
 } from '../../lib/supabase';
 import { getCuratedCoverForTrack, resolveTrackCover, isDeprecatedDefaultTrack } from '../../utils/audio';
 import { AudioTrack, SystemStats } from '../../types';
@@ -39,6 +40,7 @@ import {
   Copy,
   ExternalLink,
   Info,
+  VolumeX,
 } from 'lucide-react';
 
 export const AdminDashboardView: React.FC = () => {
@@ -474,8 +476,8 @@ export const AdminDashboardView: React.FC = () => {
 
     setConfirmModal({
       title: 'Delete Audio Track',
-      message: `Are you sure you want to delete "${track.title}" by ${track.artist}? This will remove it from the sound picker across all users.`,
-      confirmText: 'Delete Track',
+      message: `Are you sure you want to delete "${track.title}" by ${track.artist}? All videos that used this audio track will automatically have their audio muted across the entire platform.`,
+      confirmText: 'Delete Track & Mute Videos',
       isDanger: true,
       onConfirm: async () => {
         if (playingTrackId === track.id && audioPlayerRef.current) {
@@ -483,7 +485,7 @@ export const AdminDashboardView: React.FC = () => {
           setPlayingTrackId(null);
         }
         await deleteAudioTrack(track.id);
-        showToast(`Track "${track.title}" deleted.`);
+        showToast(`Track "${track.title}" deleted and affected videos muted.`);
       },
     });
   };
@@ -1562,14 +1564,40 @@ export const AdminDashboardView: React.FC = () => {
                       </p>
 
                       {/* Attached Audio Track if any */}
-                      {video.audioTrack && (
-                        <div className="flex items-center gap-1.5 text-[11px] text-cyan-400 bg-cyan-950/20 px-2 py-1 rounded-md border border-cyan-500/20">
-                          <Music className="w-3 h-3 shrink-0" />
-                          <span className="truncate">{video.audioTrack.title}</span>
-                          <span className="text-neutral-500">·</span>
-                          <span className="text-neutral-400 truncate">{video.audioTrack.artist}</span>
-                        </div>
-                      )}
+                      {(() => {
+                        const isAudioRemoved = Boolean(
+                          video.isAudioMuted ||
+                          video.isAudioRemoved ||
+                          (video.audioTrack?.id && isAudioTrackDeleted(video.audioTrack.id))
+                        );
+
+                        if (isAudioRemoved) {
+                          return (
+                            <div className="flex items-center gap-1.5 text-[11px] text-rose-400 bg-rose-950/40 px-2 py-1 rounded-md border border-rose-500/30">
+                              <VolumeX className="w-3 h-3 text-rose-400 shrink-0" />
+                              <span className="truncate line-through font-semibold">
+                                {video.deletedAudioTrackTitle || video.audioTrack?.title || 'Sound removed'}
+                              </span>
+                              <span className="text-rose-300 font-bold shrink-0">
+                                (Muted · Track Deleted)
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        if (video.audioTrack) {
+                          return (
+                            <div className="flex items-center gap-1.5 text-[11px] text-cyan-400 bg-cyan-950/20 px-2 py-1 rounded-md border border-cyan-500/20">
+                              <Music className="w-3 h-3 shrink-0" />
+                              <span className="truncate">{video.audioTrack.title}</span>
+                              <span className="text-neutral-500">·</span>
+                              <span className="text-neutral-400 truncate">{video.audioTrack.artist}</span>
+                            </div>
+                          );
+                        }
+
+                        return null;
+                      })()}
 
                       {/* Appeal Note if pending */}
                       {video.appealStatus === 'pending' && video.appealReason && (

@@ -390,7 +390,7 @@ ON CONFLICT ("AdminID") DO NOTHING;`;
                 </span>
               ) : activeSqlTab === 'audio' ? (
                 <span>
-                  <strong>Safe & Zero Disk IO:</strong> Enables public file uploads for the <code className="text-cyan-400">audio</code> storage bucket and ensures columns exist on the <code className="text-cyan-400">AudioLibrary</code> table with permissive public RLS policies.
+                  <strong>Safe & Zero Disk IO:</strong> Enables public file uploads for the <code className="text-cyan-400">audio</code> storage bucket, ensures columns exist on the <code className="text-cyan-400">AudioLibrary</code> table with permissive RLS, and adds <code className="text-cyan-400">IsAudioMuted</code> with indexed foreign-key safety on the <code className="text-cyan-400">Video</code> table so videos with deleted sounds are automatically muted with zero disk IO surge.
                 </span>
               ) : activeSqlTab === 'livestream' ? (
                 <span>

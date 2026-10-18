@@ -64,6 +64,9 @@ import {
   fetchUserBlocksFromSupabase,
   saveUserBlockToSupabase,
   deleteUserBlockFromSupabase,
+  recordDeletedAudioTrack,
+  isAudioTrackDeleted,
+  getDeletedAudioTracks,
 } from '../lib/supabase';
 import { deduplicateNotifications } from '../utils/notifications';
 import { toTimestampMillis, getConversationLastActivityTime, formatConversationTime, formatMessageTime } from '../utils/time';
@@ -849,7 +852,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [videos, setVideos] = useState<Video[]>(() => {
     const stored = storage.get<Video[]>('videos', INITIAL_VIDEOS);
-    return deduplicateVideos(stored);
+    const deletedMap = getDeletedAudioTracks();
+    const sanitized = (stored || []).map(v => {
+      const trackId = v.audioTrack?.id;
+      const isDeleted = trackId ? isAudioTrackDeleted(trackId) : false;
+      if (isDeleted || v.isAudioMuted || v.isAudioRemoved) {
+        return {
+          ...v,
+          isAudioMuted: true,
+          isAudioRemoved: true,
+          audioVolume: 0,
+          audioMuteReason: v.audioMuteReason || 'Audio removed by administrator',
+          deletedAudioTrackTitle: v.deletedAudioTrackTitle || v.audioTrack?.title || (trackId ? deletedMap[trackId]?.title : undefined),
+          audioTrack: v.audioTrack ? { ...v.audioTrack, audioUrl: undefined } : undefined,
+        };
+      }
+      return v;
+    });
+    return deduplicateVideos(sanitized);
   });
 
   const [audioTracksList, setAudioTracksList] = useState<AudioTrack[]>(() => {
@@ -1691,8 +1711,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const isLocallyPinned = creatorPinnedList.includes(v.id) || creatorPinnedList.includes(toUuid(v.id));
             const existingV = existingVideosMap.get(v.id) || existingVideosMap.get(toUuid(v.id));
 
+            const trackId = v.audioTrack?.id || existingV?.audioTrack?.id;
+            const isTrackDeleted = trackId ? isAudioTrackDeleted(trackId) : false;
+            const isMuted = isTrackDeleted || Boolean(v.isAudioMuted) || Boolean(existingV?.isAudioMuted);
+            const resolvedAudioTrack = isMuted
+              ? (v.audioTrack || existingV?.audioTrack ? { ...(v.audioTrack || existingV?.audioTrack)!, audioUrl: undefined } : undefined)
+              : (v.audioTrack || existingV?.audioTrack);
+
             const baseVideo = {
+              ...existingV,
               ...v,
+              audioTrack: resolvedAudioTrack,
+              audioVolume: isMuted ? 0 : (v.audioVolume ?? existingV?.audioVolume ?? 100),
+              originalAudioMuted: v.originalAudioMuted ?? existingV?.originalAudioMuted ?? false,
+              originalAudioVolume: v.originalAudioVolume ?? existingV?.originalAudioVolume ?? 100,
+              isAudioMuted: isMuted,
+              isAudioRemoved: isMuted,
+              audioMuteReason: isMuted ? (v.audioMuteReason || existingV?.audioMuteReason || 'Audio removed by administrator') : undefined,
+              deletedAudioTrackTitle: isMuted ? (v.deletedAudioTrackTitle || existingV?.deletedAudioTrackTitle || resolvedAudioTrack?.title) : undefined,
               sharesCount: preservedShares,
               isPinned: v.isPinned || isLocallyPinned || Boolean(existingV?.isPinned),
               pinnedAt: v.pinnedAt || existingV?.pinnedAt,
@@ -6620,13 +6656,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteAudioTrack = async (trackId: string): Promise<boolean> => {
+    const trackUuid = toUuid(trackId);
+    const deletedTrack = (audioTracksList || []).find(
+      t => t.id === trackId || toUuid(t.id) === trackUuid
+    );
+    const trackTitle = deletedTrack?.title || '';
+
+    // 1. Record in deleted audio tracks registry immediately (synced across tabs/devices)
+    recordDeletedAudioTrack(trackId, trackTitle);
+    recordDeletedAudioTrack(trackUuid, trackTitle);
+
+    // 2. Remove from audio tracks list
     setAudioTracksList(prev => {
-      const updated = (prev || []).filter(t => t.id !== trackId);
+      const updated = (prev || []).filter(t => t.id !== trackId && toUuid(t.id) !== trackUuid);
       storage.set('audioTracks', updated);
       return updated;
     });
 
-    supabaseDb.deleteAudioTrack(trackId).catch(() => {});
+    // 3. CRITICAL: Automatically mute all videos that used this deleted audio track!
+    setVideos(prevVideos => {
+      const updatedVideos = (prevVideos || []).map(v => {
+        const vTrackId = v.audioTrack?.id;
+        const matchesTrack =
+          (vTrackId && (vTrackId === trackId || toUuid(vTrackId) === trackUuid)) ||
+          (trackTitle && v.audioTrack?.title && v.audioTrack.title.trim().toLowerCase() === trackTitle.trim().toLowerCase());
+
+        if (matchesTrack) {
+          return {
+            ...v,
+            isAudioMuted: true,
+            isAudioRemoved: true,
+            audioVolume: 0,
+            audioMuteReason: 'Audio removed by administrator',
+            deletedAudioTrackTitle: v.audioTrack?.title || trackTitle,
+            audioTrack: v.audioTrack
+              ? {
+                  ...v.audioTrack,
+                  audioUrl: undefined, // Strip URL so player cannot play background audio
+                }
+              : undefined,
+          };
+        }
+        return v;
+      });
+      storage.set('videos', updatedVideos);
+      return updatedVideos;
+    });
+
+    // 4. Safely update Supabase database in background (disassociates AudioTrackID & deletes track with zero disk IO surge)
+    supabaseDb.deleteAudioTrack(trackId, trackTitle).catch(() => {});
     return true;
   };
 

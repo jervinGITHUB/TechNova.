@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
-import { isSameUser, checkIsUserBanned, toUuid } from '../../lib/supabase';
+import { isSameUser, checkIsUserBanned, toUuid, isAudioTrackDeleted } from '../../lib/supabase';
 import { formatRealtimeAgo } from '../../utils/time';
 import { ShareVideoModal } from '../modals/ShareVideoModal';
 import { AudienceSettingsModal } from '../modals/AudienceSettingsModal';
@@ -30,6 +30,7 @@ import {
   Lock,
   Trash2,
   Pin,
+  VolumeX,
 } from 'lucide-react';
 
 interface VideoFeedCardProps {
@@ -151,6 +152,13 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
     }
   }, [isActive, video.id]);
 
+  // Determine if this video's audio has been muted or removed by administrator
+  const isAudioRemoved = Boolean(
+    video.isAudioMuted ||
+    video.isAudioRemoved ||
+    (video.audioTrack?.id && isAudioTrackDeleted(video.audioTrack.id))
+  );
+
   // Audio & Playback management strictly tied to isActive state:
   // ONLY the active visible video plays with sound! Other videos are paused.
   useEffect(() => {
@@ -181,12 +189,18 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         });
       }
 
-      // Background audio track playback
-      if (bgAudioEl && video.audioTrack?.audioUrl) {
-        const startPos = video.audioStartTime ?? video.audioTrack.trimStart ?? 0;
-        bgAudioEl.currentTime = startPos;
-        bgAudioEl.volume = Math.max(0, Math.min(1, (video.audioVolume ?? 100) / 100));
-        bgAudioEl.play().catch(() => {});
+      // Background audio track playback: silenced if track was removed by admin
+      if (bgAudioEl) {
+        if (!isAudioRemoved && video.audioTrack?.audioUrl) {
+          const startPos = video.audioStartTime ?? video.audioTrack.trimStart ?? 0;
+          bgAudioEl.currentTime = startPos;
+          bgAudioEl.volume = Math.max(0, Math.min(1, (video.audioVolume ?? 100) / 100));
+          bgAudioEl.play().catch(() => {});
+        } else {
+          bgAudioEl.pause();
+          bgAudioEl.currentTime = 0;
+          bgAudioEl.volume = 0;
+        }
       }
     } else {
       videoEl.pause();
@@ -199,7 +213,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       setIsPlaying(prev => (!prev ? prev : false));
       setCurrentTime(prev => (prev === 0 ? prev : 0));
     }
-  }, [isActive, videoSrc, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioStartTime, video.audioEndTime]);
+  }, [isActive, videoSrc, isAudioRemoved, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioStartTime, video.audioEndTime]);
 
   // Window-level interaction handler to ensure audio is unmuted on gesture
   useEffect(() => {
@@ -208,7 +222,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         videoRef.current.muted = false;
         videoRef.current.volume = Math.max(0, Math.min(1, (video.originalAudioVolume ?? 100) / 100));
       }
-      if (isActive && bgAudioRef.current && video.audioTrack?.audioUrl) {
+      if (isActive && bgAudioRef.current && video.audioTrack?.audioUrl && !isAudioRemoved) {
         bgAudioRef.current.volume = Math.max(0, Math.min(1, (video.audioVolume ?? 100) / 100));
         bgAudioRef.current.play().catch(() => {});
       }
@@ -219,7 +233,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       window.removeEventListener('click', handleGesture);
       window.removeEventListener('touchstart', handleGesture);
     };
-  }, [isActive, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioTrack?.audioUrl]);
+  }, [isActive, isAudioRemoved, video.originalAudioMuted, video.originalAudioVolume, video.audioVolume, video.audioTrack?.audioUrl]);
 
   const togglePlayPause = (e?: React.MouseEvent) => {
     if (e) {
@@ -240,7 +254,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         videoEl.volume = Math.max(0, Math.min(1, (video.originalAudioVolume ?? 100) / 100));
       }
       videoEl.play().catch(() => {});
-      if (bgAudioEl && video.audioTrack?.audioUrl) {
+      if (bgAudioEl && video.audioTrack?.audioUrl && !isAudioRemoved) {
         bgAudioEl.volume = Math.max(0, Math.min(1, (video.audioVolume ?? 100) / 100));
         bgAudioEl.play().catch(() => {});
       }
@@ -347,7 +361,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
       )}
 
       {/* Synchronized Background Audio Track */}
-      {video.audioTrack?.audioUrl && (
+      {video.audioTrack?.audioUrl && !isAudioRemoved && (
         <audio
           ref={bgAudioRef}
           src={video.audioTrack.audioUrl}
@@ -376,6 +390,14 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
               <Pause className="w-8 h-8 fill-white text-white" />
             )}
           </div>
+        </div>
+      )}
+
+      {/* Audio Removed / Muted Notice Banner */}
+      {isAudioRemoved && (
+        <div className="absolute top-14 left-4 z-20 flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-950/85 border border-rose-500/50 text-rose-300 text-[11px] font-bold shadow-lg backdrop-blur-md pointer-events-none animate-fadeIn whitespace-nowrap">
+          <VolumeX className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          <span>Audio muted · Sound removed by admin</span>
         </div>
       )}
 
@@ -625,13 +647,28 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         )}
 
         {/* Audio Track Ticker */}
-        {video.audioTrack && (
-          <div className="flex items-center gap-2 text-[11px] text-neutral-300 mt-1.5">
-            <Music className="w-3.5 h-3.5 text-[#ff007a] animate-spin shrink-0" />
-            <span className="truncate">
-              {video.audioTrack.title} — {video.audioTrack.artist}
+        {isAudioRemoved ? (
+          <div
+            className="flex items-center gap-1.5 text-[11px] text-rose-300 bg-rose-950/70 border border-rose-500/40 px-2.5 py-1 rounded-full w-fit mt-1.5 backdrop-blur-md shadow-sm select-none"
+            title="The sound used in this video was deleted by an administrator and is muted."
+          >
+            <VolumeX className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span className="truncate font-semibold line-through">
+              {video.deletedAudioTrackTitle || video.audioTrack?.title || 'Sound removed'}
+            </span>
+            <span className="text-[10px] text-rose-300 font-medium shrink-0">
+              (Audio removed)
             </span>
           </div>
+        ) : (
+          video.audioTrack && (
+            <div className="flex items-center gap-2 text-[11px] text-neutral-300 mt-1.5">
+              <Music className="w-3.5 h-3.5 text-[#ff007a] animate-spin shrink-0" />
+              <span className="truncate">
+                {video.audioTrack.title} — {video.audioTrack.artist}
+              </span>
+            </div>
+          )
         )}
       </div>
 

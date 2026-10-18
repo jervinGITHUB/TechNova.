@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useApp, deduplicateVideos } from '../../context/AppContext';
 import { Video } from '../../types';
-import { isVideoUrl, checkIsUserBanned, isSameUser } from '../../lib/supabase';
+import { isVideoUrl, checkIsUserBanned, isSameUser, isAudioTrackDeleted } from '../../lib/supabase';
 import { Avatar } from '../common/Avatar';
 import {
   Play,
@@ -713,65 +713,100 @@ export const ExploreGrid: React.FC = () => {
             onClick={e => e.stopPropagation()}
           >
             {/* Top Bar with Close Button & Sound Toggle */}
-            <div className="absolute top-4 left-4 right-4 z-30 flex items-center justify-between pointer-events-auto">
-              <button
-                type="button"
-                onClick={() => setIsMuted(m => !m)}
-                className="p-2.5 rounded-full bg-black/50 hover:bg-black/80 text-white backdrop-blur-md border border-white/10 transition-all cursor-pointer"
-                title={isMuted ? 'Unmute' : 'Mute'}
-              >
-                {isMuted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4" />}
-              </button>
+            {(() => {
+              const isModalAudioRemoved = Boolean(
+                activeModalVideo.isAudioMuted ||
+                activeModalVideo.isAudioRemoved ||
+                (activeModalVideo.audioTrack?.id && isAudioTrackDeleted(activeModalVideo.audioTrack.id))
+              );
 
-              <button
-                type="button"
-                onClick={() => setModalVideo(null)}
-                className="p-2.5 rounded-full bg-black/50 hover:bg-[#ff007a] text-white backdrop-blur-md border border-white/10 transition-all cursor-pointer hover:rotate-90 duration-200"
-                title="Close (Escape)"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
+              return (
+                <>
+                  <div className="absolute top-4 left-4 right-4 z-30 flex items-center justify-between pointer-events-auto">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!isModalAudioRemoved) {
+                          setIsMuted(m => !m);
+                        }
+                      }}
+                      disabled={isModalAudioRemoved}
+                      className={`p-2.5 rounded-full text-white backdrop-blur-md border border-white/10 transition-all ${
+                        isModalAudioRemoved
+                          ? 'bg-rose-950/70 border-rose-500/40 text-rose-300 cursor-not-allowed opacity-90'
+                          : 'bg-black/50 hover:bg-black/80 cursor-pointer'
+                      }`}
+                      title={isModalAudioRemoved ? 'Audio removed by administrator' : (isMuted ? 'Unmute' : 'Mute')}
+                    >
+                      {isModalAudioRemoved ? (
+                        <VolumeX className="w-4 h-4 text-rose-400" />
+                      ) : isMuted ? (
+                        <VolumeX className="w-4 h-4 text-red-400" />
+                      ) : (
+                        <Volume2 className="w-4 h-4" />
+                      )}
+                    </button>
 
-            {/* Video Element */}
-            <div
-              className="relative w-full h-full flex items-center justify-center bg-black cursor-pointer"
-              onClick={togglePlayPause}
-            >
-              {activeModalVideo.mediaUrl ? (
-                <video
-                  ref={modalVideoRef}
-                  key={activeModalVideo.id}
-                  src={activeModalVideo.mediaUrl}
-                  poster={activeModalVideo.thumbnailUrl}
-                  autoPlay
-                  loop
-                  playsInline
-                  muted={isMuted}
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                  className="w-full h-full object-contain sm:object-cover"
-                />
-              ) : activeModalVideo.thumbnailUrl ? (
-                <img
-                  src={activeModalVideo.thumbnailUrl}
-                  alt={activeModalVideo.caption}
-                  className="w-full h-full object-contain sm:object-cover"
-                />
-              ) : (
-                <div className="text-neutral-500">Video not available</div>
-              )}
+                    <button
+                      type="button"
+                      onClick={() => setModalVideo(null)}
+                      className="p-2.5 rounded-full bg-black/50 hover:bg-[#ff007a] text-white backdrop-blur-md border border-white/10 transition-all cursor-pointer hover:rotate-90 duration-200"
+                      title="Close (Escape)"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
 
-              {/* Play/Pause Center Indicator on pause */}
-              {!isPlaying && (
-                <div className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-black/60 backdrop-blur-md text-white flex items-center justify-center pointer-events-none shadow-2xl">
-                  <Play className="w-8 h-8 ml-1 fill-white" />
-                </div>
-              )}
+                  {/* Audio Removed Banner in Modal */}
+                  {isModalAudioRemoved && (
+                    <div className="absolute top-16 left-4 z-30 flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-950/85 border border-rose-500/50 text-rose-300 text-[11px] font-bold shadow-lg backdrop-blur-md pointer-events-none">
+                      <VolumeX className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      <span>Audio muted · Sound removed by admin</span>
+                    </div>
+                  )}
 
-              {/* Bottom Gradient Overlay */}
-              <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/90 pointer-events-none" />
-            </div>
+                  {/* Video Element */}
+                  <div
+                    className="relative w-full h-full flex items-center justify-center bg-black cursor-pointer"
+                    onClick={togglePlayPause}
+                  >
+                    {activeModalVideo.mediaUrl ? (
+                      <video
+                        ref={modalVideoRef}
+                        key={activeModalVideo.id}
+                        src={activeModalVideo.mediaUrl}
+                        poster={activeModalVideo.thumbnailUrl}
+                        autoPlay
+                        loop
+                        playsInline
+                        muted={isMuted || isModalAudioRemoved}
+                        onPlay={() => setIsPlaying(true)}
+                        onPause={() => setIsPlaying(false)}
+                        className="w-full h-full object-contain sm:object-cover"
+                      />
+                    ) : activeModalVideo.thumbnailUrl ? (
+                      <img
+                        src={activeModalVideo.thumbnailUrl}
+                        alt={activeModalVideo.caption}
+                        className="w-full h-full object-contain sm:object-cover"
+                      />
+                    ) : (
+                      <div className="text-neutral-500">Video not available</div>
+                    )}
+
+                    {/* Play/Pause Center Indicator on pause */}
+                    {!isPlaying && (
+                      <div className="absolute inset-0 m-auto w-16 h-16 rounded-full bg-black/60 backdrop-blur-md text-white flex items-center justify-center pointer-events-none shadow-2xl">
+                        <Play className="w-8 h-8 ml-1 fill-white" />
+                      </div>
+                    )}
+
+                    {/* Bottom Gradient Overlay */}
+                    <div className="absolute inset-0 bg-gradient-to-b from-black/40 via-transparent to-black/90 pointer-events-none" />
+                  </div>
+                </>
+              );
+            })()}
 
             {/* Right Action Rail (Avatar, Like, Comment, Share, Report) */}
             <div
@@ -964,12 +999,36 @@ export const ExploreGrid: React.FC = () => {
               )}
 
               {/* Sound / Music Track */}
-              <div className="flex items-center gap-2 text-xs text-neutral-300 drop-shadow">
-                <Music className="w-3.5 h-3.5 text-[#ff007a] animate-spin" />
-                <span className="truncate text-[11px]">
-                  {activeModalVideo.audioTrack?.title || 'Original audio - ViralHub'}
-                </span>
-              </div>
+              {(() => {
+                const isModalAudioRemoved = Boolean(
+                  activeModalVideo.isAudioMuted ||
+                  activeModalVideo.isAudioRemoved ||
+                  (activeModalVideo.audioTrack?.id && isAudioTrackDeleted(activeModalVideo.audioTrack.id))
+                );
+
+                if (isModalAudioRemoved) {
+                  return (
+                    <div className="flex items-center gap-1.5 text-xs text-rose-300 drop-shadow select-none">
+                      <VolumeX className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      <span className="truncate text-[11px] line-through font-semibold">
+                        {activeModalVideo.deletedAudioTrackTitle || activeModalVideo.audioTrack?.title || 'Sound removed'}
+                      </span>
+                      <span className="text-[10px] text-rose-400 font-medium shrink-0">
+                        (Audio removed by admin)
+                      </span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="flex items-center gap-2 text-xs text-neutral-300 drop-shadow">
+                    <Music className="w-3.5 h-3.5 text-[#ff007a] animate-spin" />
+                    <span className="truncate text-[11px]">
+                      {activeModalVideo.audioTrack?.title || 'Original audio - ViralHub'}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>

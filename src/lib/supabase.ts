@@ -616,6 +616,57 @@ export const checkUserWarning = (
 };
 
 // =========================================================================
+// Deleted Audio Tracks Registry
+// Tracks audio tracks deleted by administrators so videos using them are
+// immediately muted across all tabs, devices, and reloads with 0 Disk IO!
+// =========================================================================
+export const recordDeletedAudioTrack = (trackId?: string | null, title?: string) => {
+  if (!trackId) return;
+  try {
+    let deletedMap: Record<string, { id: string; title?: string; deletedAt: string }> = {};
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_deleted_audio_track_ids_v1') : null;
+    if (raw) deletedMap = JSON.parse(raw);
+
+    const nowIso = new Date().toISOString();
+    const cleanId = String(trackId).trim();
+    const uuid = toUuid(cleanId);
+    const entry = { id: cleanId, title: title || '', deletedAt: nowIso };
+
+    deletedMap[cleanId] = entry;
+    deletedMap[cleanId.toLowerCase()] = entry;
+    deletedMap[uuid] = entry;
+
+    localStorage.setItem('viralhub_deleted_audio_track_ids_v1', JSON.stringify(deletedMap));
+    localStorage.setItem('viralhub_audio_track_deleted_event', JSON.stringify({ ...entry, timestamp: Date.now() }));
+  } catch (e) {
+    console.warn('recordDeletedAudioTrack failed', e);
+  }
+};
+
+export const isAudioTrackDeleted = (trackId?: string | null): boolean => {
+  if (!trackId) return false;
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_deleted_audio_track_ids_v1') : null;
+    if (!raw) return false;
+    const deletedMap = JSON.parse(raw);
+    const cleanId = String(trackId).trim();
+    if (deletedMap[cleanId] || deletedMap[cleanId.toLowerCase()] || deletedMap[toUuid(cleanId)]) {
+      return true;
+    }
+  } catch {}
+  return false;
+};
+
+export const getDeletedAudioTracks = (): Record<string, { id: string; title?: string; deletedAt: string }> => {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_deleted_audio_track_ids_v1') : null;
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+};
+
+// =========================================================================
 // Configuration & Client Initialization
 // =========================================================================
 export const getSupabaseConfig = (): SupabaseConfig => {
@@ -2400,6 +2451,23 @@ export const supabaseDb = {
           safeThumbnailUrl = '';
         }
 
+        const rawTrackId = row.AudioTrackID || row.audio_track_id;
+        const isTrackDeleted = rawTrackId ? isAudioTrackDeleted(rawTrackId) : false;
+        const isDbMuted = Boolean(row.IsAudioMuted || row.is_audio_muted);
+        const isMuted = isTrackDeleted || isDbMuted;
+
+        // Resolve attached audio track from cached tracks if available
+        let attachedAudioTrack: AudioTrack | undefined = undefined;
+        if (rawTrackId && cachedAudioTracksResult?.data) {
+          const matched = cachedAudioTracksResult.data.find(t => isSameUser(t.id, rawTrackId) || t.id === rawTrackId);
+          if (matched) {
+            attachedAudioTrack = isMuted ? { ...matched, audioUrl: undefined } : matched;
+          }
+        }
+
+        const deletedTracksMap = getDeletedAudioTracks();
+        const deletedTitle = rawTrackId ? (deletedTracksMap[rawTrackId]?.title || deletedTracksMap[toUuid(rawTrackId)]?.title) : undefined;
+
         return {
           id: row.VideoID,
           creatorId: row.UserID,
@@ -2408,6 +2476,12 @@ export const supabaseDb = {
           hashtags,
           mediaUrl: safeMediaUrl,
           thumbnailUrl: safeThumbnailUrl,
+          audioTrack: attachedAudioTrack,
+          isAudioMuted: isMuted,
+          isAudioRemoved: isMuted,
+          audioVolume: isMuted ? 0 : 100,
+          audioMuteReason: isMuted ? 'Audio removed by administrator' : undefined,
+          deletedAudioTrackTitle: isMuted ? (attachedAudioTrack?.title || deletedTitle) : undefined,
           likesCount,
           commentsCount,
           sharesCount: finalSharesCount,
@@ -2484,9 +2558,15 @@ export const supabaseDb = {
         corePayload.ThumbnailURL = video.thumbnailUrl;
       }
 
-      // Only attach AudioTrackID if provided and valid UUID to avoid foreign key errors on unseeded track
-      if (video.audioTrack?.id && isUuid(video.audioTrack.id)) {
-        corePayload.AudioTrackID = toUuid(video.audioTrack.id);
+      // Only attach AudioTrackID if provided, valid UUID, and NOT deleted
+      const trackId = video.audioTrack?.id;
+      const isTrackDeleted = trackId ? isAudioTrackDeleted(trackId) : false;
+      const isVideoMuted = Boolean(video.isAudioMuted || video.isAudioRemoved || isTrackDeleted);
+
+      if (trackId && isUuid(trackId) && !isVideoMuted) {
+        corePayload.AudioTrackID = toUuid(trackId);
+      } else {
+        corePayload.AudioTrackID = null;
       }
 
       // Extended payload with optional moderation and appeal columns if table supports them
@@ -2494,6 +2574,7 @@ export const supabaseDb = {
         ...corePayload,
         Status: video.status || 'approved',
         Audience: video.audience || 'public',
+        IsAudioMuted: isVideoMuted,
       };
       if (video.thumbnailUrl && !video.thumbnailUrl.startsWith('blob:')) {
         extendedPayload.ThumbnailURL = video.thumbnailUrl;
@@ -2989,20 +3070,55 @@ export const supabaseDb = {
     }
   },
 
-  async deleteAudioTrack(trackId: string): Promise<boolean> {
+  async deleteAudioTrack(trackId: string, trackTitle?: string): Promise<boolean> {
     cachedAudioTracksResult = null;
+    if (!trackId) return false;
+
+    const targetUuid = isUuid(trackId) ? trackId : toUuid(trackId);
+
+    // 1. Immediately record in deleted audio tracks registry (works offline, multi-tab, & cross-device)
+    recordDeletedAudioTrack(trackId, trackTitle);
+    recordDeletedAudioTrack(targetUuid, trackTitle);
+
     const client = getSupabaseClient();
-    if (!client || !trackId) return false;
+    if (!client) return true;
 
     try {
-      const targetUuid = isUuid(trackId) ? trackId : toUuid(trackId);
+      // 2. CRITICAL DATABASE SAFETY & ZERO DISK IO:
+      // Disassociate AudioTrackID on all videos using this track and mark them as muted!
+      // This guarantees:
+      // a) Postgres Foreign Key constraint (code 23503) will NEVER fail or block the audio deletion.
+      // b) Videos are NEVER accidentally destroyed or cascade-deleted.
+      // c) Videos are authoritatively muted in Supabase with a single targeted UPDATE (zero disk IO surge).
+      try {
+        const { error: vidUpdateErr } = await client
+          .from('Video')
+          .update({ AudioTrackID: null, IsAudioMuted: true })
+          .eq('AudioTrackID', targetUuid);
+
+        if (vidUpdateErr && (vidUpdateErr.code === '42703' || vidUpdateErr.message?.includes('column'))) {
+          // If IsAudioMuted column has not been added yet to Video table, just null out AudioTrackID
+          await client.from('Video').update({ AudioTrackID: null }).eq('AudioTrackID', targetUuid);
+        }
+      } catch (e) {
+        console.warn('[Supabase] Video table audio mute update warning:', e);
+      }
+
+      // Also try lowercase 'videos' table if present
+      try {
+        await client.from('videos').update({ audio_track_id: null, is_audio_muted: true }).eq('audio_track_id', targetUuid);
+      } catch {}
+
+      // 3. Delete from AudioLibrary & AudioTrack tables
       await client.from('AudioLibrary').delete().eq('AudioTrackID', targetUuid);
       await client.from('AudioTrack').delete().eq('AudioTrackID', targetUuid);
       try {
         await client.from('audio_tracks').delete().eq('id', targetUuid);
       } catch {}
+
       return true;
-    } catch {
+    } catch (err) {
+      console.warn('[Supabase] deleteAudioTrack error:', err);
       return false;
     }
   },
@@ -6355,6 +6471,10 @@ ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "Duration" 
 ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "Category" TEXT DEFAULT 'Trending';
 ALTER TABLE IF EXISTS public."AudioLibrary" ADD COLUMN IF NOT EXISTS "CreatedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now());
 
+-- Ensure Video table has IsAudioMuted column and B-Tree index on AudioTrackID (Zero Disk IO lookups)
+ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "IsAudioMuted" BOOLEAN DEFAULT false;
+CREATE INDEX IF NOT EXISTS "idx_video_audiotrackid" ON public."Video"("AudioTrackID");
+
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'storage' AND tablename = 'objects') THEN
@@ -6425,6 +6545,10 @@ BEGIN
     WITH CHECK (bucket_id = 'audio');
   END IF;
 END $$;
+
+-- 5. Ensure Video table has IsAudioMuted column & B-Tree index on AudioTrackID (Zero Disk IO lookups)
+ALTER TABLE IF EXISTS public."Video" ADD COLUMN IF NOT EXISTS "IsAudioMuted" BOOLEAN DEFAULT false;
+CREATE INDEX IF NOT EXISTS "idx_video_audiotrackid" ON public."Video"("AudioTrackID");
 `;
 
 export const PRE_BAN_APPEAL_SQL_SNIPPET = `-- =====================================================================

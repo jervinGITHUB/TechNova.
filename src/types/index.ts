@@ -116,6 +116,10 @@ export interface Video {
   originalAudioVolume?: number;
   audioStartTime?: number;
   audioEndTime?: number;
+  isAudioMuted?: boolean;
+  isAudioRemoved?: boolean;
+  audioMuteReason?: string;
+  deletedAudioTrackTitle?: string;
   audience?: 'public' | 'friends' | 'only_me';
   privacy?: 'public' | 'friends' | 'private';
   isPinned?: boolean;
