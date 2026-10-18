@@ -5615,7 +5615,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           streamMap.set(currentLiveStream.id, currentLiveStream);
         }
         streams.forEach(s => {
-          streamMap.set(s.id, s);
+          const prevStream = prev.find(p => p.id === s.id || toUuid(p.id) === toUuid(s.id));
+          const cachedLikes = Number(
+            typeof localStorage !== 'undefined'
+              ? (localStorage.getItem(`viralhub_stream_likes_${s.id}`) || localStorage.getItem(`viralhub_stream_likes_${toUuid(s.id)}`) || 0)
+              : 0
+          );
+          const bestLikes = Math.max(s.likesCount || 0, prevStream?.likesCount || 0, cachedLikes);
+          streamMap.set(s.id, {
+            ...s,
+            likesCount: bestLikes,
+          });
         });
         return Array.from(streamMap.values());
       });
@@ -6101,29 +6111,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       joinedAt: new Date().toISOString(),
     };
 
+    const persistedLikes = Math.max(
+      target?.likesCount || 0,
+      Number(
+        typeof localStorage !== 'undefined'
+          ? (localStorage.getItem(`viralhub_stream_likes_${streamId}`) ||
+              localStorage.getItem(`viralhub_stream_likes_${toUuid(streamId)}`) ||
+              0)
+          : 0
+      )
+    );
+
     if (target) {
       const existingViewers = target.viewers || [];
       const hasMe = existingViewers.some(v => isSameUser(v.id, viewerObj.id));
       const nextViewers = hasMe ? existingViewers : [...existingViewers, viewerObj];
-      setCurrentLiveStream({
+      const mergedTarget = {
         ...target,
         id: streamId || target.id,
+        likesCount: persistedLikes,
         viewers: nextViewers,
         viewersCount: Math.max(nextViewers.length, target.viewersCount, 1),
         messages: target.messages || [],
-      });
-      // Ensure it is in active live streams list
+      };
+      setCurrentLiveStream(mergedTarget);
+      // Ensure it is in active live streams list with correct like count
       setActiveLiveStreams(prev => {
-        if (!prev.some(s => s.id === target.id || toUuid(s.id) === toUuid(target.id))) {
-          return [target, ...prev];
+        const found = prev.some(s => s.id === target.id || toUuid(s.id) === toUuid(target.id));
+        if (!found) {
+          return [mergedTarget, ...prev];
         }
-        return prev;
+        return prev.map(s =>
+          s.id === target.id || toUuid(s.id) === toUuid(target.id)
+            ? { ...s, likesCount: Math.max(s.likesCount || 0, persistedLikes) }
+            : s
+        );
       });
     } else {
       setCurrentLiveStream(prev => ({
         ...prev,
         id: streamId,
         isLive: true,
+        likesCount: Math.max(prev.likesCount || 0, persistedLikes),
         viewers: [viewerObj],
         viewersCount: Math.max(1, prev.viewersCount),
         messages: [],
@@ -6263,6 +6292,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev,
       likesCount: nextLikes,
     }));
+
+    try {
+      localStorage.setItem(`viralhub_stream_likes_${currentLiveStream.id}`, String(nextLikes));
+      localStorage.setItem(`viralhub_stream_likes_${toUuid(currentLiveStream.id)}`, String(nextLikes));
+    } catch {}
+
+    setActiveLiveStreams(prev =>
+      prev.map(s =>
+        s.id === currentLiveStream.id || toUuid(s.id) === toUuid(currentLiveStream.id)
+          ? { ...s, likesCount: nextLikes }
+          : s
+      )
+    );
 
     // Single notifier per user even if they spam like
     const userLikeKey = `${currentLiveStream.id}_${currentUser.id}`;

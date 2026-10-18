@@ -5036,10 +5036,10 @@ export const supabaseDb = {
     if (!client) return [];
 
     try {
-      // 1. Fetch all streams that have not been ended
+      // 1. Fetch all streams that have not been ended (including likesCount)
       const { data, error } = await client
         .from('Livestream')
-        .select('LivestreamID, HostUserID, Title, StartedAt, EndedAt')
+        .select('*')
         .is('EndedAt', null)
         .order('StartedAt', { ascending: false })
         .limit(30);
@@ -5060,8 +5060,11 @@ export const supabaseDb = {
             LivestreamID: r.id || r.LivestreamID,
             HostUserID: r.host_user_id || r.HostUserID,
             Title: r.title || r.Title,
+            Topic: r.topic || r.Topic,
+            ThumbnailURL: r.thumbnail_url || r.ThumbnailURL,
             StartedAt: r.started_at || r.StartedAt,
             EndedAt: r.ended_at || r.EndedAt,
+            LikesCount: r.LikesCount ?? r.likes_count ?? 0,
           }));
         }
       } else {
@@ -5145,7 +5148,10 @@ export const supabaseDb = {
           topic: row.Topic || 'Gaming & Chat',
           aboutMe: '',
           thumbnailUrl: row.ThumbnailURL || row.thumbnail_url || undefined,
-          likesCount: typeof row.LikesCount === 'number' ? row.LikesCount : (typeof row.likes_count === 'number' ? row.likes_count : 0),
+          likesCount: Math.max(
+            typeof row.LikesCount === 'number' ? row.LikesCount : (typeof row.likes_count === 'number' ? row.likes_count : 0),
+            Number(typeof localStorage !== 'undefined' ? (localStorage.getItem(`viralhub_stream_likes_${row.LivestreamID}`) || localStorage.getItem(`viralhub_stream_likes_${toUuid(row.LivestreamID)}`) || 0) : 0)
+          ),
           viewersCount: 1,
           viewers: [],
           isLive: true,

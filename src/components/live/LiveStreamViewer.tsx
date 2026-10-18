@@ -203,17 +203,6 @@ export const LiveStreamViewer: React.FC = () => {
         </button>
 
         <div className="flex items-center gap-2 flex-wrap justify-end">
-          {/* Share Live Stream Button */}
-          <button
-            type="button"
-            onClick={() => setShareLiveModalOpen(true)}
-            className="text-xs bg-[#ff007a]/20 hover:bg-[#ff007a]/35 text-[#ff007a] border border-[#ff007a]/40 px-3 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer font-bold shadow-sm"
-            title="Share stream via message"
-          >
-            <Share2 className="w-3.5 h-3.5" />
-            <span>Share Stream</span>
-          </button>
-
           {/* Quick Layout Mode Switcher (Allows viewer to seamlessly toggle Wide 16:9 vs Portrait 9:16) */}
           <div className="flex items-center bg-[#181824] p-0.5 rounded-full border border-neutral-800 text-[11px] shadow-sm">
             <button
@@ -563,38 +552,39 @@ export const LiveStreamViewer: React.FC = () => {
                   isLive={!isLiveEnded}
                 />
 
-                {/* Host Follow & Report Overlay Bar (Unified Streamer Pill) */}
-                <div className="absolute top-3 sm:top-4 left-3 sm:left-4 z-40 flex items-center gap-1.5 sm:gap-2 pointer-events-auto max-w-[calc(100vw-110px)] sm:max-w-none">
-                  <div className="flex items-center gap-2 bg-black/65 backdrop-blur-md p-1 pl-1.5 pr-2.5 rounded-full border border-white/15 shadow-xl min-w-0">
-                    {/* Host Avatar */}
+                {/* Unified Video Overlay Header: Host Info on Left, Stats & Actions on Right (Non-overlapping, Perfectly Aligned) */}
+                <div className="absolute top-2.5 sm:top-4 left-2.5 sm:left-4 right-2.5 sm:right-4 z-40 flex items-center justify-between gap-1.5 sm:gap-2 pointer-events-auto">
+                  {/* Left: Streamer Profile Pill */}
+                  <div className="flex items-center gap-1.5 sm:gap-2 bg-black/65 backdrop-blur-md p-1 pl-1.5 pr-2 rounded-full border border-white/15 shadow-xl min-w-0 max-w-[55%] sm:max-w-[65%]">
+                    {/* Host Avatar with pulsing indicator */}
                     <div className="relative shrink-0">
                       <Avatar
                         src={hostUser.avatar}
                         alt={hostUser.displayName || 'Host'}
                         size="sm"
-                        className="w-7 h-7 ring-1.5 ring-[#ff007a]"
+                        className="w-6 h-6 sm:w-7 sm:h-7 ring-1.5 ring-[#ff007a]"
                       />
                       <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-red-500 rounded-full ring-1 ring-black animate-pulse" />
                     </div>
 
-                    {/* Host Name & Live Status */}
+                    {/* Host Name & Live Badge */}
                     <div className="flex flex-col text-left min-w-0 pr-0.5">
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span className="text-xs font-bold text-white truncate max-w-[80px] sm:max-w-[140px] leading-tight">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span className="text-[11px] sm:text-xs font-bold text-white truncate max-w-[60px] sm:max-w-[120px] leading-tight">
                           {hostUser.displayName || 'Host'}
                         </span>
-                        <span className="shrink-0 flex items-center gap-1 text-[9px] font-bold text-white bg-[#ff007a] px-1.5 py-0.5 rounded-full leading-none">
+                        <span className="shrink-0 flex items-center gap-0.5 text-[8px] sm:text-[9px] font-bold text-white bg-[#ff007a] px-1 sm:px-1.5 py-0.5 rounded-full leading-none">
                           <span className="w-1 h-1 rounded-full bg-white animate-ping" />
                           Live
                         </span>
                       </div>
                     </div>
 
-                    {/* +Follow / Following Button */}
+                    {/* Follow / Following Button */}
                     <button
                       type="button"
                       onClick={() => toggleFollowUser(hostUser.id)}
-                      className={`shrink-0 py-1 px-2.5 sm:px-3 rounded-full text-[11px] font-bold transition-all cursor-pointer shadow-md flex items-center gap-1 leading-none ${
+                      className={`shrink-0 py-1 px-2 rounded-full text-[10px] sm:text-[11px] font-bold transition-all cursor-pointer shadow-md flex items-center gap-1 leading-none ${
                         isFollowingHost
                           ? 'bg-neutral-800 text-neutral-300 border border-neutral-600 hover:bg-neutral-700'
                           : 'bg-[#ff007a] hover:bg-[#ff1a8c] text-white active:scale-95'
@@ -603,7 +593,7 @@ export const LiveStreamViewer: React.FC = () => {
                       {isFollowingHost ? (
                         <>
                           <Check className="w-3 h-3 text-emerald-400" />
-                          <span>Following</span>
+                          <span className="hidden xs:inline">Following</span>
                         </>
                       ) : (
                         <>
@@ -614,43 +604,46 @@ export const LiveStreamViewer: React.FC = () => {
                     </button>
                   </div>
 
-                  {/* Share Stream Button */}
-                  <button
-                    type="button"
-                    onClick={() => setShareLiveModalOpen(true)}
-                    className="p-1.5 sm:p-2 rounded-full bg-black/60 backdrop-blur-md text-white/80 hover:text-pink-400 border border-white/10 transition-colors cursor-pointer shrink-0 shadow-md"
-                    title="Share Stream"
-                  >
-                    <Share2 className="w-3.5 h-3.5" />
-                  </button>
+                  {/* Right: Like Count, Viewer Count, Share Icon, and Report Button in a Clean, Aligned Cluster */}
+                  <div className="shrink-0 flex items-center gap-1 sm:gap-1.5">
+                    {/* Like Counter Badge */}
+                    <div className="flex items-center gap-1 bg-black/65 backdrop-blur-md px-2 sm:px-2.5 py-1 rounded-full border border-pink-500/35 text-white text-[10px] sm:text-[11px] font-bold shadow-md">
+                      <Heart className="w-3 h-3 text-[#ff007a] fill-[#ff007a] shrink-0" />
+                      <span>{currentLiveStream.likesCount || 0}</span>
+                    </div>
 
-                  {/* Report Stream Button */}
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openReportModal({
-                        type: 'live_stream',
-                        targetId: currentLiveStream.id,
-                        targetName: `${hostUser.displayName || hostUser.username}'s Live Stream`,
-                        targetSubtitle: currentLiveStream.title,
-                      })
-                    }
-                    className="p-1.5 sm:p-2 rounded-full bg-black/60 backdrop-blur-md text-white/80 hover:text-red-400 border border-white/10 transition-colors cursor-pointer shrink-0 shadow-md"
-                    title="Report Stream"
-                  >
-                    <Flag className="w-3.5 h-3.5" />
-                  </button>
-                </div>
+                    {/* Viewer Counter Badge */}
+                    <div className="flex items-center gap-1 bg-black/65 backdrop-blur-md px-2 sm:px-2.5 py-1 rounded-full border border-white/15 text-white text-[10px] sm:text-[11px] font-bold shadow-md">
+                      <Radio className="w-3 h-3 text-[#ff007a] animate-pulse shrink-0" />
+                      <span>{Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)}</span>
+                    </div>
 
-                {/* Mobile Viewers & Likes Badge (Top Right) */}
-                <div className="lg:hidden absolute top-3 right-3 z-40 flex items-center gap-1.5">
-                  <div className="flex items-center gap-1 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-pink-500/30 text-white text-[11px] font-bold shadow-md">
-                    <Heart className="w-3 h-3 text-[#ff007a] fill-[#ff007a]" />
-                    <span>{currentLiveStream.likesCount || 0}</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 text-white text-[11px] font-bold shadow-md">
-                    <Radio className="w-3 h-3 text-[#ff007a] animate-pulse" />
-                    <span>{Math.max(currentLiveStream.viewers?.length || 0, currentLiveStream.viewersCount || 0, 1)}</span>
+                    {/* Share Stream Button */}
+                    <button
+                      type="button"
+                      onClick={() => setShareLiveModalOpen(true)}
+                      className="p-1.5 sm:p-2 rounded-full bg-black/65 backdrop-blur-md text-white/80 hover:text-pink-400 border border-white/15 transition-colors cursor-pointer shrink-0 shadow-md"
+                      title="Share Stream"
+                    >
+                      <Share2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    {/* Report Stream Button */}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openReportModal({
+                          type: 'live_stream',
+                          targetId: currentLiveStream.id,
+                          targetName: `${hostUser.displayName || hostUser.username}'s Live Stream`,
+                          targetSubtitle: currentLiveStream.title,
+                        })
+                      }
+                      className="p-1.5 sm:p-2 rounded-full bg-black/65 backdrop-blur-md text-white/80 hover:text-red-400 border border-white/15 transition-colors cursor-pointer shrink-0 shadow-md"
+                      title="Report Stream"
+                    >
+                      <Flag className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 

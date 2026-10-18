@@ -235,18 +235,18 @@ export const LiveBrowse: React.FC = () => {
         <div className="space-y-6">
           <div
             onClick={() => setActiveTab('live_host_setup')}
-            className="group relative bg-gradient-to-r from-[#14141d] to-[#101016] rounded-3xl overflow-hidden border-2 border-dashed border-neutral-700/80 hover:border-[#ff007a] p-8 shadow-xl transition-all cursor-pointer flex flex-col items-center justify-center text-center aspect-[21/9] sm:aspect-[24/9]"
+            className="group relative bg-gradient-to-r from-[#14141d] to-[#101016] rounded-3xl overflow-hidden border-2 border-dashed border-neutral-700/80 hover:border-[#ff007a] p-6 sm:p-8 shadow-xl transition-all cursor-pointer flex flex-col items-center justify-center text-center w-full min-h-[220px] sm:min-h-[250px] aspect-auto sm:aspect-[24/9]"
           >
             <div className="w-14 h-14 rounded-2xl bg-[#1c1c28] border border-neutral-700 flex items-center justify-center text-neutral-400 group-hover:text-[#ff007a] transition-colors mb-3">
               <Radio className="w-7 h-7" />
             </div>
-            <h3 className="text-base sm:text-lg font-bold text-white mb-1 font-brand">
+            <h3 className="text-base sm:text-lg font-bold text-white mb-1.5 font-brand">
               No Live Streams Active
             </h3>
-            <p className="text-xs text-neutral-400 max-w-sm mb-4">
+            <p className="text-xs text-neutral-400 max-w-sm mb-4 leading-relaxed">
               Be the first creator to launch a live broadcasting session with webcam, audio meters, and live chat.
             </p>
-            <span className="inline-flex items-center gap-1.5 py-2 px-5 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold shadow-lg transition-all">
+            <span className="inline-flex items-center gap-1.5 py-2.5 px-6 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold shadow-lg transition-all active:scale-95">
               <Plus className="w-4 h-4 stroke-[3]" />
               <span>Start Broadcasting</span>
             </span>

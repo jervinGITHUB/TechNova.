@@ -194,6 +194,13 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
   const audioAnimFrameRef = useRef<number | null>(null);
   const [isMicAccessGranted, setIsMicAccessGranted] = useState(false);
 
+  // Web Audio API refs for Real Desktop / Game Audio Input & VU Meter
+  const desktopSourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const desktopAnalyserRef = useRef<AnalyserNode | null>(null);
+  const desktopGainNodeRef = useRef<GainNode | null>(null);
+  const desktopAnimFrameRef = useRef<number | null>(null);
+  const [isTestingAudio, setIsTestingAudio] = useState(false);
+
   // Broadcast Overlays
   const [showOverlays, setShowOverlays] = useState(true);
   const [showMusicBanner, setShowMusicBanner] = useState(false);
@@ -463,25 +470,208 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     }
   }, [micActive]);
 
-  // System & desktop audio meter activity
-  useEffect(() => {
+  // Real Web Audio API System & Game Audio Analyzer
+  const initDesktopAudio = useCallback(() => {
+    if (typeof window === 'undefined') return;
+
     if (desktopAudioMuted) {
       setDesktopMeterLevel(0);
+      if (gameCustomStream) {
+        gameCustomStream.getAudioTracks().forEach(t => {
+          t.enabled = false;
+        });
+      }
       return;
     }
-    const interval = setInterval(() => {
-      const flutter = Math.sin(Date.now() / 240) * 10 + Math.cos(Date.now() / 160) * 8;
-      const lvl = Math.min(100, Math.max(0, Math.round((desktopAudioGain / 100) * (42 + flutter))));
-      setDesktopMeterLevel(lvl);
-    }, 120);
-    return () => clearInterval(interval);
-  }, [desktopAudioMuted, desktopAudioGain]);
+
+    if (gameCustomStream) {
+      gameCustomStream.getAudioTracks().forEach(t => {
+        t.enabled = true;
+      });
+    }
+
+    const hasAudioTracks = Boolean(gameCustomStream && gameCustomStream.getAudioTracks().length > 0);
+
+    if (hasAudioTracks && gameCustomStream) {
+      try {
+        const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtxClass) return;
+
+        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+          audioContextRef.current = new AudioCtxClass();
+        }
+        const audioCtx = audioContextRef.current;
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
+        }
+
+        if (desktopSourceNodeRef.current) {
+          try { desktopSourceNodeRef.current.disconnect(); } catch {}
+          desktopSourceNodeRef.current = null;
+        }
+
+        const source = audioCtx.createMediaStreamSource(gameCustomStream);
+        desktopSourceNodeRef.current = source;
+
+        const gainNode = audioCtx.createGain();
+        desktopGainNodeRef.current = gainNode;
+        gainNode.gain.value = desktopAudioMuted ? 0 : (desktopAudioGain / 100);
+
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.25;
+        desktopAnalyserRef.current = analyser;
+
+        source.connect(gainNode);
+        gainNode.connect(analyser);
+
+        if (desktopAnimFrameRef.current) {
+          cancelAnimationFrame(desktopAnimFrameRef.current);
+        }
+
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        const updateDesktopMeter = () => {
+          if (desktopAudioMuted || !desktopAnalyserRef.current) {
+            setDesktopMeterLevel(0);
+            desktopAnimFrameRef.current = requestAnimationFrame(updateDesktopMeter);
+            return;
+          }
+
+          analyser.getByteFrequencyData(dataArray);
+
+          let sum = 0;
+          let peak = 0;
+          for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i];
+            sum += v;
+            if (v > peak) peak = v;
+          }
+          const avg = sum / bufferLength;
+
+          // Accurate game/system audio response: when sound is present, bar goes up proportionally
+          if (peak > 3 || avg > 1) {
+            const level = Math.min(
+              100,
+              Math.max(0, Math.round(((avg * 0.7 + peak * 0.3) / 105) * (desktopAudioGain / 100) * 100))
+            );
+            setDesktopMeterLevel(prev => {
+              if (level > prev) return level; // Fast attack
+              return Math.max(0, Math.round(prev * 0.78 + level * 0.22)); // Smooth decay
+            });
+          } else {
+            // Decay to 0 on silence
+            setDesktopMeterLevel(prev => (prev > 1 ? Math.floor(prev * 0.75) : 0));
+          }
+
+          desktopAnimFrameRef.current = requestAnimationFrame(updateDesktopMeter);
+        };
+
+        desktopAnimFrameRef.current = requestAnimationFrame(updateDesktopMeter);
+      } catch (err) {
+        console.warn('Error setting up Web Audio desktop analyser:', err);
+      }
+    } else {
+      if (!isTestingAudio) {
+        setDesktopMeterLevel(0);
+      }
+    }
+  }, [gameCustomStream, desktopAudioMuted, desktopAudioGain, isTestingAudio]);
+
+  // Synchronize desktop audio analyzer when stream or gain changes
+  useEffect(() => {
+    initDesktopAudio();
+  }, [initDesktopAudio]);
+
+  // Adjust gain node when volume slider is dragged
+  useEffect(() => {
+    if (desktopGainNodeRef.current) {
+      desktopGainNodeRef.current.gain.value = desktopAudioMuted ? 0 : (desktopAudioGain / 100);
+    }
+  }, [desktopAudioGain, desktopAudioMuted]);
+
+  // Sound Check / Audio Meter Test helper
+  const handleTestAudio = () => {
+    if (desktopAudioMuted) {
+      setDesktopAudioMuted(false);
+    }
+    const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtxClass) return;
+    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
+      audioContextRef.current = new AudioCtxClass();
+    }
+    const ctx = audioContextRef.current;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    if (!desktopAnalyserRef.current) {
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.25;
+      desktopAnalyserRef.current = analyser;
+
+      const gain = ctx.createGain();
+      gain.gain.value = (desktopAudioGain / 100);
+      desktopGainNodeRef.current = gain;
+      gain.connect(analyser);
+    }
+
+    const osc = ctx.createOscillator();
+    const oscGain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(320, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(640, ctx.currentTime + 0.25);
+    osc.frequency.exponentialRampToValueAtTime(480, ctx.currentTime + 0.5);
+    osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.85);
+
+    oscGain.gain.setValueAtTime(0.3 * (desktopAudioGain / 100), ctx.currentTime);
+    oscGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.1);
+
+    osc.connect(oscGain);
+    if (desktopGainNodeRef.current) {
+      oscGain.connect(desktopGainNodeRef.current);
+    }
+    oscGain.connect(ctx.destination);
+
+    osc.start();
+    osc.stop(ctx.currentTime + 1.15);
+    setIsTestingAudio(true);
+
+    const bufferLength = desktopAnalyserRef.current.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+    const tick = () => {
+      if (!desktopAnalyserRef.current) return;
+      desktopAnalyserRef.current.getByteFrequencyData(dataArray);
+      let sum = 0;
+      let peak = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        const v = dataArray[i];
+        sum += v;
+        if (v > peak) peak = v;
+      }
+      const avg = sum / bufferLength;
+      if (peak > 2 || avg > 1) {
+        const level = Math.min(100, Math.max(0, Math.round(((avg * 0.7 + peak * 0.3) / 95) * (desktopAudioGain / 100) * 100)));
+        setDesktopMeterLevel(level);
+        requestAnimationFrame(tick);
+      } else {
+        setDesktopMeterLevel(0);
+        setIsTestingAudio(false);
+      }
+    };
+    requestAnimationFrame(tick);
+  };
 
   // Cleanup Web Audio on unmount
   useEffect(() => {
     return () => {
       if (audioAnimFrameRef.current) {
         cancelAnimationFrame(audioAnimFrameRef.current);
+      }
+      if (desktopAnimFrameRef.current) {
+        cancelAnimationFrame(desktopAnimFrameRef.current);
       }
       if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
         audioContextRef.current.close().catch(() => {});
@@ -577,15 +767,23 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
     }
   };
 
-  // Request real screen capture
+  // Request real screen capture (with System & Game Audio enabled)
   const handleShareScreenOrGame = async () => {
     try {
       if (navigator.mediaDevices?.getDisplayMedia) {
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: true,
-          audio: true,
-        });
+          audio: {
+            autoGainControl: false,
+            echoCancellation: false,
+            noiseSuppression: false,
+          },
+          systemAudio: 'include',
+          surfaceSwitching: 'include',
+          selfBrowserSurface: 'exclude',
+        } as any);
         const vTrack = stream.getVideoTracks()[0];
+        const aTrack = stream.getAudioTracks()[0];
         if (vTrack) {
           vTrack.onended = () => {
             setGameCustomStream(null);
@@ -615,6 +813,11 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
               visible: true,
             }));
           }
+        }
+        if (aTrack) {
+          aTrack.onended = () => {
+            setDesktopMeterLevel(0);
+          };
         }
         setGameCustomStream(stream);
         setGameSource('custom_screen');
@@ -1634,7 +1837,7 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
         />
       </div>
 
-      <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800 space-y-2">
+      <div className="p-3 bg-[#181824] rounded-2xl border border-neutral-800 space-y-2.5">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             {desktopAudioMuted ? (
@@ -1644,29 +1847,85 @@ export const LiveStreamHostStudio: React.FC<LiveStreamHostStudioProps> = ({
             )}
             <span className="text-xs font-bold text-white">System & Game Audio</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setDesktopAudioMuted(!desktopAudioMuted)}
-            className={`text-[10px] font-bold px-2 py-0.5 rounded-full cursor-pointer ${
-              !desktopAudioMuted
-                ? 'bg-cyan-500/20 text-cyan-300'
-                : 'bg-red-500/20 text-red-300'
-            }`}
-          >
-            {!desktopAudioMuted ? 'ACTIVE' : 'MUTED'}
-          </button>
-        </div>
-
-        <div className="space-y-1">
-          <div className="h-2 w-full bg-neutral-900 rounded-full overflow-hidden flex">
-            <div
-              style={{ width: `${desktopMeterLevel}%` }}
-              className="h-full bg-cyan-400 transition-all duration-100"
-            />
+          <div className="flex items-center gap-1.5">
+            {gameCustomStream && gameCustomStream.getAudioTracks().length > 0 ? (
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                CAPTURE
+              </span>
+            ) : isTestingAudio ? (
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                TESTING
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => setDesktopAudioMuted(!desktopAudioMuted)}
+              className={`text-[10px] font-bold px-2 py-0.5 rounded-full cursor-pointer transition-colors ${
+                !desktopAudioMuted
+                  ? 'bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30'
+                  : 'bg-red-500/20 text-red-300 hover:bg-red-500/30'
+              }`}
+            >
+              {!desktopAudioMuted ? 'ACTIVE' : 'MUTED'}
+            </button>
           </div>
         </div>
 
-        <div className="flex justify-between items-center text-[11px] text-neutral-400">
+        {/* Dynamic Pro VU Meter with gradient and accurate dB readouts */}
+        <div className="space-y-1">
+          <div className="h-2.5 w-full bg-neutral-900 rounded-full overflow-hidden flex p-0.5 border border-white/5">
+            <div
+              style={{ width: `${desktopAudioMuted ? 0 : desktopMeterLevel}%` }}
+              className={`h-full rounded-full transition-all duration-75 ${
+                desktopMeterLevel > 80
+                  ? 'bg-red-500 shadow-[0_0_14px_rgba(239,68,68,0.95)]'
+                  : desktopMeterLevel > 60
+                  ? 'bg-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.9)]'
+                  : desktopMeterLevel > 5
+                  ? 'bg-gradient-to-r from-cyan-400 to-emerald-400 shadow-[0_0_10px_rgba(6,182,212,0.85)]'
+                  : 'bg-neutral-800'
+              }`}
+            />
+          </div>
+          <div className="flex justify-between text-[9px] text-neutral-500 font-mono">
+            <span>-40dB</span>
+            <span className="text-neutral-400 font-bold">
+              {desktopAudioMuted
+                ? 'MUTED'
+                : desktopMeterLevel > 5
+                ? `${Math.round(-40 + (desktopMeterLevel / 100) * 40)}dB`
+                : '-∞dB'}
+            </span>
+            <span>0dB</span>
+          </div>
+        </div>
+
+        {/* Audio actions: Sound check & Screen audio capture helper */}
+        <div className="flex items-center gap-1.5 pt-0.5">
+          <button
+            type="button"
+            onClick={handleTestAudio}
+            disabled={isTestingAudio}
+            className="flex-1 py-1.5 px-3 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[10px] font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 active:scale-95 disabled:opacity-50"
+            title="Test system & game audio meter with audio chime"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
+            <span>{isTestingAudio ? 'Playing Chime...' : 'Test Sound Check'}</span>
+          </button>
+          {(!gameCustomStream || gameCustomStream.getAudioTracks().length === 0) && (
+            <button
+              type="button"
+              onClick={handleShareScreenOrGame}
+              className="py-1.5 px-3 rounded-xl bg-neutral-800 hover:bg-neutral-700 border border-neutral-700 text-neutral-300 hover:text-white text-[10px] font-semibold transition-colors cursor-pointer"
+              title="Share screen or tab with audio enabled"
+            >
+              Share Audio
+            </button>
+          )}
+        </div>
+
+        <div className="flex justify-between items-center text-[11px] text-neutral-400 pt-1">
           <span>Volume:</span>
           <span className="font-mono text-white">{desktopAudioGain}%</span>
         </div>
