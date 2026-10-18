@@ -1630,6 +1630,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 (a.email && ru.email && a.email.toLowerCase() === ru.email.toLowerCase())
             );
             const banInfo = checkIsUserBanned(a.id, a.email, matchingRemote || a);
+            const warningInfo = checkUserWarning(a.id, a.email, matchingRemote || a);
+            const isWarnActive = warningInfo.warningActive && warningInfo.preBanAppealStatus !== 'approved';
             return {
               ...(matchingRemote ? { ...a, ...matchingRemote } : a),
               isBanned: banInfo.isBanned,
@@ -1638,6 +1640,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               appealStatus: banInfo.appealStatus,
               appealReason: banInfo.appealReason,
               appealSubmittedAt: banInfo.appealSubmittedAt,
+              warningActive: isWarnActive,
+              warningReason: isWarnActive ? warningInfo.warningReason : undefined,
+              warningIssuedAt: isWarnActive ? warningInfo.warningIssuedAt : undefined,
+              warningDeadline: isWarnActive ? warningInfo.warningDeadline : undefined,
+              preBanAppealStatus: warningInfo.preBanAppealStatus,
+              preBanAppealReason: warningInfo.preBanAppealReason,
+              preBanAppealProofUrl: warningInfo.preBanAppealProofUrl,
+              preBanAppealProofName: warningInfo.preBanAppealProofName,
+              preBanAppealSubmittedAt: warningInfo.preBanAppealSubmittedAt,
             };
           });
 
@@ -1650,6 +1661,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             );
             if (!hasCurrent) {
               const curBanInfo = checkIsUserBanned(activeUser.id, activeUser.email, activeUser);
+              const curWarningInfo = checkUserWarning(activeUser.id, activeUser.email, activeUser);
+              const isCurWarnActive = curWarningInfo.warningActive && curWarningInfo.preBanAppealStatus !== 'approved';
               updated.unshift({
                 ...activeUser,
                 isBanned: curBanInfo.isBanned,
@@ -1658,6 +1671,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 appealStatus: curBanInfo.appealStatus,
                 appealReason: curBanInfo.appealReason,
                 appealSubmittedAt: curBanInfo.appealSubmittedAt,
+                warningActive: isCurWarnActive,
+                warningReason: isCurWarnActive ? curWarningInfo.warningReason : undefined,
+                warningIssuedAt: isCurWarnActive ? curWarningInfo.warningIssuedAt : undefined,
+                warningDeadline: isCurWarnActive ? curWarningInfo.warningDeadline : undefined,
+                preBanAppealStatus: curWarningInfo.preBanAppealStatus,
+                preBanAppealReason: curWarningInfo.preBanAppealReason,
+                preBanAppealProofUrl: curWarningInfo.preBanAppealProofUrl,
+                preBanAppealProofName: curWarningInfo.preBanAppealProofName,
+                preBanAppealSubmittedAt: curWarningInfo.preBanAppealSubmittedAt,
               });
             }
           }
@@ -1673,6 +1695,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           for (const u of remoteUsers) {
             if (isUserIdDeleted(u.id, u.email)) continue;
             const banInfo = checkIsUserBanned(u.id, u.email, u);
+            const warningInfo = checkUserWarning(u.id, u.email, u);
+            const isWarnActive = warningInfo.warningActive && warningInfo.preBanAppealStatus !== 'approved';
             const patchedUser: User = {
               ...u,
               isBanned: banInfo.isBanned,
@@ -1681,6 +1705,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               appealStatus: banInfo.appealStatus,
               appealReason: banInfo.appealReason,
               appealSubmittedAt: banInfo.appealSubmittedAt,
+              warningActive: isWarnActive,
+              warningReason: isWarnActive ? warningInfo.warningReason : undefined,
+              warningIssuedAt: isWarnActive ? warningInfo.warningIssuedAt : undefined,
+              warningDeadline: isWarnActive ? warningInfo.warningDeadline : undefined,
+              preBanAppealStatus: warningInfo.preBanAppealStatus,
+              preBanAppealReason: warningInfo.preBanAppealReason,
+              preBanAppealProofUrl: warningInfo.preBanAppealProofUrl,
+              preBanAppealProofName: warningInfo.preBanAppealProofName,
+              preBanAppealSubmittedAt: warningInfo.preBanAppealSubmittedAt,
             };
 
             const existing = userMap.get(patchedUser.id) || (toUuid(patchedUser.id) !== patchedUser.id ? userMap.get(toUuid(patchedUser.id)) : undefined);
@@ -1693,6 +1726,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 existing.banReason = patchedUser.banReason || existing.banReason;
                 existing.bannedAt = patchedUser.bannedAt || existing.bannedAt;
                 existing.appealStatus = patchedUser.appealStatus || existing.appealStatus;
+              }
+              if (patchedUser.warningActive || existing.warningActive) {
+                existing.warningActive = true;
+                existing.warningReason = patchedUser.warningReason || existing.warningReason;
+                existing.warningIssuedAt = patchedUser.warningIssuedAt || existing.warningIssuedAt;
+                existing.warningDeadline = patchedUser.warningDeadline || existing.warningDeadline;
+                existing.preBanAppealStatus = (patchedUser.preBanAppealStatus === 'pending' || existing.preBanAppealStatus === 'pending')
+                  ? 'pending'
+                  : (patchedUser.preBanAppealStatus || existing.preBanAppealStatus);
+                existing.preBanAppealReason = patchedUser.preBanAppealReason || existing.preBanAppealReason;
+                existing.preBanAppealProofUrl = patchedUser.preBanAppealProofUrl || existing.preBanAppealProofUrl;
+                existing.preBanAppealProofName = patchedUser.preBanAppealProofName || existing.preBanAppealProofName;
+                existing.preBanAppealSubmittedAt = patchedUser.preBanAppealSubmittedAt || existing.preBanAppealSubmittedAt;
               }
               continue;
             }
@@ -1750,11 +1796,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               )
             );
 
+            // Authoritative check on warning and due process status for this user
+            const curWarning = checkUserWarning(
+              activeUser.id,
+              activeUser.email,
+              freshMe || currentActiveOnDevice
+            );
+            const isWarningActive = curWarning.warningActive && curWarning.preBanAppealStatus !== 'approved';
+
+            const warningStatusChanged =
+              Boolean(currentActiveOnDevice.warningActive) !== isWarningActive ||
+              currentActiveOnDevice.preBanAppealStatus !== curWarning.preBanAppealStatus ||
+              (isWarningActive && !currentActiveOnDevice.warningDeadline && Boolean(curWarning.warningDeadline));
+
             if (
               finalIsBanned !== currentActiveOnDevice.isBanned ||
               finalAppealStatus !== currentActiveOnDevice.appealStatus ||
               targetRole !== currentActiveOnDevice.role ||
-              hasProfileChanged
+              hasProfileChanged ||
+              warningStatusChanged
             ) {
               const updatedCurr: User = {
                 ...currentActiveOnDevice,
@@ -1780,6 +1840,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 appealStatus: finalAppealStatus,
                 appealReason: freshMe?.appealReason || (finalIsBanned ? currentActiveOnDevice.appealReason : undefined),
                 appealSubmittedAt: freshMe?.appealSubmittedAt || (finalIsBanned ? currentActiveOnDevice.appealSubmittedAt : undefined),
+                warningActive: isWarningActive,
+                warningReason: isWarningActive ? (curWarning.warningReason || currentActiveOnDevice.warningReason || 'Violation of Community Guidelines') : undefined,
+                warningIssuedAt: isWarningActive ? (curWarning.warningIssuedAt || currentActiveOnDevice.warningIssuedAt) : undefined,
+                warningDeadline: isWarningActive ? (curWarning.warningDeadline || currentActiveOnDevice.warningDeadline) : undefined,
+                preBanAppealStatus: curWarning.preBanAppealStatus || (isWarningActive ? (currentActiveOnDevice.preBanAppealStatus || 'none') : 'approved'),
+                preBanAppealReason: curWarning.preBanAppealReason || currentActiveOnDevice.preBanAppealReason,
+                preBanAppealProofUrl: curWarning.preBanAppealProofUrl || currentActiveOnDevice.preBanAppealProofUrl,
+                preBanAppealProofName: curWarning.preBanAppealProofName || currentActiveOnDevice.preBanAppealProofName,
+                preBanAppealSubmittedAt: curWarning.preBanAppealSubmittedAt || currentActiveOnDevice.preBanAppealSubmittedAt,
               };
               currentUserRef.current = updatedCurr;
               setCurrentUser(updatedCurr);
@@ -2121,6 +2190,62 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           storage.set('reports', merged);
           return merged;
         });
+
+        // Synchronize pre-ban warnings & counter-proofs from remote reports
+        for (const rep of remoteReports) {
+          if (rep.type === 'user' && rep.targetId) {
+            const isApproved = rep.status === 'Rejected' || rep.appealStatus === 'approved';
+            if (isApproved) {
+              clearUserWarning(rep.targetId);
+              if (activeUser && isSameUser(activeUser.id, rep.targetId)) {
+                setCurrentUser(prev => {
+                  if (!prev) return null;
+                  const updated: User = {
+                    ...prev,
+                    warningActive: false,
+                    warningReason: undefined,
+                    warningDeadline: undefined,
+                    preBanAppealStatus: 'approved',
+                  };
+                  storage.set('currentUser', updated);
+                  return updated;
+                });
+              }
+            } else if (rep.status === 'Warning Issued' || rep.status === 'Appeal Submitted' || rep.warningReason || rep.warningDeadline) {
+              const pendingAppeal = rep.status === 'Appeal Submitted' || rep.appealStatus === 'pending';
+              recordUserWarning({
+                userId: rep.targetId,
+                warningReason: rep.warningReason || rep.description || 'Violation of Community Guidelines',
+                warningIssuedAt: rep.warningIssuedAt || rep.createdAt,
+                warningDeadline: rep.warningDeadline,
+                preBanAppealStatus: pendingAppeal ? 'pending' : (rep.appealStatus || 'none'),
+                preBanAppealReason: rep.appealReason,
+                preBanAppealProofUrl: rep.appealProofUrl,
+                preBanAppealProofName: rep.appealProofName,
+                preBanAppealSubmittedAt: rep.appealSubmittedAt,
+              });
+              if (activeUser && isSameUser(activeUser.id, rep.targetId)) {
+                setCurrentUser(prev => {
+                  if (!prev) return null;
+                  const updated: User = {
+                    ...prev,
+                    warningActive: true,
+                    warningReason: rep.warningReason || rep.description || prev.warningReason || 'Violation of Community Guidelines',
+                    warningIssuedAt: rep.warningIssuedAt || prev.warningIssuedAt,
+                    warningDeadline: rep.warningDeadline || prev.warningDeadline,
+                    preBanAppealStatus: pendingAppeal ? 'pending' : (rep.appealStatus || prev.preBanAppealStatus || 'none'),
+                    preBanAppealReason: rep.appealReason || prev.preBanAppealReason,
+                    preBanAppealProofUrl: rep.appealProofUrl || prev.preBanAppealProofUrl,
+                    preBanAppealProofName: rep.appealProofName || prev.preBanAppealProofName,
+                    preBanAppealSubmittedAt: rep.appealSubmittedAt || prev.preBanAppealSubmittedAt,
+                  };
+                  storage.set('currentUser', updated);
+                  return updated;
+                });
+              }
+            }
+          }
+        }
       }
 
       // 5. Synchronize Notifications
@@ -8357,7 +8482,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     supabaseDb.insertNotification(warningNotif, resolvedUserId);
 
     if (reportId) {
-      await supabaseDb.updateReportStatus(reportId, 'user', 'Warning Issued');
+      await supabaseDb.updateReportStatus(reportId, 'user', 'Warning Issued', {
+        warningReason: finalReason,
+        warningIssuedAt: nowIso,
+        warningDeadline: deadlineIso,
+        appealStatus: 'none',
+      });
+    } else {
+      const warningReport: ReportItem = {
+        id: `rep_warn_${toUuid(resolvedUserId)}`,
+        type: 'user',
+        targetId: resolvedUserId,
+        targetName: targetUser?.displayName || targetUser?.username || 'User',
+        targetSubtitle: targetUser?.username ? `@${targetUser.username}` : '',
+        scenario: 'Community Guidelines Flag',
+        description: finalReason,
+        status: 'Warning Issued',
+        createdAt: nowIso,
+        timestamp: 'Just now',
+        warningReason: finalReason,
+        warningIssuedAt: nowIso,
+        warningDeadline: deadlineIso,
+        appealStatus: 'none',
+      };
+      await supabaseDb.insertReport(warningReport);
     }
 
     // 7. Broadcast event so other open tabs update
@@ -8495,8 +8643,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     supabaseDb.insertNotification(adminNotif, 'admin');
 
     // 7. Update Supabase reports
-    for (const r of reports.filter(rep => isSameUser(rep.targetId, currentUser.id) && rep.type === 'user')) {
-      await supabaseDb.updateReportStatus(r.id, 'user', 'Appeal Submitted');
+    const targetReports = reports.filter(rep => (isSameUser(rep.targetId, currentUser.id) || rep.targetId === currentUser.id) && rep.type === 'user');
+    if (targetReports.length > 0) {
+      for (const r of targetReports) {
+        await supabaseDb.updateReportStatus(r.id, 'user', 'Appeal Submitted', {
+          warningReason: currentUser.warningReason || 'Violation of Community Guidelines',
+          warningIssuedAt: currentUser.warningIssuedAt,
+          warningDeadline: currentUser.warningDeadline,
+          appealStatus: 'pending',
+          appealReason: cleanReason,
+          appealProofUrl: proofUrl,
+          appealProofName: proofName,
+          appealSubmittedAt: nowIso,
+        });
+      }
+    } else {
+      const appealReport: ReportItem = {
+        id: `rep_warn_${toUuid(currentUser.id)}`,
+        type: 'user',
+        targetId: currentUser.id,
+        targetName: currentUser.displayName || currentUser.username,
+        targetSubtitle: `@${currentUser.username}`,
+        scenario: 'Community Guidelines Flag',
+        description: currentUser.warningReason || 'Violation of Community Guidelines',
+        status: 'Appeal Submitted',
+        createdAt: nowIso,
+        timestamp: 'Just now',
+        warningReason: currentUser.warningReason || 'Violation of Community Guidelines',
+        warningIssuedAt: currentUser.warningIssuedAt,
+        warningDeadline: currentUser.warningDeadline,
+        appealStatus: 'pending',
+        appealReason: cleanReason,
+        appealProofUrl: proofUrl,
+        appealProofName: proofName,
+        appealSubmittedAt: nowIso,
+      };
+      await supabaseDb.insertReport(appealReport);
     }
 
     return true;
@@ -8616,7 +8798,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       supabaseDb.insertNotification(approvedNotif, resolvedUserId);
 
       if (reportId) {
-        await supabaseDb.updateReportStatus(reportId, 'user', 'Rejected');
+        await supabaseDb.updateReportStatus(reportId, 'user', 'Rejected', {
+          appealStatus: 'approved',
+        });
+      } else {
+        const matchingReports = reports.filter(r => isSameUser(r.targetId, resolvedUserId) && r.type === 'user');
+        for (const mr of matchingReports) {
+          await supabaseDb.updateReportStatus(mr.id, 'user', 'Rejected', {
+            appealStatus: 'approved',
+          });
+        }
       }
 
       return true;
@@ -8645,7 +8836,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (reportId) {
-        await supabaseDb.updateReportStatus(reportId, 'user', 'Approved');
+        await supabaseDb.updateReportStatus(reportId, 'user', 'Approved', {
+          appealStatus: 'declined',
+        });
+      } else {
+        const matchingReports = reports.filter(r => isSameUser(r.targetId, resolvedUserId) && r.type === 'user');
+        for (const mr of matchingReports) {
+          await supabaseDb.updateReportStatus(mr.id, 'user', 'Approved', {
+            appealStatus: 'declined',
+          });
+        }
       }
 
       return true;

@@ -440,19 +440,23 @@ export const recordUserWarning = (data: {
     const nowIso = data.warningIssuedAt || new Date().toISOString();
     const deadlineIso = data.warningDeadline || new Date(Date.now() + 24 * 3600 * 1000).toISOString();
 
+    const existingRec = (cleanUserId && (warningsMap[cleanUserId] || warningsMap[cleanUserId.toLowerCase()] || warningsMap[toUuid(cleanUserId)])) ||
+      (cleanUsername && (warningsMap[cleanUsername] || warningsMap[`@${cleanUsername}`])) ||
+      (cleanEmail && warningsMap[cleanEmail]);
+
     const record = {
       warningActive: true,
-      warningReason: data.warningReason || 'Violation of Community Guidelines',
-      warningIssuedAt: nowIso,
-      warningDeadline: deadlineIso,
-      preBanAppealStatus: data.preBanAppealStatus || 'none',
-      preBanAppealReason: data.preBanAppealReason,
-      preBanAppealProofUrl: data.preBanAppealProofUrl,
-      preBanAppealProofName: data.preBanAppealProofName,
-      preBanAppealSubmittedAt: data.preBanAppealSubmittedAt,
-      userId: cleanUserId,
-      username: cleanUsername,
-      email: cleanEmail,
+      warningReason: data.warningReason || existingRec?.warningReason || 'Violation of Community Guidelines',
+      warningIssuedAt: data.warningIssuedAt || existingRec?.warningIssuedAt || nowIso,
+      warningDeadline: data.warningDeadline || existingRec?.warningDeadline || deadlineIso,
+      preBanAppealStatus: data.preBanAppealStatus || existingRec?.preBanAppealStatus || 'none',
+      preBanAppealReason: data.preBanAppealReason !== undefined ? data.preBanAppealReason : existingRec?.preBanAppealReason,
+      preBanAppealProofUrl: data.preBanAppealProofUrl !== undefined ? data.preBanAppealProofUrl : existingRec?.preBanAppealProofUrl,
+      preBanAppealProofName: data.preBanAppealProofName !== undefined ? data.preBanAppealProofName : existingRec?.preBanAppealProofName,
+      preBanAppealSubmittedAt: data.preBanAppealSubmittedAt || existingRec?.preBanAppealSubmittedAt,
+      userId: cleanUserId || existingRec?.userId,
+      username: cleanUsername || existingRec?.username,
+      email: cleanEmail || existingRec?.email,
     };
 
     if (cleanUserId) {
@@ -524,7 +528,7 @@ export const clearUserWarning = (
           (cleanUserId && (curr.id === cleanUserId || toUuid(curr.id) === toUuid(cleanUserId))) ||
           (cleanEmail && curr.email && curr.email.toLowerCase() === cleanEmail) ||
           (cleanUsername && curr.username && curr.username.toLowerCase().replace(/^@/, '') === cleanUsername);
-        if (matches && curr.warningActive) {
+        if (matches && (curr.warningActive || curr.preBanAppealStatus !== 'approved')) {
           curr.warningActive = false;
           curr.warningReason = undefined;
           curr.preBanAppealStatus = 'approved';
@@ -561,7 +565,17 @@ export const checkUserWarning = (
   const candidateEmail = (email || userObj?.email || '').trim().toLowerCase();
   const candidateId = userId ? String(userId).trim() : (userObj?.id ? String(userObj.id).trim() : '');
 
-  if (userObj?.warningActive) {
+  // 1. Authoritative check on userObj:
+  // If explicitly approved by admin, warning is definitely cleared!
+  if (userObj?.preBanAppealStatus === 'approved') {
+    return {
+      warningActive: false,
+      preBanAppealStatus: 'approved',
+    };
+  }
+
+  // If userObj explicitly has warningActive OR preBanAppealStatus === 'pending':
+  if (userObj && (userObj.warningActive || userObj.preBanAppealStatus === 'pending')) {
     return {
       warningActive: true,
       warningReason: userObj.warningReason || 'Violation of Community Guidelines',
@@ -575,6 +589,7 @@ export const checkUserWarning = (
     };
   }
 
+  // 2. Check localStorage warningsMap
   let warningsMap: Record<string, any> = {};
   try {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_user_warnings_v1') : null;
@@ -595,20 +610,101 @@ export const checkUserWarning = (
 
   for (const k of keys) {
     const record = warningsMap[k];
-    if (record && record.warningActive) {
-      return {
-        warningActive: true,
-        warningReason: record.warningReason || 'Violation of Community Guidelines',
-        warningIssuedAt: record.warningIssuedAt,
-        warningDeadline: record.warningDeadline,
-        preBanAppealStatus: record.preBanAppealStatus || 'none',
-        preBanAppealReason: record.preBanAppealReason,
-        preBanAppealProofUrl: record.preBanAppealProofUrl,
-        preBanAppealProofName: record.preBanAppealProofName,
-        preBanAppealSubmittedAt: record.preBanAppealSubmittedAt,
-      };
+    if (record) {
+      if (record.preBanAppealStatus === 'approved') {
+        return { warningActive: false, preBanAppealStatus: 'approved' };
+      }
+      if (record.warningActive || record.preBanAppealStatus === 'pending') {
+        return {
+          warningActive: true,
+          warningReason: record.warningReason || 'Violation of Community Guidelines',
+          warningIssuedAt: record.warningIssuedAt,
+          warningDeadline: record.warningDeadline,
+          preBanAppealStatus: record.preBanAppealStatus || 'none',
+          preBanAppealReason: record.preBanAppealReason,
+          preBanAppealProofUrl: record.preBanAppealProofUrl,
+          preBanAppealProofName: record.preBanAppealProofName,
+          preBanAppealSubmittedAt: record.preBanAppealSubmittedAt,
+        };
+      }
     }
   }
+
+  // 3. Deep scan across all records in warningsMap
+  for (const rec of Object.values(warningsMap)) {
+    if (!rec) continue;
+    const matchesId = candidateId && (
+      isSameUser(rec.userId, candidateId) ||
+      isSameUser(rec.id, candidateId) ||
+      rec.userId === candidateId ||
+      rec.id === candidateId ||
+      (rec.userId && toUuid(rec.userId) === toUuid(candidateId))
+    );
+    const matchesEmail = candidateEmail && rec.email && rec.email.toLowerCase() === candidateEmail;
+    const matchesUsername = candidateUsername && rec.username && rec.username.toLowerCase().replace(/^@/, '') === candidateUsername;
+
+    if (matchesId || matchesEmail || matchesUsername) {
+      if (rec.preBanAppealStatus === 'approved') {
+        return { warningActive: false, preBanAppealStatus: 'approved' };
+      }
+      if (rec.warningActive || rec.preBanAppealStatus === 'pending') {
+        return {
+          warningActive: true,
+          warningReason: rec.warningReason || 'Violation of Community Guidelines',
+          warningIssuedAt: rec.warningIssuedAt,
+          warningDeadline: rec.warningDeadline,
+          preBanAppealStatus: rec.preBanAppealStatus || 'none',
+          preBanAppealReason: rec.preBanAppealReason,
+          preBanAppealProofUrl: rec.preBanAppealProofUrl,
+          preBanAppealProofName: rec.preBanAppealProofName,
+          preBanAppealSubmittedAt: rec.preBanAppealSubmittedAt,
+        };
+      }
+    }
+  }
+
+  // 4. Fallback check: Inspect active reports stored locally
+  try {
+    const rawReports = typeof localStorage !== 'undefined' ? localStorage.getItem('viralhub_reports') : null;
+    if (rawReports) {
+      const reportsList: any[] = JSON.parse(rawReports);
+      for (const rep of reportsList) {
+        if (rep && rep.type === 'user') {
+          const matchesTarget = (candidateId && (isSameUser(rep.targetId, candidateId) || rep.targetId === candidateId || toUuid(rep.targetId) === toUuid(candidateId))) ||
+            (candidateUsername && rep.targetSubtitle && rep.targetSubtitle.toLowerCase().replace(/^@/, '') === candidateUsername) ||
+            (candidateUsername && rep.targetName && rep.targetName.toLowerCase() === candidateUsername);
+
+          if (matchesTarget) {
+            if (rep.status === 'Rejected' || rep.appealStatus === 'approved') {
+              return { warningActive: false, preBanAppealStatus: 'approved' };
+            }
+            if (rep.status === 'Warning Issued' || rep.status === 'Appeal Submitted' || rep.warningReason || rep.warningDeadline) {
+              const pendingAppeal = rep.status === 'Appeal Submitted' || rep.appealStatus === 'pending';
+              const resolvedWarning = {
+                warningActive: true,
+                warningReason: rep.warningReason || rep.description || 'Violation of Community Guidelines',
+                warningIssuedAt: rep.warningIssuedAt || rep.createdAt,
+                warningDeadline: rep.warningDeadline,
+                preBanAppealStatus: (pendingAppeal ? 'pending' : (rep.appealStatus || 'none')) as any,
+                preBanAppealReason: rep.appealReason,
+                preBanAppealProofUrl: rep.appealProofUrl,
+                preBanAppealProofName: rep.appealProofName,
+                preBanAppealSubmittedAt: rep.appealSubmittedAt,
+              };
+              // Reseed into warningsMap so subsequent lookups are instant
+              recordUserWarning({
+                userId: candidateId || rep.targetId,
+                username: candidateUsername,
+                email: candidateEmail,
+                ...resolvedWarning,
+              });
+              return resolvedWarning;
+            }
+          }
+        }
+      }
+    }
+  } catch {}
 
   return {
     warningActive: false,
@@ -5222,7 +5318,22 @@ export const supabaseDb = {
   async updateReportStatus(
     reportId: string,
     type: 'video' | 'user' | 'live_stream',
-    status: 'Approved' | 'Rejected' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted'
+    status: 'Approved' | 'Rejected' | 'Under Review' | 'Warning Issued' | 'Appeal Submitted',
+    metaUpdate?: {
+      warningReason?: string;
+      warningIssuedAt?: string;
+      warningDeadline?: string;
+      appealStatus?: 'none' | 'pending' | 'approved' | 'declined';
+      appealReason?: string;
+      appealProofUrl?: string;
+      appealProofName?: string;
+      appealSubmittedAt?: string;
+      targetName?: string;
+      targetSubtitle?: string;
+      targetThumbnail?: string;
+      scenario?: string;
+      description?: string;
+    }
   ): Promise<boolean> {
     const client = getSupabaseClient();
     if (!client) return false;
@@ -5232,16 +5343,45 @@ export const supabaseDb = {
       const table = type === 'video' ? 'ReportVideo' : 'ReportUser';
       const altTable = type === 'video' ? 'ReportUser' : 'ReportVideo';
 
-      let { error } = await client.from(table).update({ Status: status }).eq('ReportID', rUuid);
+      const updatePayload: Record<string, any> = { Status: status };
+      const snakeUpdatePayload: Record<string, any> = { status };
+
+      if (metaUpdate) {
+        let currentReason = '';
+        try {
+          const { data: curRow } = await client.from(table).select('Reason').eq('ReportID', rUuid).maybeSingle();
+          if (curRow?.Reason) currentReason = curRow.Reason;
+        } catch {}
+
+        let basicReason = 'Community Guidelines Issue';
+        let existingMeta: Record<string, any> = {};
+
+        if (currentReason.includes('|||')) {
+          const parts = currentReason.split('|||');
+          basicReason = parts[0] || basicReason;
+          try {
+            existingMeta = JSON.parse(parts[1]);
+          } catch {}
+        } else if (currentReason) {
+          basicReason = currentReason;
+        }
+
+        const mergedMeta = { ...existingMeta, ...metaUpdate };
+        const serializedReason = `${basicReason}|||${JSON.stringify(mergedMeta)}`;
+        updatePayload.Reason = serializedReason;
+        snakeUpdatePayload.reason = serializedReason;
+      }
+
+      let { error } = await client.from(table).update(updatePayload).eq('ReportID', rUuid);
       if (error) {
-        const alt = await client.from(altTable).update({ Status: status }).eq('ReportID', rUuid);
+        const alt = await client.from(altTable).update(updatePayload).eq('ReportID', rUuid);
         error = alt.error;
       }
 
       // Try snake_case tables if PascalCase not found
       if (error) {
         const snakeTable = type === 'video' ? 'report_videos' : 'report_users';
-        await client.from(snakeTable).update({ status }).eq('id', rUuid);
+        await client.from(snakeTable).update(snakeUpdatePayload).eq('id', rUuid);
       }
       return true;
     } catch (e) {
