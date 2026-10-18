@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { Header } from './components/layout/Header';
+import { BottomNav } from './components/layout/BottomNav';
 import { AuthPage } from './components/auth/AuthPage';
 import { HomeFeed } from './components/feed/HomeFeed';
 import { ExploreGrid } from './components/feed/ExploreGrid';
@@ -234,6 +235,9 @@ const AppContent: React.FC = () => {
         <main className="flex-1 min-h-0 overflow-hidden relative flex flex-col z-0">
           {renderActiveTabContent()}
         </main>
+
+        {/* TikTok-style Bottom Navigation for Mobile */}
+        {!isLiveStudio && <BottomNav />}
       </div>
 
       {/* Global Modals & Drawers */}

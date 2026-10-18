@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import { ViralHubLogo } from '../common/ViralHubLogo';
-import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft, Clock } from 'lucide-react';
+import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft, Clock, Radio } from 'lucide-react';
 import { checkIsUserBanned } from '../../lib/supabase';
 
 interface HeaderProps {
@@ -25,6 +25,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     addRecentSearch,
     removeRecentSearch,
     clearRecentSearches,
+    refreshFeed,
   } = useApp();
 
   const isLiveStudio = activeTab === 'live_host_setup' || activeTab === 'live_host_active';
@@ -447,8 +448,8 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
         </div>
       ) : (
         <>
-          {/* Left Controls: Desktop Sidebar Toggle + Mobile Hamburger + Search Bar (placed on the LEFT side) */}
-          <div className="flex items-center gap-3 shrink-0">
+          {/* Left Controls: Desktop Sidebar Toggle + Mobile LIVE Button + Desktop Search Bar */}
+          <div className="flex items-center gap-2.5 shrink-0">
             {/* Desktop Sidebar Collapse Toggle */}
             <button
               type="button"
@@ -460,14 +461,20 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
               <Menu className="w-5 h-5 text-neutral-300" />
             </button>
 
-            {/* Mobile Hamburger Menu */}
+            {/* Mobile LIVE Button (like TikTok top-left) */}
             <button
               type="button"
-              onClick={onToggleMobileNav}
-              className="md:hidden p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800/80 transition-colors cursor-pointer"
-              aria-label="Open menu"
+              onClick={() => setActiveTab('live')}
+              className={`md:hidden flex items-center gap-1.5 px-2.5 py-1 rounded-full border transition-all text-xs font-bold cursor-pointer ${
+                activeTab === 'live' || activeTab === 'live_viewer'
+                  ? 'bg-[#ff007a]/20 border-[#ff007a] text-[#ff007a] shadow-[0_0_10px_rgba(255,0,122,0.4)]'
+                  : 'bg-[#181822]/90 border-neutral-800 text-neutral-300 hover:text-white'
+              }`}
+              title="Watch Live Streams"
+              aria-label="Live Streams"
             >
-              <Menu className="w-5 h-5" />
+              <Radio className="w-3.5 h-3.5 text-[#ff007a] animate-pulse" />
+              <span>LIVE</span>
             </button>
 
             {/* Desktop Search Bar (Strictly on the LEFT side like in TikTok / 3rd screenshot) */}
@@ -687,11 +694,60 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             </div>
           </div>
 
-          {/* Center Spacer */}
-          <div className="flex-1" />
+          {/* Center Area: Desktop Spacer, Mobile Feed Switcher / Logo */}
+          <div className="flex-1 flex items-center justify-center min-w-0 px-1">
+            {/* Mobile Top Feed Switcher: Following | Friends | For You */}
+            {(activeTab === 'home' || activeTab === 'following' || activeTab === 'friends') ? (
+              <div className="md:hidden flex items-center justify-center gap-3.5 sm:gap-5 text-sm font-semibold select-none">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('following')}
+                  className={`relative py-1 transition-colors cursor-pointer text-xs sm:text-sm ${
+                    activeTab === 'following' ? 'text-white font-bold' : 'text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  Following
+                  {activeTab === 'following' && (
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.8)]" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('friends')}
+                  className={`relative py-1 transition-colors cursor-pointer text-xs sm:text-sm ${
+                    activeTab === 'friends' ? 'text-white font-bold' : 'text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  Friends
+                  {activeTab === 'friends' && (
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.8)]" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (activeTab === 'home') refreshFeed();
+                    else setActiveTab('home');
+                  }}
+                  className={`relative py-1 transition-colors cursor-pointer text-xs sm:text-sm ${
+                    activeTab === 'home' ? 'text-white font-bold' : 'text-neutral-400 hover:text-neutral-200'
+                  }`}
+                >
+                  For You
+                  {activeTab === 'home' && (
+                    <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-0.5 bg-white rounded-full shadow-[0_0_6px_rgba(255,255,255,0.8)]" />
+                  )}
+                </button>
+              </div>
+            ) : (
+              <div className="md:hidden flex items-center justify-center">
+                <ViralHubLogo size="sm" />
+              </div>
+            )}
+          </div>
 
-          {/* Right Controls: Mobile Search Icon + Notification Bell + "+ Upload" Button */}
-          <div className="flex items-center justify-end gap-1.5 sm:gap-3.5 shrink-0">
+          {/* Right Controls: Mobile Search + Notifications + Mobile More Drawer Button + Desktop Upload Button */}
+          <div className="flex items-center justify-end gap-1 sm:gap-3.5 shrink-0">
             {/* Mobile Search Icon Button */}
             <button
               type="button"
@@ -722,10 +778,21 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
               )}
             </button>
 
-            {/* Hot Pink "+ Upload" Button */}
+            {/* Mobile Options Drawer Button */}
+            <button
+              type="button"
+              onClick={onToggleMobileNav}
+              className="md:hidden p-2 text-neutral-400 hover:text-white rounded-full hover:bg-neutral-800/80 transition-colors cursor-pointer"
+              aria-label="More options"
+              title="More options"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+
+            {/* Desktop "+ Upload" Button (On mobile, + button is in the TikTok Bottom Navigation bar) */}
             <button
               onClick={() => setActiveTab('upload')}
-              className="flex items-center gap-1.5 py-1.5 sm:py-2 px-2.5 sm:px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-semibold text-xs sm:text-sm shadow-[0_0_15px_rgba(255,0,122,0.35)] transition-all cursor-pointer transform active:scale-95 shrink-0"
+              className="hidden md:flex items-center gap-1.5 py-1.5 sm:py-2 px-2.5 sm:px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-semibold text-xs sm:text-sm shadow-[0_0_15px_rgba(255,0,122,0.35)] transition-all cursor-pointer transform active:scale-95 shrink-0"
             >
               <Plus className="w-4 h-4 stroke-[3]" />
               <span>Upload</span>
