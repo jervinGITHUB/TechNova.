@@ -368,8 +368,8 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
         </div>
       ) : (
         <>
-          {/* Left Balance Container: Mobile Hamburger Menu & ViralHub Logo / Desktop Counterweight */}
-          <div className="flex items-center justify-start shrink-0 md:w-52 gap-2 sm:gap-3">
+          {/* Left Balance Container: Mobile Hamburger Menu (3 lines) / Desktop Counterweight */}
+          <div className="flex items-center justify-start shrink-0 md:w-52">
             <button
               onClick={onToggleMobileNav}
               className="md:hidden p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800/80 transition-colors cursor-pointer"
@@ -377,15 +377,6 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             >
               <Menu className="w-5 h-5" />
             </button>
-
-            {/* Mobile ViralHub Logo */}
-            <div
-              onClick={() => setActiveTab('home')}
-              className="md:hidden cursor-pointer flex items-center hover:opacity-90 transition-opacity"
-              title="ViralHub Home"
-            >
-              <ViralHubLogo size="sm" />
-            </div>
           </div>
 
           {/* Center Search Input with Instant Dropdown (Desktop only - centered) */}

@@ -22,9 +22,10 @@ import {
 
 interface SidebarProps {
   onNavigate?: () => void;
+  hideLogo?: boolean;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, hideLogo = false }) => {
   const {
     currentUser,
     users,
@@ -85,19 +86,21 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
   ];
 
   return (
-    <aside className="w-64 shrink-0 bg-[#0d0d12] border-r border-neutral-800/80 flex flex-col justify-between h-screen sticky top-0 px-4 py-5 select-none z-30">
-      {/* Top Brand Logo */}
+    <aside className="w-full md:w-64 shrink-0 bg-[#0d0d12] border-r-0 md:border-r border-neutral-800/80 flex flex-col justify-between h-full md:h-screen sticky top-0 px-4 py-4 md:py-5 select-none z-30">
+      {/* Top Brand Logo (shown on desktop or when hideLogo is false) */}
       <div>
-        <div
-          onClick={() => {
-            setActiveTab('home');
-            refreshFeed();
-            onNavigate?.();
-          }}
-          className="cursor-pointer py-1 px-2 mb-8 hover:opacity-90 transition-opacity"
-        >
-          <ViralHubLogo size="md" />
-        </div>
+        {!hideLogo && (
+          <div
+            onClick={() => {
+              setActiveTab('home');
+              refreshFeed();
+              onNavigate?.();
+            }}
+            className="cursor-pointer py-1 px-2 mb-8 hover:opacity-90 transition-opacity"
+          >
+            <ViralHubLogo size="md" />
+          </div>
+        )}
 
         {/* Primary Navigation Links */}
         <nav className="space-y-1.5">
@@ -113,7 +116,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate }) => {
                   if (item.tab === 'messages') {
                     setMessagesMobileView('list');
                   }
-                  if (item.tab === 'home') {
+                  if (item.tab === 'home' || item.tab === 'following' || item.tab === 'friends') {
                     refreshFeed();
                   }
                   setActiveTab(item.tab);

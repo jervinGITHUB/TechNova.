@@ -1102,9 +1102,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Feed refresh trigger counter: incrementing this forces feed re-shuffle and reload
   const [feedRefreshKey, setFeedRefreshKey] = useState<number>(0);
+  const lastSyncTimeRef = useRef<number>(0);
   const refreshFeed = (overrideUser?: User) => {
+    // 1. Immediately trigger client-side video reshuffling and scroll-to-top (0ms, 0 disk IO, 0 DB queries)
     setFeedRefreshKey(k => k + 1);
-    syncWithSupabase(overrideUser);
+
+    // 2. Throttle remote database background sync to at most once every 30 seconds to strictly protect Supabase disk IO
+    const now = Date.now();
+    if (now - lastSyncTimeRef.current > 30000 || overrideUser) {
+      lastSyncTimeRef.current = now;
+      syncWithSupabase(overrideUser);
+    }
   };
 
   // Block relations: [{ blockerId, blockedId, createdAt }]

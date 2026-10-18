@@ -621,13 +621,25 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   );
 
   return (
-    <div className="flex items-center md:items-end justify-center md:gap-4 w-full h-full max-h-[calc(100dvh-4.25rem)] md:max-h-[calc(100vh-5.5rem)] snap-start snap-always shrink-0 mb-1 md:mb-6 select-none relative">
+    <div className="flex items-center md:items-end justify-center md:gap-4 w-full h-full max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] snap-start snap-always shrink-0 mb-1 md:mb-6 select-none relative">
       {/* 1. Main 9:16 Video Player Container */}
       <div
         onClick={() => togglePlayPause()}
         data-video-player="true"
-        className="video-feed-card relative aspect-[9/16] h-full max-h-[calc(100dvh-4.25rem)] md:max-h-[calc(100vh-5.5rem)] w-full max-w-full md:max-w-none bg-[#101017] rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between cursor-pointer"
+        className="video-feed-card relative aspect-[9/16] h-full max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] w-auto max-w-full bg-black rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between cursor-pointer"
       >
+        {/* Subtle Ambient Glow for Letterboxed areas on Desktop (TikTok web style) */}
+        <div className="absolute inset-0 overflow-hidden pointer-events-none hidden md:block">
+          <img
+            src={video.thumbnailUrl || videoSrc}
+            alt=""
+            className="w-full h-full object-cover blur-2xl opacity-20 scale-125"
+            onError={e => {
+              (e.currentTarget as HTMLImageElement).style.display = 'none';
+            }}
+          />
+        </div>
+
         {/* Background Video Media / Canvas */}
         {videoSrc ? (
           isVideoUrl ? (
@@ -671,13 +683,13 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
                   setVideoSrc('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4');
                 }
               }}
-              className="w-full h-full object-cover"
+              className="relative z-10 w-full h-full object-cover md:object-contain bg-black"
             />
           ) : (
             <img
               src={videoSrc}
               alt={video.caption}
-              className="w-full h-full object-cover transition-transform duration-500"
+              className="relative z-10 w-full h-full object-cover md:object-contain transition-transform duration-500 bg-black"
             />
           )
         ) : (
@@ -905,7 +917,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 // Empty state for Friends feed
 const EmptyFriendsFeedCard: React.FC<{ onDiscover: () => void }> = ({ onDiscover }) => {
   return (
-    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100vh-6rem)] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none shrink-0 mb-6 flex flex-col items-center justify-center p-6 text-center">
+    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none shrink-0 mb-6 flex flex-col items-center justify-center p-6 text-center">
       <div className="w-16 h-16 rounded-3xl bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center text-[#ff007a] mb-4 shadow-[0_0_20px_rgba(255,0,122,0.3)]">
         <Users className="w-8 h-8" />
       </div>
@@ -926,7 +938,7 @@ const EmptyFriendsFeedCard: React.FC<{ onDiscover: () => void }> = ({ onDiscover
 // Empty state for Following feed
 const EmptyFollowingFeedCard: React.FC<{ onDiscover: () => void }> = ({ onDiscover }) => {
   return (
-    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100vh-6rem)] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none shrink-0 mb-6 flex flex-col items-center justify-center p-6 text-center">
+    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none shrink-0 mb-6 flex flex-col items-center justify-center p-6 text-center">
       <div className="w-16 h-16 rounded-3xl bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center text-[#ff007a] mb-4 shadow-[0_0_20px_rgba(255,0,122,0.3)]">
         <UserCheck className="w-8 h-8" />
       </div>
@@ -949,9 +961,9 @@ const EmptyFeedLayoutCard: React.FC = () => {
   const { setActiveTab } = useApp();
 
   return (
-    <div className="flex items-center md:items-end justify-center md:gap-4 w-full h-full max-h-[calc(100dvh-4.25rem)] md:max-h-[calc(100vh-5.5rem)] snap-start snap-always shrink-0 mb-1 md:mb-6 select-none relative">
+    <div className="flex items-center md:items-end justify-center md:gap-4 w-full h-full max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] snap-start snap-always shrink-0 mb-1 md:mb-6 select-none relative">
       {/* Center Wireframe Video Container */}
-      <div className="relative aspect-[9/16] h-full max-h-[calc(100dvh-4.25rem)] md:max-h-[calc(100vh-5.5rem)] w-full max-w-full md:max-w-none bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between">
+      <div className="relative aspect-[9/16] h-full max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] w-auto max-w-full bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between">
         <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10">
           <div className="w-16 h-16 rounded-3xl bg-[#1c1c28] border border-neutral-700/80 flex items-center justify-center text-neutral-400 mb-4 shadow-xl">
             <VideoIcon className="w-8 h-8 text-[#ff007a]" />
@@ -1115,10 +1127,10 @@ export const HomeFeed: React.FC = () => {
     });
   }, [videos, users, currentUser, isBlockedEitherWay]);
 
-  // Following videos: videos from creators followed by currentUser (respecting audience)
+  // Following videos: videos from creators followed by currentUser (respecting audience) with refresh & shuffle
   const followingVideos = useMemo(() => {
     if (!currentUser) return [];
-    return visibleApprovedVideos.filter(v => {
+    const eligibleFollowing = visibleApprovedVideos.filter(v => {
       const creatorId = v.creatorId || v.creator?.id;
       if (!creatorId) return false;
       const status = getFollowStatus(creatorId);
@@ -1128,26 +1140,38 @@ export const HomeFeed: React.FC = () => {
         return status === 'friends';
       }
       return true;
-    }).sort((a, b) => {
-      const timeA = new Date(a.createdAt || 0).getTime() || 0;
-      const timeB = new Date(b.createdAt || 0).getTime() || 0;
-      return timeB - timeA;
     });
-  }, [visibleApprovedVideos, currentUser, getFollowStatus, followRelations]);
 
-  // Friends videos: videos from mutual friends (both users follow each other)
+    if (eligibleFollowing.length <= 1) return eligibleFollowing;
+
+    // Full Fisher-Yates random shuffle triggered on each refresh/shuffle click
+    const array = [...eligibleFollowing];
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+  }, [visibleApprovedVideos, currentUser, getFollowStatus, followRelations, shuffleSeed]);
+
+  // Friends videos: videos from mutual friends (both users follow each other) with refresh & shuffle
   const friendsVideos = useMemo(() => {
     if (!currentUser) return [];
-    return visibleApprovedVideos.filter(v => {
+    const eligibleFriends = visibleApprovedVideos.filter(v => {
       const creatorId = v.creatorId || v.creator?.id;
       if (!creatorId) return false;
       return getFollowStatus(creatorId) === 'friends';
-    }).sort((a, b) => {
-      const timeA = new Date(a.createdAt || 0).getTime() || 0;
-      const timeB = new Date(b.createdAt || 0).getTime() || 0;
-      return timeB - timeA;
     });
-  }, [visibleApprovedVideos, currentUser, getFollowStatus, followRelations]);
+
+    if (eligibleFriends.length <= 1) return eligibleFriends;
+
+    // Full Fisher-Yates random shuffle triggered on each refresh/shuffle click
+    const array = [...eligibleFriends];
+    for (let i = array.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+  }, [visibleApprovedVideos, currentUser, getFollowStatus, followRelations, shuffleSeed]);
 
   // For You videos: randomized discovery feed with newest video first (respecting audience)
   const forYouVideos = useMemo(() => {
@@ -1174,16 +1198,10 @@ export const HomeFeed: React.FC = () => {
 
     if (eligibleForYou.length <= 1) return eligibleForYou;
 
-    // Full Fisher-Yates pseudo-random shuffle seeded by shuffleSeed:
-    // On every browser page refresh, shuffleSeed is randomized, so ALL videos (including the first video) are randomized!
+    // Full Fisher-Yates random shuffle triggered on page load or refresh
     const array = [...eligibleForYou];
-    let s = (shuffleSeed + 1) * 9301;
-    const rng = () => {
-      s = (s * 9301 + 49297) % 233280;
-      return s / 233280;
-    };
     for (let i = array.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
+      const j = Math.floor(Math.random() * (i + 1));
       [array[i], array[j]] = [array[j], array[i]];
     }
     return array;
@@ -1215,17 +1233,17 @@ export const HomeFeed: React.FC = () => {
     }
   }, [targetFeedVideoId, setActiveTab]);
 
-  // Set initial active video and reset scroll position when changing tabs
+  // Set initial active video to top video and reset scroll position when changing tabs OR on refresh/shuffle
   useEffect(() => {
     if (feedVideos.length > 0) {
-      setActiveVideoId(prev => (feedVideos.some(v => v.id === prev) ? prev : feedVideos[0].id));
+      setActiveVideoId(feedVideos[0].id);
     } else {
       setActiveVideoId('');
     }
     if (videoFeedRef.current) {
       videoFeedRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     }
-  }, [feedTab]);
+  }, [feedTab, shuffleSeed]);
 
   // Reference to the middle scrollable video container
   const videoFeedRef = useRef<HTMLDivElement>(null);

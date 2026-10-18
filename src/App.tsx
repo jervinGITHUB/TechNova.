@@ -196,17 +196,30 @@ const AppContent: React.FC = () => {
             className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
             onClick={() => setMobileNavOpen(false)}
           />
-          <div className="relative w-72 bg-[#0d0d12] h-full shadow-2xl z-10 flex flex-col border-r border-neutral-800">
-            <div className="absolute top-4 right-4 z-20">
+          <div className="relative w-72 max-w-[85vw] bg-[#0d0d12] h-full shadow-2xl z-10 flex flex-col border-r border-neutral-800">
+            {/* Header inside the 3 lines menu drawer: Branded ViralHub Logo + Close button */}
+            <div className="flex items-center justify-between px-4 py-4 border-b border-neutral-800/80 shrink-0">
+              <div
+                onClick={() => {
+                  setMobileNavOpen(false);
+                }}
+                className="cursor-pointer hover:opacity-90 transition-opacity"
+              >
+                <ViralHubLogo size="md" />
+              </div>
               <button
                 onClick={() => setMobileNavOpen(false)}
-                className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 cursor-pointer"
+                className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 cursor-pointer transition-colors"
                 title="Close Navigation"
+                aria-label="Close navigation"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <Sidebar onNavigate={() => setMobileNavOpen(false)} />
+            {/* Drawer Body: Navigation Items & Profile */}
+            <div className="flex-1 overflow-y-auto no-scrollbar">
+              <Sidebar onNavigate={() => setMobileNavOpen(false)} hideLogo />
+            </div>
           </div>
         </div>
       )}
