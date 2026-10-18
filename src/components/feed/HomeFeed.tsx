@@ -74,13 +74,17 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const bgAudioRef = useRef<HTMLAudioElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const mobileMenuRef = useRef<HTMLDivElement>(null);
+  const desktopMenuRef = useRef<HTMLDivElement>(null);
 
   // Close 3-dots dropdown when clicking outside
   useEffect(() => {
     if (!moreMenuOpen) return;
     const handleOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const inMobile = mobileMenuRef.current?.contains(target);
+      const inDesktop = desktopMenuRef.current?.contains(target);
+      if (!inMobile && !inDesktop) {
         setMoreMenuOpen(false);
       }
     };
@@ -295,13 +299,334 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
+  const renderActionColumn = (isMobile: boolean) => (
+    <>
+      {/* 1. Creator Avatar with click to navigate & Quick Follow Plus */}
+      <div
+        onClick={e => {
+          e.stopPropagation();
+          navigateToUserProfile(video.creator.id);
+        }}
+        className="relative group/avatar cursor-pointer"
+        title={`View @${video.creator.username}'s profile`}
+      >
+        <Avatar
+          src={video.creator.avatar}
+          alt={video.creator.displayName}
+          size={isMobile ? 'sm' : 'md'}
+          className={
+            isMobile
+              ? 'w-10 h-10 border-2 border-white/90 shadow-xl'
+              : 'w-11 h-11 sm:w-12 sm:h-12 border-2 border-white/90 group-hover/avatar:border-[#ff007a] transition-all shadow-lg'
+          }
+        />
+        {currentUser &&
+          !isSameUser(currentUser.id, video.creator.id) &&
+          getFollowStatus(video.creator.id) === 'none' && (
+            <button
+              onClick={e => {
+                e.stopPropagation();
+                toggleFollowUser(video.creator.id);
+              }}
+              className={`absolute -bottom-1 left-1/2 -translate-x-1/2 ${
+                isMobile ? 'w-4 h-4' : 'w-5 h-5'
+              } rounded-full bg-[#ff007a] hover:bg-[#ff1a8c] text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110 active:scale-95 cursor-pointer z-10`}
+              title="Follow creator"
+            >
+              <Plus className={isMobile ? 'w-3 h-3 stroke-[3]' : 'w-3.5 h-3.5 stroke-[3]'} />
+            </button>
+          )}
+      </div>
+
+      {/* 2. Like Button */}
+      <div className="flex flex-col items-center">
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            toggleLikeVideo(video.id);
+          }}
+          className={`${
+            isMobile
+              ? 'w-10 h-10 rounded-full bg-black/45 backdrop-blur-md border border-white/15'
+              : 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#181824]/90 border border-neutral-700/60'
+          } transition-all cursor-pointer transform active:scale-125 flex items-center justify-center shadow-lg ${
+            video.isLiked
+              ? 'text-[#ff007a] bg-pink-500/25 border-pink-500/50'
+              : 'text-white hover:text-[#ff007a] hover:bg-[#222232]'
+          }`}
+          title="Like"
+        >
+          <Heart
+            className={`${isMobile ? 'w-5 h-5' : 'w-6 h-6'} transition-transform ${
+              video.isLiked ? 'fill-[#ff007a] scale-110' : ''
+            }`}
+          />
+        </button>
+        <span
+          className={`text-[11px] font-bold ${
+            isMobile ? 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]' : 'text-neutral-300 drop-shadow'
+          } mt-1`}
+        >
+          {formatCount(video.likesCount)}
+        </span>
+      </div>
+
+      {/* 3. Comment Button */}
+      <div className="flex flex-col items-center">
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            setCommentsVideoId(video.id);
+          }}
+          className={`${
+            isMobile
+              ? 'w-10 h-10 rounded-full bg-black/45 backdrop-blur-md border border-white/15'
+              : 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#181824]/90 border border-neutral-700/60'
+          } text-white hover:text-cyan-400 hover:bg-[#222232] transition-all cursor-pointer flex items-center justify-center shadow-lg`}
+          title="Comments"
+        >
+          <MessageCircle className={isMobile ? 'w-5 h-5' : 'w-6 h-6'} />
+        </button>
+        <span
+          className={`text-[11px] font-bold ${
+            isMobile ? 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]' : 'text-neutral-300 drop-shadow'
+          } mt-1`}
+        >
+          {formatCount(video.commentsCount || 0)}
+        </span>
+      </div>
+
+      {/* 4. Share Button */}
+      <div className="flex flex-col items-center">
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            onShare(video);
+          }}
+          className={`${
+            isMobile
+              ? 'w-10 h-10 rounded-full bg-black/45 backdrop-blur-md border border-white/15'
+              : 'w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#181824]/90 border border-neutral-700/60'
+          } text-white hover:text-emerald-400 hover:bg-[#222232] transition-all cursor-pointer flex items-center justify-center shadow-lg`}
+          title="Share"
+        >
+          <Share2 className={isMobile ? 'w-5 h-5' : 'w-6 h-6'} />
+        </button>
+        <span
+          className={`text-[11px] font-bold ${
+            isMobile ? 'text-white drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]' : 'text-neutral-300 drop-shadow'
+          } mt-1`}
+        >
+          {formatCount(video.sharesCount)}
+        </span>
+      </div>
+
+      {/* 5. 3 Dots Options Button */}
+      <div
+        className="relative flex flex-col items-center"
+        ref={isMobile ? mobileMenuRef : desktopMenuRef}
+      >
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            setMoreMenuOpen(prev => !prev);
+          }}
+          className={`${
+            isMobile
+              ? 'w-10 h-10 rounded-full backdrop-blur-md border border-white/15'
+              : 'w-11 h-11 sm:w-12 sm:h-12 rounded-full backdrop-blur-md border border-neutral-700/60'
+          } transition-all cursor-pointer flex items-center justify-center shadow-lg ${
+            moreMenuOpen
+              ? 'bg-[#ff007a] text-white border-[#ff007a] shadow-[0_0_15px_rgba(255,0,122,0.6)]'
+              : isMobile
+              ? 'bg-black/45 text-white hover:text-[#ff007a]'
+              : 'bg-[#181824]/90 text-white hover:text-[#ff007a] hover:bg-[#222232]'
+          }`}
+          title="More Options"
+        >
+          <MoreVertical className={isMobile ? 'w-4 h-4' : 'w-5 h-5'} />
+        </button>
+
+        {/* 3 Dots Dropdown Menu */}
+        {moreMenuOpen && (
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={e => {
+                e.stopPropagation();
+                setMoreMenuOpen(false);
+              }}
+            />
+            <div
+              onClick={e => e.stopPropagation()}
+              className={`absolute ${
+                isMobile ? 'right-12 bottom-0' : 'right-14 bottom-0'
+              } z-50 w-48 bg-[#14141e]/98 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn`}
+            >
+              <button
+                type="button"
+                onClick={handleCopyLink}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                {copyFeedback ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span className="text-emerald-400 font-bold">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4 text-neutral-400 shrink-0" />
+                    <span>Copy Link</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleDownloadVideo}
+                disabled={isDownloading}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Download className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span>{isDownloading ? 'Downloading...' : 'Download Video'}</span>
+              </button>
+
+              <div className="h-px bg-neutral-800 my-0.5" />
+
+              {currentUser && isSameUser(currentUser.id, video.creator.id) ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setMoreMenuOpen(false);
+                      const res = await togglePinVideo(video.id);
+                      if (res.message) {
+                        setPinToast(res.message);
+                        setTimeout(() => setPinToast(''), 3000);
+                      }
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <Pin
+                      className={`w-4 h-4 ${
+                        video.isPinned ? 'text-[#ff007a] fill-[#ff007a]' : 'text-neutral-400'
+                      } shrink-0`}
+                    />
+                    <span>{video.isPinned ? 'Unpin from Profile' : 'Pin to Profile'}</span>
+                  </button>
+                  <div className="h-px bg-neutral-800 my-0.5" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setAudienceModalOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <Lock className="w-4 h-4 text-pink-400 shrink-0" />
+                    <span>Change Audience Settings</span>
+                  </button>
+                  <div className="h-px bg-neutral-800 my-0.5" />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setDeleteConfirmOpen(true);
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+                  >
+                    <Trash2 className="w-4 h-4 text-red-400 shrink-0" />
+                    <span>Delete Video</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    openReportModal({
+                      type: 'video',
+                      targetId: video.id,
+                      targetName: `${video.creator.displayName || 'Creator'}'s video`,
+                      targetSubtitle: video.caption.slice(0, 35),
+                      targetThumbnail: video.thumbnailUrl,
+                    });
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+                >
+                  <Flag className="w-4 h-4 text-red-400 shrink-0" />
+                  <span>Report</span>
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 6. Rotating Vinyl Record Disc with Audio Thumbnail (TikTok style) */}
+      <div className="mt-0.5 flex flex-col items-center">
+        <div
+          onClick={e => {
+            e.stopPropagation();
+            if (video.audioTrack?.title) {
+              setSearchQuery(video.audioTrack.title);
+            }
+          }}
+          className={`relative ${
+            isMobile ? 'w-10 h-10' : 'w-11 h-11 sm:w-12 sm:h-12'
+          } rounded-full p-1 bg-gradient-to-tr from-[#0a0a10] via-[#242436] to-[#0a0a10] border-2 border-neutral-700/90 shadow-2xl flex items-center justify-center cursor-pointer transition-transform hover:scale-105 active:scale-95 group/disc ${
+            isPlaying ? 'animate-vinyl' : 'animate-vinyl animate-vinyl-paused'
+          }`}
+          title={
+            video.audioTrack
+              ? `Sound: ${video.audioTrack.title} — ${video.audioTrack.artist}`
+              : `Original sound - ${video.creator.displayName || video.creator.username}`
+          }
+        >
+          {/* Concentric vinyl groove ring */}
+          <div className="absolute inset-1 rounded-full border border-neutral-700/40 pointer-events-none" />
+
+          {/* Center cutout displaying the audio thumbnail from audio library (or avatar for original audio) */}
+          <div
+            className={`${
+              isMobile ? 'w-5 h-5' : 'w-6 h-6 sm:w-7 sm:h-7'
+            } rounded-full overflow-hidden border border-white/20 bg-neutral-900 flex items-center justify-center shadow-inner z-10`}
+          >
+            {video.audioTrack?.coverUrl ? (
+              <img
+                src={video.audioTrack.coverUrl}
+                alt={video.audioTrack.title}
+                className="w-full h-full object-cover"
+              />
+            ) : video.creator?.avatar ? (
+              <img
+                src={video.creator.avatar}
+                alt={video.creator.displayName}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <Music className={isMobile ? 'w-3 h-3 text-[#ff007a]' : 'w-3.5 h-3.5 text-[#ff007a]'} />
+            )}
+          </div>
+
+          {/* Overlay if sound was removed/muted */}
+          {isAudioRemoved && (
+            <div className="absolute inset-0 rounded-full bg-black/80 flex items-center justify-center z-20">
+              <VolumeX className={isMobile ? 'w-3.5 h-3.5 text-rose-400' : 'w-4 h-4 text-rose-400'} />
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+
   return (
-    <div className="flex items-end justify-center gap-3 sm:gap-4 w-full h-full max-h-[calc(100vh-5.5rem)] snap-start snap-always shrink-0 mb-6 select-none relative">
+    <div className="flex items-center md:items-end justify-center md:gap-4 w-full h-full max-h-[calc(100dvh-4.25rem)] md:max-h-[calc(100vh-5.5rem)] snap-start snap-always shrink-0 mb-1 md:mb-6 select-none relative">
       {/* 1. Main 9:16 Video Player Container */}
       <div
         onClick={() => togglePlayPause()}
         data-video-player="true"
-        className="video-feed-card relative aspect-[9/16] h-full max-h-[calc(100vh-5.5rem)] max-w-[calc(100%-60px)] sm:max-w-none bg-[#101017] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between cursor-pointer"
+        className="video-feed-card relative aspect-[9/16] h-full max-h-[calc(100dvh-4.25rem)] md:max-h-[calc(100vh-5.5rem)] w-full max-w-full md:max-w-none bg-[#101017] rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between cursor-pointer"
       >
         {/* Background Video Media / Canvas */}
         {videoSrc ? (
@@ -420,7 +745,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         )}
 
         {/* Bottom Details Overlay: Creator, Caption, Hashtags, Audio */}
-        <div className="absolute bottom-12 left-4 right-4 z-20 text-left">
+        <div className="absolute bottom-11 md:bottom-12 left-3 md:left-4 right-16 md:right-4 z-20 text-left">
           {/* Creator Handle */}
           <button
             onClick={e => {
@@ -480,7 +805,7 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 
         {/* Interactive Video Scrubber & Playback Progress Line with Time Stamp (e.g. 00:05 - 00:12) */}
         <div
-          className="absolute bottom-0 left-0 right-0 z-30 px-3 pb-2 pt-3 bg-gradient-to-t from-black/90 to-transparent group/scrubber cursor-pointer"
+          className="absolute bottom-0 left-0 right-0 z-30 px-3 pb-2 pt-2.5 bg-gradient-to-t from-black/90 to-transparent group/scrubber cursor-pointer"
           onClick={e => e.stopPropagation()}
         >
           <div className="flex items-center justify-between text-[11px] font-mono text-neutral-300 mb-1 px-1 drop-shadow">
@@ -502,265 +827,22 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
             />
           </div>
         </div>
+
+        {/* Mobile Action Column: INSIDE the video on the right (TikTok/Reels mobile style) */}
+        <div
+          className="md:hidden absolute right-2.5 bottom-12 z-30 flex flex-col items-center gap-3.5 select-none"
+          onClick={e => e.stopPropagation()}
+        >
+          {renderActionColumn(true)}
+        </div>
       </div>
 
-      {/* 2. Outside Right Action Column (TikTok style: Avatar, Like, Comment, Share, 3-Dots, Spinning Vinyl Disc) */}
+      {/* Desktop Action Column: OUTSIDE the video on the right (only in desktop mode) */}
       <div
-        className="flex flex-col items-center gap-3.5 sm:gap-4 pb-2 shrink-0 z-20"
+        className="hidden md:flex flex-col items-center gap-3.5 sm:gap-4 pb-2 shrink-0 z-20"
         onClick={e => e.stopPropagation()}
       >
-        {/* Creator Avatar with click to navigate & Quick Follow Plus */}
-        <div
-          onClick={() => navigateToUserProfile(video.creator.id)}
-          className="relative group/avatar cursor-pointer"
-          title={`View @${video.creator.username}'s profile`}
-        >
-          <Avatar
-            src={video.creator.avatar}
-            alt={video.creator.displayName}
-            size="md"
-            className="w-11 h-11 sm:w-12 sm:h-12 border-2 border-white/90 group-hover/avatar:border-[#ff007a] transition-all shadow-lg"
-          />
-          {currentUser &&
-            !isSameUser(currentUser.id, video.creator.id) &&
-            getFollowStatus(video.creator.id) === 'none' && (
-              <button
-                onClick={e => {
-                  e.stopPropagation();
-                  toggleFollowUser(video.creator.id);
-                }}
-                className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full bg-[#ff007a] hover:bg-[#ff1a8c] text-white flex items-center justify-center shadow-lg transition-transform hover:scale-110 active:scale-95 cursor-pointer z-10"
-                title="Follow creator"
-              >
-                <Plus className="w-3.5 h-3.5 stroke-[3]" />
-              </button>
-            )}
-        </div>
-
-        {/* Like Button */}
-        <div className="flex flex-col items-center">
-          <button
-            onClick={() => toggleLikeVideo(video.id)}
-            className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full backdrop-blur-md transition-all cursor-pointer transform active:scale-125 flex items-center justify-center border shadow-lg ${
-              video.isLiked
-                ? 'bg-pink-500/25 border-pink-500/50 text-[#ff007a]'
-                : 'bg-[#181824]/90 border-neutral-700/60 text-white hover:text-[#ff007a] hover:bg-[#222232]'
-            }`}
-            title="Like"
-          >
-            <Heart
-              className={`w-6 h-6 transition-transform ${
-                video.isLiked ? 'fill-[#ff007a] scale-110' : ''
-              }`}
-            />
-          </button>
-          <span className="text-[11px] font-bold text-neutral-300 mt-1 drop-shadow">
-            {formatCount(video.likesCount)}
-          </span>
-        </div>
-
-        {/* Comment Button */}
-        <div className="flex flex-col items-center">
-          <button
-            onClick={() => setCommentsVideoId(video.id)}
-            className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#181824]/90 border border-neutral-700/60 backdrop-blur-md text-white hover:text-cyan-400 hover:bg-[#222232] transition-all cursor-pointer flex items-center justify-center shadow-lg"
-            title="Comments"
-          >
-            <MessageCircle className="w-6 h-6" />
-          </button>
-          <span className="text-[11px] font-bold text-neutral-300 mt-1 drop-shadow">
-            {formatCount(video.commentsCount || 0)}
-          </span>
-        </div>
-
-        {/* Share Button */}
-        <div className="flex flex-col items-center">
-          <button
-            onClick={() => onShare(video)}
-            className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[#181824]/90 border border-neutral-700/60 backdrop-blur-md text-white hover:text-emerald-400 hover:bg-[#222232] transition-all cursor-pointer flex items-center justify-center shadow-lg"
-            title="Share"
-          >
-            <Share2 className="w-6 h-6" />
-          </button>
-          <span className="text-[11px] font-bold text-neutral-300 mt-1 drop-shadow">
-            {formatCount(video.sharesCount)}
-          </span>
-        </div>
-
-        {/* 3 Dots Options Button (Copy Link, Download Video, Pin, Audience, Delete, Report) */}
-        <div className="relative flex flex-col items-center" ref={menuRef}>
-          <button
-            onClick={e => {
-              e.stopPropagation();
-              setMoreMenuOpen(prev => !prev);
-            }}
-            className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full backdrop-blur-md transition-all cursor-pointer flex items-center justify-center border shadow-lg ${
-              moreMenuOpen
-                ? 'bg-[#ff007a] text-white border-[#ff007a] shadow-[0_0_15px_rgba(255,0,122,0.6)]'
-                : 'bg-[#181824]/90 border-neutral-700/60 text-white hover:text-[#ff007a] hover:bg-[#222232]'
-            }`}
-            title="More Options"
-          >
-            <MoreVertical className="w-5 h-5" />
-          </button>
-
-          {/* 3 Dots Dropdown Menu */}
-          {moreMenuOpen && (
-            <>
-              <div
-                className="fixed inset-0 z-40"
-                onClick={e => {
-                  e.stopPropagation();
-                  setMoreMenuOpen(false);
-                }}
-              />
-              <div
-                onClick={e => e.stopPropagation()}
-                className="absolute right-14 bottom-0 z-50 w-48 bg-[#14141e]/98 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
-              >
-                <button
-                  type="button"
-                  onClick={handleCopyLink}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-                >
-                  {copyFeedback ? (
-                    <>
-                      <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span className="text-emerald-400 font-bold">Copied!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4 text-neutral-400 shrink-0" />
-                      <span>Copy Link</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleDownloadVideo}
-                  disabled={isDownloading}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  <Download className="w-4 h-4 text-cyan-400 shrink-0" />
-                  <span>{isDownloading ? 'Downloading...' : 'Download Video'}</span>
-                </button>
-
-                <div className="h-px bg-neutral-800 my-0.5" />
-
-                {currentUser && isSameUser(currentUser.id, video.creator.id) ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        setMoreMenuOpen(false);
-                        const res = await togglePinVideo(video.id);
-                        if (res.message) {
-                          setPinToast(res.message);
-                          setTimeout(() => setPinToast(''), 3000);
-                        }
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-                    >
-                      <Pin className={`w-4 h-4 ${video.isPinned ? 'text-[#ff007a] fill-[#ff007a]' : 'text-neutral-400'} shrink-0`} />
-                      <span>{video.isPinned ? 'Unpin from Profile' : 'Pin to Profile'}</span>
-                    </button>
-                    <div className="h-px bg-neutral-800 my-0.5" />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMoreMenuOpen(false);
-                        setAudienceModalOpen(true);
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-                    >
-                      <Lock className="w-4 h-4 text-pink-400 shrink-0" />
-                      <span>Change Audience Settings</span>
-                    </button>
-                    <div className="h-px bg-neutral-800 my-0.5" />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setMoreMenuOpen(false);
-                        setDeleteConfirmOpen(true);
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4 text-red-400 shrink-0" />
-                      <span>Delete Video</span>
-                    </button>
-                  </>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMoreMenuOpen(false);
-                      openReportModal({
-                        type: 'video',
-                        targetId: video.id,
-                        targetName: `${video.creator.displayName || 'Creator'}'s video`,
-                        targetSubtitle: video.caption.slice(0, 35),
-                        targetThumbnail: video.thumbnailUrl,
-                      });
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
-                  >
-                    <Flag className="w-4 h-4 text-red-400 shrink-0" />
-                    <span>Report</span>
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-
-        {/* 6. Rotating Vinyl Record Disc with Audio Thumbnail (TikTok style) */}
-        <div className="mt-1 flex flex-col items-center">
-          <div
-            onClick={() => {
-              if (video.audioTrack?.title) {
-                setSearchQuery(video.audioTrack.title);
-              }
-            }}
-            className={`relative w-11 h-11 sm:w-12 sm:h-12 rounded-full p-1 bg-gradient-to-tr from-[#0a0a10] via-[#242436] to-[#0a0a10] border-2 border-neutral-700/90 shadow-2xl flex items-center justify-center cursor-pointer transition-transform hover:scale-105 active:scale-95 group/disc ${
-              isPlaying ? 'animate-vinyl' : 'animate-vinyl animate-vinyl-paused'
-            }`}
-            title={
-              video.audioTrack
-                ? `Sound: ${video.audioTrack.title} — ${video.audioTrack.artist}`
-                : `Original sound - ${video.creator.displayName || video.creator.username}`
-            }
-          >
-            {/* Concentric vinyl groove ring */}
-            <div className="absolute inset-1 rounded-full border border-neutral-700/40 pointer-events-none" />
-
-            {/* Center cutout displaying the audio thumbnail from audio library (or avatar for original audio) */}
-            <div className="w-6 h-6 sm:w-7 sm:h-7 rounded-full overflow-hidden border border-white/20 bg-neutral-900 flex items-center justify-center shadow-inner z-10">
-              {video.audioTrack?.coverUrl ? (
-                <img
-                  src={video.audioTrack.coverUrl}
-                  alt={video.audioTrack.title}
-                  className="w-full h-full object-cover"
-                />
-              ) : video.creator?.avatar ? (
-                <img
-                  src={video.creator.avatar}
-                  alt={video.creator.displayName}
-                  className="w-full h-full object-cover"
-                />
-              ) : (
-                <Music className="w-3.5 h-3.5 text-[#ff007a]" />
-              )}
-            </div>
-
-            {/* Overlay if sound was removed/muted */}
-            {isAudioRemoved && (
-              <div className="absolute inset-0 rounded-full bg-black/80 flex items-center justify-center z-20">
-                <VolumeX className="w-4 h-4 text-rose-400" />
-              </div>
-            )}
-          </div>
-        </div>
+        {renderActionColumn(false)}
       </div>
 
       {/* Audience Settings Modal */}
@@ -867,9 +949,9 @@ const EmptyFeedLayoutCard: React.FC = () => {
   const { setActiveTab } = useApp();
 
   return (
-    <div className="flex items-end justify-center gap-3 sm:gap-4 w-full h-full max-h-[calc(100vh-5.5rem)] snap-start snap-always shrink-0 mb-6 select-none relative">
+    <div className="flex items-center md:items-end justify-center md:gap-4 w-full h-full max-h-[calc(100dvh-4.25rem)] md:max-h-[calc(100vh-5.5rem)] snap-start snap-always shrink-0 mb-1 md:mb-6 select-none relative">
       {/* Center Wireframe Video Container */}
-      <div className="relative aspect-[9/16] h-full max-h-[calc(100vh-5.5rem)] max-w-[calc(100%-60px)] sm:max-w-none bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between">
+      <div className="relative aspect-[9/16] h-full max-h-[calc(100dvh-4.25rem)] md:max-h-[calc(100vh-5.5rem)] w-full max-w-full md:max-w-none bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between">
         <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10">
           <div className="w-16 h-16 rounded-3xl bg-[#1c1c28] border border-neutral-700/80 flex items-center justify-center text-neutral-400 mb-4 shadow-xl">
             <VideoIcon className="w-8 h-8 text-[#ff007a]" />
@@ -895,7 +977,7 @@ const EmptyFeedLayoutCard: React.FC = () => {
         </div>
 
         {/* Bottom Details Placeholder */}
-        <div className="absolute bottom-12 left-4 right-4 z-20 text-left">
+        <div className="absolute bottom-11 md:bottom-12 left-3 md:left-4 right-16 md:right-4 z-20 text-left">
           <div className="text-sm font-bold text-neutral-300">@creator</div>
           <p className="text-xs text-neutral-500 mt-1">Your video caption will appear here</p>
           <div className="flex items-center gap-2 text-[11px] text-neutral-500 mt-2">
@@ -908,10 +990,41 @@ const EmptyFeedLayoutCard: React.FC = () => {
         <div className="absolute bottom-0 left-0 right-0 h-1 bg-neutral-800">
           <div className="h-full bg-neutral-700 w-1/4" />
         </div>
+
+        {/* Mobile Action Rail Placeholder (Inside on Mobile) */}
+        <div className="md:hidden absolute right-2.5 bottom-12 z-30 flex flex-col items-center gap-3.5 select-none opacity-50 pointer-events-none">
+          <div className="w-10 h-10 rounded-full border border-white/30 bg-black/40 flex items-center justify-center">
+            <Avatar size="sm" className="border border-white/20" />
+          </div>
+          <div className="flex flex-col items-center">
+            <div className="w-10 h-10 rounded-full bg-black/40 border border-white/20 text-neutral-300 flex items-center justify-center">
+              <Heart className="w-5 h-5" />
+            </div>
+            <span className="text-[11px] font-bold text-white mt-1">0</span>
+          </div>
+          <div className="flex flex-col items-center">
+            <div className="w-10 h-10 rounded-full bg-black/40 border border-white/20 text-neutral-300 flex items-center justify-center">
+              <MessageCircle className="w-5 h-5" />
+            </div>
+            <span className="text-[11px] font-bold text-white mt-1">0</span>
+          </div>
+          <div className="flex flex-col items-center">
+            <div className="w-10 h-10 rounded-full bg-black/40 border border-white/20 text-neutral-300 flex items-center justify-center">
+              <Share2 className="w-5 h-5" />
+            </div>
+            <span className="text-[11px] font-bold text-white mt-1">0</span>
+          </div>
+          <div className="w-10 h-10 rounded-full bg-black/40 border border-white/20 text-neutral-300 flex items-center justify-center">
+            <MoreVertical className="w-4 h-4" />
+          </div>
+          <div className="w-10 h-10 rounded-full p-1 bg-[#181824] border border-white/20 flex items-center justify-center">
+            <Music className="w-4 h-4 text-neutral-400" />
+          </div>
+        </div>
       </div>
 
-      {/* Outside Right Action Rail Placeholder */}
-      <div className="flex flex-col items-center gap-3.5 sm:gap-4 pb-2 shrink-0 z-20">
+      {/* Desktop Action Rail Placeholder (Outside on Desktop) */}
+      <div className="hidden md:flex flex-col items-center gap-3.5 sm:gap-4 pb-2 shrink-0 z-20">
         <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full border-2 border-neutral-700 bg-neutral-800 flex items-center justify-center">
           <Avatar size="md" className="border-2 border-neutral-700" />
         </div>
@@ -1213,7 +1326,7 @@ export const HomeFeed: React.FC = () => {
   return (
     <div
       onWheel={handleContainerWheel}
-      className="w-full h-full overflow-hidden flex justify-center items-start gap-8 lg:gap-12 px-4 sm:px-8 py-3 select-none"
+      className="w-full h-full overflow-hidden flex justify-center items-start gap-8 lg:gap-12 px-0 md:px-8 py-0 md:py-3 select-none"
     >
       {/* Share Video Modal */}
       <ShareVideoModal
@@ -1225,11 +1338,11 @@ export const HomeFeed: React.FC = () => {
       {/* ========================================================================= */}
       {/* MIDDLE: VIDEOS FEED CONTAINER (SNAP-Y)                                    */}
       {/* ========================================================================= */}
-      <div className="flex-1 max-w-[560px] h-full relative flex flex-col items-center">
+      <div className="flex-1 max-w-[560px] w-full h-full relative flex flex-col items-center">
         {/* Scrollable Videos Feed Container */}
         <div
           ref={videoFeedRef}
-          className="w-full h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar pt-1 pb-16 relative"
+          className="w-full h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar pt-0 md:pt-1 pb-4 md:pb-16 relative"
         >
           {feedVideos.length === 0 ? (
             feedTab === 'friends' ? (

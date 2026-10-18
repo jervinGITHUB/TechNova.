@@ -368,8 +368,8 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
         </div>
       ) : (
         <>
-          {/* Left Balance Container (Mobile Hamburger Menu / Desktop Counterweight to keep Search Bar centered) */}
-          <div className="flex items-center justify-start shrink-0 md:w-52">
+          {/* Left Balance Container: Mobile Hamburger Menu & ViralHub Logo / Desktop Counterweight */}
+          <div className="flex items-center justify-start shrink-0 md:w-52 gap-2 sm:gap-3">
             <button
               onClick={onToggleMobileNav}
               className="md:hidden p-2 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800/80 transition-colors cursor-pointer"
@@ -377,10 +377,19 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             >
               <Menu className="w-5 h-5" />
             </button>
+
+            {/* Mobile ViralHub Logo */}
+            <div
+              onClick={() => setActiveTab('home')}
+              className="md:hidden cursor-pointer flex items-center hover:opacity-90 transition-opacity"
+              title="ViralHub Home"
+            >
+              <ViralHubLogo size="sm" />
+            </div>
           </div>
 
-          {/* Center Search Input with Instant Dropdown (Centered in the middle of Header) */}
-          <div ref={searchContainerRef} className="flex-1 max-w-xl mx-auto relative z-40 flex justify-center">
+          {/* Center Search Input with Instant Dropdown (Desktop only - centered) */}
+          <div ref={searchContainerRef} className="hidden md:flex flex-1 max-w-xl mx-auto relative z-40 justify-center">
             <form onSubmit={handleSearchSubmit} className="w-full relative flex items-center">
               <div className="absolute left-3.5 text-neutral-400 pointer-events-none">
                 <Search className="w-4 h-4" />
@@ -391,16 +400,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
                 maxLength={50}
                 value={searchQuery}
                 onFocus={() => {
-                  // On mobile screens, activate full-width wide search bar!
-                  if (window.innerWidth < 768) {
-                    setMobileSearchOpen(true);
-                  }
                   if (searchQuery.trim()) setDropdownOpen(true);
-                }}
-                onClick={() => {
-                  if (window.innerWidth < 768) {
-                    setMobileSearchOpen(true);
-                  }
                 }}
                 onChange={e => {
                   const val = e.target.value.slice(0, 50);
@@ -408,7 +408,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
                   setDropdownOpen(true);
                 }}
                 placeholder="Search users, creators, videos, hashtags..."
-                className="w-full bg-[#181822] text-xs sm:text-sm text-white placeholder-neutral-500 pl-10 pr-20 py-2 sm:py-2.5 rounded-full border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all cursor-pointer sm:cursor-text"
+                className="w-full bg-[#181822] text-xs sm:text-sm text-white placeholder-neutral-500 pl-10 pr-20 py-2 sm:py-2.5 rounded-full border border-neutral-700/80 focus:border-[#ff007a] focus:ring-1 focus:ring-[#ff007a] outline-none transition-all cursor-text"
               />
               <div className="absolute right-3 flex items-center gap-1.5">
                 {searchQuery.length >= 35 && (
@@ -541,8 +541,22 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             )}
           </div>
 
-          {/* Right Controls: Notification Bell + "+ Upload" Button */}
-          <div className="flex items-center justify-end gap-2 sm:gap-3.5 shrink-0 md:w-52">
+          {/* Right Controls: Mobile Search Icon + Notification Bell + "+ Upload" Button */}
+          <div className="flex items-center justify-end gap-1.5 sm:gap-3.5 shrink-0 md:w-52">
+            {/* Mobile Search Icon Button */}
+            <button
+              type="button"
+              onClick={() => {
+                setMobileSearchOpen(true);
+                setDropdownOpen(true);
+              }}
+              className="md:hidden p-2 text-neutral-300 hover:text-white rounded-full hover:bg-[#181822] transition-colors cursor-pointer"
+              aria-label="Search"
+              title="Search"
+            >
+              <Search className="w-5 h-5 text-neutral-200" />
+            </button>
+
             {/* Notification Bell */}
             <button
               onClick={() => setActiveTab('notifications')}
@@ -562,7 +576,7 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
             {/* Hot Pink "+ Upload" Button */}
             <button
               onClick={() => setActiveTab('upload')}
-              className="flex items-center gap-1.5 py-2 px-3 sm:px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-semibold text-xs sm:text-sm shadow-[0_0_15px_rgba(255,0,122,0.35)] transition-all cursor-pointer transform active:scale-95"
+              className="flex items-center gap-1.5 py-1.5 sm:py-2 px-2.5 sm:px-4 rounded-xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-semibold text-xs sm:text-sm shadow-[0_0_15px_rgba(255,0,122,0.35)] transition-all cursor-pointer transform active:scale-95 shrink-0"
             >
               <Plus className="w-4 h-4 stroke-[3]" />
               <span>Upload</span>
