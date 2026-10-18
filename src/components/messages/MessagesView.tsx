@@ -381,7 +381,7 @@ export const MessagesView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 p-2 sm:p-6 max-w-7xl mx-auto w-full h-[calc(100vh-4rem)] flex flex-col">
+    <div className="flex-1 p-2.5 sm:p-5 md:p-6 w-full h-full min-h-0 flex flex-col">
       {/* Toast Alert */}
       {toastMessage && (
         <div className="fixed top-20 right-6 z-50 bg-[#1e1e2c] border border-neutral-700 text-white text-xs px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2 animate-bounce">

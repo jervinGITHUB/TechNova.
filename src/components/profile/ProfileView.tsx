@@ -756,10 +756,13 @@ export const ProfileView: React.FC = () => {
                 <div
                   key={`${video.id}_${idx}`}
                   onClick={() => handleOpenVideo(video)}
-                  className="group relative aspect-[9/13] bg-[#181824] rounded-2xl overflow-hidden cursor-pointer border border-neutral-800 hover:border-[#ff007a]/60 transition-all shadow-md flex items-center justify-center"
+                  className="group relative aspect-[9/13] bg-[#181824] rounded-2xl cursor-pointer border border-neutral-800 hover:border-[#ff007a]/60 transition-all shadow-md flex items-center justify-center"
                 >
-                  <ExploreThumbnailCard video={video} />
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
+                  {/* Inner Media Container with overflow-hidden so corners clip cleanly without clipping options popovers */}
+                  <div className="absolute inset-0 rounded-2xl overflow-hidden pointer-events-none">
+                    <ExploreThumbnailCard video={video} />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
+                  </div>
 
                   {/* Pinned Badge (Prominently displayed first at top-left) */}
                   {video.isPinned && (
@@ -816,7 +819,7 @@ export const ProfileView: React.FC = () => {
                     <span>{video.viewsCount || '0'}</span>
                   </div>
 
-                  {/* Options 3-dots menu on hover for creator's own video */}
+                  {/* Options 3-dots menu for creator's own video */}
                   {isSelf && (activeTabSub === 'videos' || activeTabSub === 'only_me') && (
                     <div className="absolute top-2 right-2 z-20" onClick={e => e.stopPropagation()}>
                       <button
@@ -828,57 +831,66 @@ export const ProfileView: React.FC = () => {
                         className={`p-1.5 rounded-xl backdrop-blur-md transition-all shadow-md cursor-pointer border ${
                           activeGridMenuVideoId === video.id
                             ? 'bg-[#ff007a] text-white border-[#ff007a] opacity-100'
-                            : 'bg-black/70 hover:bg-black/90 text-neutral-300 hover:text-white border-white/10 opacity-80 sm:opacity-0 group-hover:opacity-100'
+                            : 'bg-black/70 hover:bg-black/90 text-neutral-300 hover:text-white border-white/10 opacity-90 sm:opacity-0 group-hover:opacity-100'
                         }`}
                         title="Video Options"
                       >
                         <MoreVertical className="w-3.5 h-3.5" />
                       </button>
 
-                      {/* Dropdown Menu */}
+                      {/* Dropdown Menu on Desktop (hidden on mobile, which uses bottom sheet) */}
                       {activeGridMenuVideoId === video.id && (
-                        <div
-                          onClick={e => e.stopPropagation()}
-                          className="absolute right-0 top-8 z-30 w-56 bg-[#14141e]/95 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex flex-col gap-1 text-left animate-fadeIn"
-                        >
-                          <button
-                            type="button"
-                            onClick={async () => {
+                        <>
+                          <div
+                            className="fixed inset-0 z-25 hidden sm:block"
+                            onClick={e => {
+                              e.stopPropagation();
                               setActiveGridMenuVideoId(null);
-                              const res = await togglePinVideo(video.id);
-                              setToastMessage(res.message || (res.isPinned ? 'Video pinned to profile' : 'Video unpinned from profile'));
-                              setTimeout(() => setToastMessage(''), 3500);
                             }}
-                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                          />
+                          <div
+                            onClick={e => e.stopPropagation()}
+                            className="hidden sm:flex absolute right-0 top-8 z-30 w-56 bg-[#14141e]/98 backdrop-blur-xl border border-neutral-700/80 rounded-2xl p-1.5 shadow-2xl flex-col gap-1 text-left animate-fadeIn"
                           >
-                            <Pin className={`w-3.5 h-3.5 ${video.isPinned ? 'text-[#ff007a] fill-[#ff007a]' : 'text-neutral-400'} shrink-0`} />
-                            <span>{video.isPinned ? 'Unpin from profile' : 'Pin to profile (up to 3)'}</span>
-                          </button>
-                          <div className="h-px bg-neutral-800 my-0.5" />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveGridMenuVideoId(null);
-                              setAudienceModalVideo(video);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-                          >
-                            <Lock className="w-3.5 h-3.5 text-pink-400 shrink-0" />
-                            <span>Change Audience Settings</span>
-                          </button>
-                          <div className="h-px bg-neutral-800 my-0.5" />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setActiveGridMenuVideoId(null);
-                              setDeleteConfirmVideoId(video.id);
-                            }}
-                            className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                            <span>Delete</span>
-                          </button>
-                        </div>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setActiveGridMenuVideoId(null);
+                                const res = await togglePinVideo(video.id);
+                                setToastMessage(res.message || (res.isPinned ? 'Video pinned to profile' : 'Video unpinned from profile'));
+                                setTimeout(() => setToastMessage(''), 3500);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                            >
+                              <Pin className={`w-3.5 h-3.5 ${video.isPinned ? 'text-[#ff007a] fill-[#ff007a]' : 'text-neutral-400'} shrink-0`} />
+                              <span>{video.isPinned ? 'Unpin from profile' : 'Pin to profile (up to 3)'}</span>
+                            </button>
+                            <div className="h-px bg-neutral-800 my-0.5" />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveGridMenuVideoId(null);
+                                setAudienceModalVideo(video);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-neutral-200 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                            >
+                              <Lock className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                              <span>Change Audience Settings</span>
+                            </button>
+                            <div className="h-px bg-neutral-800 my-0.5" />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveGridMenuVideoId(null);
+                                setDeleteConfirmVideoId(video.id);
+                              }}
+                              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-red-400 hover:text-red-300 hover:bg-red-500/15 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
+                        </>
                       )}
                     </div>
                   )}
@@ -886,6 +898,117 @@ export const ProfileView: React.FC = () => {
               ))
           )}
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* Mobile Bottom Action Sheet Drawer for Video 3-Dots Options                */}
+      {/* Opens smoothly from bottom of screen so text is 100% visible and readable */}
+      {/* ========================================================================= */}
+      {activeGridMenuVideoId && (
+        (() => {
+          const targetMenuVideo = (activeTabSub === 'videos' ? userVideos : activeTabSub === 'only_me' ? onlyMeVideos : likedVideos).find(
+            v => v.id === activeGridMenuVideoId
+          );
+          if (!targetMenuVideo) return null;
+          return (
+            <div className="fixed inset-0 z-50 flex flex-col justify-end sm:hidden animate-fadeIn" onClick={() => setActiveGridMenuVideoId(null)}>
+              <div className="fixed inset-0 bg-black/75 backdrop-blur-sm" />
+              <div
+                className="relative bg-[#161622] border-t border-neutral-700/80 rounded-t-3xl p-5 pb-8 shadow-2xl flex flex-col gap-2 z-10 animate-slideUp text-left"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="w-10 h-1 bg-neutral-600 rounded-full mx-auto mb-2 opacity-60" />
+                <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+                  <div className="min-w-0 pr-3">
+                    <h3 className="text-sm font-bold text-white font-brand">Video Options</h3>
+                    <p className="text-[11px] text-neutral-400 truncate mt-0.5">
+                      {targetMenuVideo.caption || 'Select an action'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveGridMenuVideoId(null)}
+                    className="p-1 text-neutral-400 hover:text-white rounded-lg bg-neutral-800/80"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-1.5 pt-1">
+                  {/* Pin Option */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setActiveGridMenuVideoId(null);
+                      const res = await togglePinVideo(targetMenuVideo.id);
+                      setToastMessage(res.message || (res.isPinned ? 'Video pinned to profile' : 'Video unpinned from profile'));
+                      setTimeout(() => setToastMessage(''), 3500);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-[#1e1e2d] hover:bg-[#262638] text-white text-xs font-semibold transition-all active:scale-[0.99]"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-[#ff007a]/15 text-[#ff007a] flex items-center justify-center shrink-0">
+                      <Pin className={`w-4 h-4 ${targetMenuVideo.isPinned ? 'fill-[#ff007a]' : ''}`} />
+                    </div>
+                    <div className="text-left">
+                      <div className="text-white font-bold">
+                        {targetMenuVideo.isPinned ? 'Unpin from profile' : 'Pin to profile (up to 3)'}
+                      </div>
+                      <div className="text-[11px] text-neutral-400 font-normal">
+                        {targetMenuVideo.isPinned ? 'Remove from top of profile' : 'Feature prominently at top of your profile'}
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Audience Settings Option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveGridMenuVideoId(null);
+                      setAudienceModalVideo(targetMenuVideo);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-[#1e1e2d] hover:bg-[#262638] text-white text-xs font-semibold transition-all active:scale-[0.99]"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-pink-500/15 text-pink-400 flex items-center justify-center shrink-0">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <div className="text-left">
+                      <div className="text-white font-bold">Change Audience Settings</div>
+                      <div className="text-[11px] text-neutral-400 font-normal">
+                        Switch between Public, Friends only, and Only me
+                      </div>
+                    </div>
+                  </button>
+
+                  {/* Delete Option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveGridMenuVideoId(null);
+                      setDeleteConfirmVideoId(targetMenuVideo.id);
+                    }}
+                    className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl bg-red-500/10 hover:bg-red-500/20 text-red-300 text-xs font-semibold transition-all active:scale-[0.99]"
+                  >
+                    <div className="w-8 h-8 rounded-xl bg-red-500/20 text-red-400 flex items-center justify-center shrink-0">
+                      <Trash2 className="w-4 h-4" />
+                    </div>
+                    <div className="text-left">
+                      <div className="text-red-400 font-bold">Delete Video</div>
+                      <div className="text-[11px] text-red-300/70 font-normal">Permanently remove this video</div>
+                    </div>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveGridMenuVideoId(null)}
+                  className="w-full mt-2 py-3 rounded-2xl bg-neutral-800 text-neutral-300 hover:text-white text-xs font-bold transition-all text-center"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          );
+        })()
       )}
 
       {/* ========================================================================= */}

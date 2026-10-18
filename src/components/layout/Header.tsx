@@ -115,6 +115,34 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     );
   }
 
+  // On Messages page: remove the search bar on top and make messages page full screen
+  if (activeTab === 'messages') {
+    return (
+      <header className="md:hidden h-14 px-3.5 border-b border-neutral-800/80 bg-[#0d0d12]/95 backdrop-blur-md sticky top-0 z-30 flex items-center justify-between select-none">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onToggleMobileNav}
+            className="p-2 text-neutral-300 hover:text-white rounded-xl hover:bg-neutral-800/80 transition-colors flex items-center justify-center cursor-pointer border border-neutral-800 hover:border-neutral-700"
+            aria-label="Toggle navigation menu"
+            title="Navigation Menu"
+          >
+            <Menu className="w-5 h-5 text-white" />
+          </button>
+          <div
+            onClick={() => setActiveTab('home')}
+            className="cursor-pointer py-1 px-1 hover:opacity-90 transition-opacity"
+            title="ViralHub Home"
+          >
+            <ViralHubLogo size="sm" />
+          </div>
+          <span className="text-xs font-bold font-brand text-white tracking-wider border-l border-neutral-800 pl-3">
+            MESSAGES
+          </span>
+        </div>
+      </header>
+    );
+  }
+
   const cleanQuery = searchQuery.trim().toLowerCase().replace('@', '').replace('#', '');
 
   // Filter matching creators - strictly hide banned accounts

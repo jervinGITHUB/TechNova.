@@ -82,6 +82,40 @@ input[type="range"] {
   will-change: transform, opacity;
 }
 
+/* TikTok-style Spinning Vinyl Record Animation */
+@keyframes vinylSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-vinyl {
+  animation: vinylSpin 5s linear infinite;
+  will-change: transform;
+}
+
+.animate-vinyl-paused {
+  animation-play-state: paused !important;
+}
+
+@keyframes slideUpDrawer {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-slideUp {
+  animation: slideUpDrawer 0.22s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
 /* Hide scrollbar for mobile/feed swipe containers */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
