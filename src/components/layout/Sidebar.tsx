@@ -15,9 +15,10 @@ import {
   Sliders,
   ChevronDown,
   ArrowRightLeft,
-  Shield,
   ShieldAlert,
   Ban,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -42,6 +43,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, hideLogo = false }
     refreshFeed,
     loginWithGoogle,
     setAuthView,
+    sidebarCollapsed,
+    toggleSidebarCollapsed,
   } = useApp();
 
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -86,19 +89,45 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, hideLogo = false }
   ];
 
   return (
-    <aside className="w-full md:w-64 shrink-0 bg-[#0d0d12] border-r-0 md:border-r border-neutral-800/80 flex flex-col justify-between h-full md:h-screen sticky top-0 px-4 py-4 md:py-5 select-none z-30">
-      {/* Top Brand Logo (shown on desktop or when hideLogo is false) */}
+    <aside
+      className={`w-full ${
+        sidebarCollapsed ? 'md:w-20 px-2' : 'md:w-64 px-4'
+      } shrink-0 bg-[#0d0d12] border-r-0 md:border-r border-neutral-800/80 flex flex-col justify-between h-full md:h-screen sticky top-0 py-4 md:py-5 select-none z-30 transition-all duration-300 ease-in-out`}
+    >
+      {/* Top Brand Logo & Collapse Button */}
       <div>
         {!hideLogo && (
-          <div
-            onClick={() => {
-              setActiveTab('home');
-              refreshFeed();
-              onNavigate?.();
-            }}
-            className="cursor-pointer py-1 px-2 mb-8 hover:opacity-90 transition-opacity"
-          >
-            <ViralHubLogo size="md" />
+          <div className={`flex items-center ${sidebarCollapsed ? 'flex-col gap-3 justify-center' : 'justify-between'} mb-6 px-1`}>
+            <div
+              onClick={() => {
+                setActiveTab('home');
+                refreshFeed();
+                onNavigate?.();
+              }}
+              className="cursor-pointer hover:opacity-90 transition-opacity"
+              title="ViralHub"
+            >
+              {sidebarCollapsed ? (
+                <ViralHubLogo size="sm" showText={false} />
+              ) : (
+                <ViralHubLogo size="md" />
+              )}
+            </div>
+
+            {/* Collapse / Expand Toggle Button (like in TikTok) */}
+            <button
+              type="button"
+              onClick={toggleSidebarCollapsed}
+              className="hidden md:flex p-1.5 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800/80 transition-colors cursor-pointer border border-transparent hover:border-neutral-700/60"
+              title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              aria-label="Toggle sidebar collapse"
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpen className="w-5 h-5 text-neutral-300" />
+              ) : (
+                <PanelLeftClose className="w-5 h-5 text-neutral-300" />
+              )}
+            </button>
           </div>
         )}
 
@@ -122,24 +151,35 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, hideLogo = false }
                   setActiveTab(item.tab);
                   onNavigate?.();
                 }}
-                className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl font-medium text-sm transition-all cursor-pointer ${
+                title={sidebarCollapsed ? item.label : undefined}
+                className={`w-full flex items-center ${
+                  sidebarCollapsed ? 'justify-center p-3' : 'justify-between px-4 py-3'
+                } rounded-2xl font-medium text-sm transition-all cursor-pointer relative group ${
                   isActive
-                    ? 'bg-[#1b1b24] text-white font-semibold border-l-4 border-[#ff007a] shadow-sm'
+                    ? sidebarCollapsed
+                      ? 'bg-[#1b1b24] text-[#ff007a] shadow-[0_0_12px_rgba(255,0,122,0.25)]'
+                      : 'bg-[#1b1b24] text-white font-semibold border-l-4 border-[#ff007a] shadow-sm'
                     : 'text-neutral-400 hover:text-white hover:bg-[#15151c]'
                 }`}
               >
-                <div className="flex items-center gap-3.5">
-                  <span className={isActive ? 'text-[#ff007a]' : 'text-neutral-400'}>
+                <div className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3.5'}`}>
+                  <span className={isActive ? 'text-[#ff007a]' : 'text-neutral-400 group-hover:text-white transition-colors'}>
                     {item.icon}
                   </span>
-                  <span>{item.label}</span>
+                  {!sidebarCollapsed && <span>{item.label}</span>}
                 </div>
 
                 {/* Unread Counter Badge */}
                 {typeof item.badge === 'number' && item.badge > 0 && (
-                  <span className="flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-[#ff0033] text-white text-[11px] font-bold shadow-[0_0_8px_rgba(255,0,51,0.7)] animate-pulse">
-                    {item.badge}
-                  </span>
+                  sidebarCollapsed ? (
+                    <span className="absolute top-1.5 right-2 min-w-4 h-4 px-1 rounded-full bg-[#ff0033] text-white text-[10px] font-bold flex items-center justify-center shadow-[0_0_8px_rgba(255,0,51,0.7)] animate-pulse">
+                      {item.badge}
+                    </span>
+                  ) : (
+                    <span className="flex items-center justify-center min-w-5 h-5 px-1.5 rounded-full bg-[#ff0033] text-white text-[11px] font-bold shadow-[0_0_8px_rgba(255,0,51,0.7)] animate-pulse">
+                      {item.badge}
+                    </span>
+                  )
                 )}
               </button>
             );
@@ -153,24 +193,31 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, hideLogo = false }
           <div className="relative">
             <div
               onClick={() => setProfileMenuOpen(!profileMenuOpen)}
-              className="flex items-center justify-between p-2.5 rounded-2xl hover:bg-[#16161f] transition-all cursor-pointer group"
+              className={`flex items-center ${
+                sidebarCollapsed ? 'justify-center p-1.5' : 'justify-between p-2.5'
+              } rounded-2xl hover:bg-[#16161f] transition-all cursor-pointer group`}
+              title={sidebarCollapsed ? (currentUser.displayName || 'Profile') : undefined}
             >
-              <div className="flex items-center gap-3 min-w-0">
+              <div className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-3'} min-w-0`}>
                 <Avatar
                   src={currentUser.avatar}
                   alt={currentUser.displayName || 'User'}
-                  size="md"
+                  size={sidebarCollapsed ? 'sm' : 'md'}
                 />
-                <div className="min-w-0 text-left">
-                  <div className="text-sm font-semibold text-white truncate group-hover:text-[#ff007a] transition-colors">
-                    {currentUser.displayName || 'Profile'}
+                {!sidebarCollapsed && (
+                  <div className="min-w-0 text-left">
+                    <div className="text-sm font-semibold text-white truncate group-hover:text-[#ff007a] transition-colors">
+                      {currentUser.displayName || 'Profile'}
+                    </div>
+                    <div className="text-xs text-neutral-400 truncate">
+                      {currentUser.username ? `@${currentUser.username}` : '@user'}
+                    </div>
                   </div>
-                  <div className="text-xs text-neutral-400 truncate">
-                    {currentUser.username ? `@${currentUser.username}` : '@user'}
-                  </div>
-                </div>
+                )}
               </div>
-              <ChevronDown className="w-4 h-4 text-neutral-400 shrink-0 group-hover:text-white transition-colors" />
+              {!sidebarCollapsed && (
+                <ChevronDown className="w-4 h-4 text-neutral-400 shrink-0 group-hover:text-white transition-colors" />
+              )}
             </div>
 
             {/* Profile Menu Popup */}
@@ -180,7 +227,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onNavigate, hideLogo = false }
                   className="fixed inset-0 z-40"
                   onClick={() => setProfileMenuOpen(false)}
                 />
-                <div className="absolute bottom-16 left-0 w-full bg-[#181822] border border-neutral-700/80 rounded-2xl p-2 shadow-2xl z-50 flex flex-col gap-1 backdrop-blur-xl">
+                <div className={`absolute bottom-16 ${
+                  sidebarCollapsed ? 'left-2 w-64' : 'left-0 w-full'
+                } bg-[#181822] border border-neutral-700/80 rounded-2xl p-2 shadow-2xl z-50 flex flex-col gap-1 backdrop-blur-xl`}>
                   <button
                     onClick={() => {
                       setProfileMenuOpen(false);

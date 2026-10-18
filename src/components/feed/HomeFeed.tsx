@@ -621,12 +621,12 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
   );
 
   return (
-    <div className="flex items-center md:items-end justify-center md:gap-4 w-full h-full max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] snap-start snap-always shrink-0 mb-1 md:mb-6 select-none relative">
+    <div className="flex items-center justify-center md:gap-4 w-full h-full max-h-full shrink-0 select-none relative p-1 md:p-3">
       {/* 1. Main 9:16 Video Player Container */}
       <div
         onClick={() => togglePlayPause()}
         data-video-player="true"
-        className="video-feed-card relative aspect-[9/16] h-full max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] w-auto max-w-full bg-black rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between cursor-pointer"
+        className="video-feed-card relative aspect-[9/16] h-full max-h-[calc(100dvh-4.5rem)] md:max-h-[calc(100vh-5.5rem)] w-auto max-w-full bg-black rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between cursor-pointer"
       >
         {/* Subtle Ambient Glow for Letterboxed areas on Desktop (TikTok web style) */}
         <div className="absolute inset-0 overflow-hidden pointer-events-none hidden md:block">
@@ -917,20 +917,22 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
 // Empty state for Friends feed
 const EmptyFriendsFeedCard: React.FC<{ onDiscover: () => void }> = ({ onDiscover }) => {
   return (
-    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none shrink-0 mb-6 flex flex-col items-center justify-center p-6 text-center">
-      <div className="w-16 h-16 rounded-3xl bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center text-[#ff007a] mb-4 shadow-[0_0_20px_rgba(255,0,122,0.3)]">
-        <Users className="w-8 h-8" />
+    <div className="snap-start snap-always w-full h-full min-h-full max-h-full shrink-0 flex items-center justify-center p-4">
+      <div className="w-full max-w-[420px] aspect-[9/16] max-h-[calc(100dvh-4.5rem)] md:max-h-[calc(100vh-5.5rem)] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 rounded-3xl bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center text-[#ff007a] mb-4 shadow-[0_0_20px_rgba(255,0,122,0.3)]">
+          <Users className="w-8 h-8" />
+        </div>
+        <h3 className="text-base font-bold text-white font-brand mb-1">Friends Feed</h3>
+        <p className="text-xs text-neutral-400 max-w-xs mb-5 leading-relaxed">
+          When you and another creator follow each other, you become friends! Their newest videos will show up here.
+        </p>
+        <button
+          onClick={onDiscover}
+          className="flex items-center gap-2 py-2.5 px-5 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95"
+        >
+          <span>Discover on For You</span>
+        </button>
       </div>
-      <h3 className="text-base font-bold text-white font-brand mb-1">Friends Feed</h3>
-      <p className="text-xs text-neutral-400 max-w-xs mb-5 leading-relaxed">
-        When you and another creator follow each other, you become friends! Their newest videos will show up here.
-      </p>
-      <button
-        onClick={onDiscover}
-        className="flex items-center gap-2 py-2.5 px-5 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95"
-      >
-        <span>Discover on For You</span>
-      </button>
     </div>
   );
 };
@@ -938,20 +940,22 @@ const EmptyFriendsFeedCard: React.FC<{ onDiscover: () => void }> = ({ onDiscover
 // Empty state for Following feed
 const EmptyFollowingFeedCard: React.FC<{ onDiscover: () => void }> = ({ onDiscover }) => {
   return (
-    <div className="snap-start snap-always w-full aspect-[9/16] max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none shrink-0 mb-6 flex flex-col items-center justify-center p-6 text-center">
-      <div className="w-16 h-16 rounded-3xl bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center text-[#ff007a] mb-4 shadow-[0_0_20px_rgba(255,0,122,0.3)]">
-        <UserCheck className="w-8 h-8" />
+    <div className="snap-start snap-always w-full h-full min-h-full max-h-full shrink-0 flex items-center justify-center p-4">
+      <div className="w-full max-w-[420px] aspect-[9/16] max-h-[calc(100dvh-4.5rem)] md:max-h-[calc(100vh-5.5rem)] bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-3xl overflow-hidden shadow-2xl border border-neutral-800/90 relative select-none flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-16 h-16 rounded-3xl bg-[#ff007a]/15 border border-[#ff007a]/30 flex items-center justify-center text-[#ff007a] mb-4 shadow-[0_0_20px_rgba(255,0,122,0.3)]">
+          <UserCheck className="w-8 h-8" />
+        </div>
+        <h3 className="text-base font-bold text-white font-brand mb-1">Following Feed</h3>
+        <p className="text-xs text-neutral-400 max-w-xs mb-5 leading-relaxed">
+          Follow your favorite creators to see their latest videos right here in your Following feed.
+        </p>
+        <button
+          onClick={onDiscover}
+          className="flex items-center gap-2 py-2.5 px-5 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95"
+        >
+          <span>Discover Creators</span>
+        </button>
       </div>
-      <h3 className="text-base font-bold text-white font-brand mb-1">Following Feed</h3>
-      <p className="text-xs text-neutral-400 max-w-xs mb-5 leading-relaxed">
-        Follow your favorite creators to see their latest videos right here in your Following feed.
-      </p>
-      <button
-        onClick={onDiscover}
-        className="flex items-center gap-2 py-2.5 px-5 rounded-2xl bg-gradient-to-r from-[#ff007a] to-[#d00062] hover:from-[#ff1a8c] hover:to-[#e6006c] text-white font-bold text-xs shadow-[0_0_15px_rgba(255,0,122,0.4)] transition-all cursor-pointer transform active:scale-95"
-      >
-        <span>Discover Creators</span>
-      </button>
     </div>
   );
 };
@@ -961,9 +965,9 @@ const EmptyFeedLayoutCard: React.FC = () => {
   const { setActiveTab } = useApp();
 
   return (
-    <div className="flex items-center md:items-end justify-center md:gap-4 w-full h-full max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] snap-start snap-always shrink-0 mb-1 md:mb-6 select-none relative">
+    <div className="snap-start snap-always w-full h-full min-h-full max-h-full shrink-0 flex items-center justify-center p-4 select-none relative">
       {/* Center Wireframe Video Container */}
-      <div className="relative aspect-[9/16] h-full max-h-[calc(100dvh-4.25rem)] md:h-[580px] lg:h-[620px] md:max-h-[640px] w-auto max-w-full bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between">
+      <div className="relative aspect-[9/16] h-full max-h-[calc(100dvh-4.5rem)] md:max-h-[calc(100vh-5.5rem)] w-auto max-w-full bg-gradient-to-b from-[#14141d] to-[#0c0c12] rounded-none sm:rounded-2xl md:rounded-3xl overflow-hidden shadow-2xl border-0 md:border border-neutral-800/90 group select-none shrink-0 flex flex-col justify-between">
         <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center z-10">
           <div className="w-16 h-16 rounded-3xl bg-[#1c1c28] border border-neutral-700/80 flex items-center justify-center text-neutral-400 mb-4 shadow-xl">
             <VideoIcon className="w-8 h-8 text-[#ff007a]" />
@@ -1360,7 +1364,7 @@ export const HomeFeed: React.FC = () => {
         {/* Scrollable Videos Feed Container */}
         <div
           ref={videoFeedRef}
-          className="w-full h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar pt-0 md:pt-1 pb-4 md:pb-16 relative"
+          className="w-full h-full overflow-y-auto snap-y snap-mandatory overscroll-contain no-scrollbar p-0 relative"
         >
           {feedVideos.length === 0 ? (
             feedTab === 'friends' ? (
@@ -1379,7 +1383,7 @@ export const HomeFeed: React.FC = () => {
                   if (el) itemRefs.current.set(video.id, el);
                   else itemRefs.current.delete(video.id);
                 }}
-                className="snap-start snap-always w-full flex justify-center"
+                className="snap-start snap-always w-full h-full min-h-full max-h-full shrink-0 flex items-center justify-center relative overflow-hidden"
               >
                 <VideoFeedCard
                   video={video}

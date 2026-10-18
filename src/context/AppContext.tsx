@@ -722,6 +722,17 @@ interface AppContextType {
 
   // Notifications
   addCustomNotification: (item: Omit<NotificationItem, 'id' | 'timestamp' | 'createdAt' | 'isUnread'>) => void;
+
+  // Sidebar Collapsed State (like TikTok)
+  sidebarCollapsed: boolean;
+  setSidebarCollapsed: (collapsed: boolean) => void;
+  toggleSidebarCollapsed: () => void;
+
+  // Recent Searches (vanished on account switch or logout)
+  recentSearches: string[];
+  addRecentSearch: (query: string) => void;
+  removeRecentSearch: (query: string) => void;
+  clearRecentSearches: () => void;
 }
 
 export const deduplicateVideos = (videoList: Video[]): Video[] => {
@@ -1325,6 +1336,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [searchQuery, setSearchQueryRaw] = useState<string>('');
   const setSearchQuery = (query: string) => {
     setSearchQueryRaw(typeof query === 'string' ? query.slice(0, 50) : '');
+  };
+
+  // Collapsible Left Sidebar (like in TikTok)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    return storage.get<boolean>('viralhub_sidebar_collapsed', false);
+  });
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      storage.set('viralhub_sidebar_collapsed', next);
+      return next;
+    });
+  };
+
+  // Recent Searches - scoped strictly to currentUser and vanished on account switch or logout
+  const [recentSearches, setRecentSearches] = useState<string[]>(() => {
+    const current = storage.get<User | null>('currentUser', null);
+    if (!current?.id) return [];
+    return storage.get<string[]>(`recent_searches_${toUuid(current.id)}`, []);
+  });
+
+  const addRecentSearch = (query: string) => {
+    const clean = query.trim();
+    if (!clean || !currentUser?.id) return;
+    setRecentSearches(prev => {
+      const filtered = prev.filter(q => q.toLowerCase() !== clean.toLowerCase());
+      const updated = [clean, ...filtered].slice(0, 10);
+      storage.set(`recent_searches_${toUuid(currentUser.id)}`, updated);
+      return updated;
+    });
+  };
+
+  const removeRecentSearch = (query: string) => {
+    if (!currentUser?.id) return;
+    setRecentSearches(prev => {
+      const updated = prev.filter(q => q.toLowerCase() !== query.toLowerCase());
+      storage.set(`recent_searches_${toUuid(currentUser.id)}`, updated);
+      return updated;
+    });
+  };
+
+  const clearRecentSearches = () => {
+    if (currentUser?.id) {
+      storage.remove(`recent_searches_${toUuid(currentUser.id)}`);
+    }
+    setRecentSearches([]);
   };
   const [supabaseModalOpen, setSupabaseModalOpen] = useState<boolean>(false);
   const [preBanAppealModalOpen, setPreBanAppealModalOpen] = useState<boolean>(false);
@@ -2734,12 +2791,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 });
               }
             })
-            // 2. Message updates: only re-fetch messages when someone else sends a message
+            // 2. Message updates: only fetch conversations/messages (preserves Supabase disk IO)
             .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'Message' }, (payload: any) => {
               const newMsg = payload.new;
               if (!newMsg || !currentUser) return;
               if (isSameUser(newMsg.SenderUserID, currentUser.id)) return;
-              syncWithSupabase();
+              supabaseDb.fetchConversationsAndMessages(currentUser.id).then(convs => {
+                if (convs && Array.isArray(convs)) {
+                  setConversations(convs);
+                }
+              }).catch(() => {});
             })
             // 3. Like updates: update video like count directly in memory (ignore own optimistic actions)
             .on('postgres_changes', { event: '*', schema: 'public', table: 'Like' }, (payload: any) => {
@@ -3422,8 +3483,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const savedForUser = storage.get<Conversation[]>(userConvKey, null as any);
             const initialConvs = (savedForUser && Array.isArray(savedForUser))
               ? deduplicateConversations(savedForUser, loggedInUser.id)
-              : deduplicateConversations(storage.get<Conversation[]>('conversations', []), loggedInUser.id);
+              : [];
             setConversations(initialConvs);
+            setRecentSearches(storage.get<string[]>(`recent_searches_${toUuid(loggedInUser.id)}`, []));
             setActiveConversationId(null);
             setMessagesMobileView('list');
             setSelectedUserId(null);
@@ -3467,8 +3529,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const savedForUser = storage.get<Conversation[]>(userConvKey, null as any);
       const initialConvs = (savedForUser && Array.isArray(savedForUser))
         ? deduplicateConversations(savedForUser, patchedFound.id)
-        : deduplicateConversations(storage.get<Conversation[]>('conversations', []), patchedFound.id);
+        : [];
       setConversations(initialConvs);
+      setRecentSearches(storage.get<string[]>(`recent_searches_${toUuid(patchedFound.id)}`, []));
       setActiveConversationId(null);
       setMessagesMobileView('list');
       setSelectedUserId(null);
@@ -3669,6 +3732,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setSelectedUserId(null);
     setAuthView('login');
     setIsAdmin(false);
+
+    // Vanish recent searches on logout as requested
+    if (currentUser?.id) {
+      storage.remove(`recent_searches_${toUuid(currentUser.id)}`);
+    }
+    setRecentSearches([]);
   };
 
   const quickLoginAs = (userId: string) => {
@@ -3752,15 +3821,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     });
 
-    // Switch conversations to target account
+    // Switch conversations to target account (strictly scoped, never leak prior user's conversations)
     const userConvKey = `conversations_${toUuid(updatedTarget.id)}`;
     const savedForUser = storage.get<Conversation[]>(userConvKey, null as any);
     if (savedForUser !== null && Array.isArray(savedForUser)) {
       setConversations(deduplicateConversations(savedForUser, updatedTarget.id));
     } else {
-      const raw = storage.get<Conversation[]>('conversations', []);
-      setConversations(deduplicateConversations(raw, updatedTarget.id));
+      setConversations([]);
     }
+
+    // Vanish previous user's recent searches when switching account as requested
+    setRecentSearches([]);
 
     // 3. Keep branded loading screen visible smoothly so switching is never plain or abrupt
     setTimeout(() => {
@@ -3805,6 +3876,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveConversationId(null);
     setMessagesMobileView('list');
     setAuthView('login');
+
+    // Vanish recent searches
+    if (currentUser?.id) {
+      storage.remove(`recent_searches_${toUuid(currentUser.id)}`);
+    }
+    setRecentSearches([]);
   };
 
   const navigateToUserProfile = (userId: string) => {
@@ -8595,6 +8672,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setBlockedUsersModalOpen,
         resetPasswordModalOpen,
         setResetPasswordModalOpen,
+        sidebarCollapsed,
+        setSidebarCollapsed,
+        toggleSidebarCollapsed,
+        recentSearches,
+        addRecentSearch,
+        removeRecentSearch,
+        clearRecentSearches,
       }}
     >
       {children}
