@@ -1529,6 +1529,7 @@ export const ProfileView: React.FC = () => {
 
       {/* Share Video Modal from Profile */}
       <ShareVideoModal
+        key={shareModalVideo ? `share-profile-${shareModalVideo.id}` : 'share-profile-closed'}
         video={shareModalVideo}
         isOpen={!!shareModalVideo}
         onClose={() => setShareModalVideo(null)}

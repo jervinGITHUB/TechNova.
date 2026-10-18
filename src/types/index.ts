@@ -147,6 +147,7 @@ export interface Message {
   sharedVideoId?: string;
   sharedLiveStream?: LiveStream;
   sharedLiveStreamId?: string;
+  reactions?: { [emoji: string]: string[] };
 }
 
 export interface Conversation {

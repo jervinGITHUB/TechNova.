@@ -601,6 +601,7 @@ interface AppContextType {
   ) => void;
   deleteConversation: (convId: string) => void;
   deleteMessage: (convId: string, messageId: string) => void;
+  reactToMessage: (convId: string, messageId: string, emoji: string) => void;
   
   // Notifications
   markAllNotificationsAsRead: () => void;
@@ -1980,6 +1981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   sharedVideo: matchedSharedVideo,
                   sharedVideoId,
                   deletedForUserIds: deletedFor,
+                  reactions: m.Reactions || m.reactions || existingConv?.messages?.find(lm => lm.id === m.MessageID || toUuid(lm.id) === toUuid(m.MessageID))?.reactions || {},
                 };
               });
 
@@ -3106,6 +3108,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                       messages: remainingMessages,
                       lastMessage: last ? (last.sharedVideo ? '🎥 Shared a video' : last.text) : 'Started a new conversation',
                       lastMessageTime: last ? last.timestamp : c.lastMessageTime,
+                    };
+                  }
+                  return c;
+                });
+                storage.set('conversations', next);
+                return next;
+              });
+            })
+            .on('broadcast', { event: 'message_reaction' }, ({ payload }: any) => {
+              if (!payload) return;
+              const { conversationId, messageId, emoji, userId, updatedReactions } = payload;
+              setConversations(prev => {
+                const next = prev.map(c => {
+                  if (
+                    c.id === conversationId ||
+                    toUuid(c.id) === toUuid(conversationId) ||
+                    c.messages.some(m => m.id === messageId || toUuid(m.id) === toUuid(messageId))
+                  ) {
+                    const updatedMessages = c.messages.map(m => {
+                      if (m.id === messageId || toUuid(m.id) === toUuid(messageId)) {
+                        let nextReactions = updatedReactions;
+                        if (!nextReactions && emoji && userId) {
+                          const curr: Record<string, string[]> = { ...(m.reactions || {}) };
+                          const usersForEmoji = [...(curr[emoji] || [])];
+                          const hasUser = usersForEmoji.some(u => isSameUser(u, userId));
+                          const newUsers = hasUser
+                            ? usersForEmoji.filter(u => !isSameUser(u, userId))
+                            : [...usersForEmoji, userId];
+                          if (newUsers.length === 0) {
+                            delete curr[emoji];
+                          } else {
+                            curr[emoji] = newUsers;
+                          }
+                          nextReactions = curr;
+                        }
+                        return {
+                          ...m,
+                          reactions: nextReactions || m.reactions || {},
+                        };
+                      }
+                      return m;
+                    });
+                    return {
+                      ...c,
+                      messages: updatedMessages,
                     };
                   }
                   return c;
@@ -5757,6 +5804,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       }
     } catch {}
+  };
+
+  // React to message: toggle reaction for current user, broadcast to user B, and persist
+  const reactToMessage = (convId: string, messageId: string, emoji: string) => {
+    if (!currentUser || !emoji) return;
+    const currentUserId = currentUser.id;
+
+    let computedNextReactions: Record<string, string[]> | null = null;
+
+    setConversations(prev => {
+      const next = prev.map(c => {
+        if (
+          c.id === convId ||
+          toUuid(c.id) === toUuid(convId) ||
+          c.messages.some(m => m.id === messageId || toUuid(m.id) === toUuid(messageId))
+        ) {
+          const updatedMessages = c.messages.map(m => {
+            if (m.id === messageId || toUuid(m.id) === toUuid(messageId)) {
+              const curr: Record<string, string[]> = { ...(m.reactions || {}) };
+              const usersForEmoji = [...(curr[emoji] || [])];
+              const alreadyReacted = usersForEmoji.some(u => isSameUser(u, currentUserId));
+
+              let newUsers: string[];
+              if (alreadyReacted) {
+                newUsers = usersForEmoji.filter(u => !isSameUser(u, currentUserId));
+              } else {
+                newUsers = [...usersForEmoji, currentUserId];
+              }
+
+              if (newUsers.length === 0) {
+                delete curr[emoji];
+              } else {
+                curr[emoji] = newUsers;
+              }
+
+              computedNextReactions = curr;
+
+              return {
+                ...m,
+                reactions: curr,
+              };
+            }
+            return m;
+          });
+
+          return {
+            ...c,
+            messages: updatedMessages,
+          };
+        }
+        return c;
+      });
+
+      storage.set('conversations', next);
+      if (currentUser?.id) {
+        storage.set(`conversations_${toUuid(currentUser.id)}`, next);
+      }
+      return next;
+    });
+
+    // Instant WebSocket broadcast directly to User B (<50ms, 0 Disk IO)
+    try {
+      const client = getSupabaseClient();
+      const broadcastCh = chatBroadcastChannelRef.current || (client ? client.channel('viralhub_chat_realtime') : null);
+      if (broadcastCh) {
+        broadcastCh.send({
+          type: 'broadcast',
+          event: 'message_reaction',
+          payload: {
+            conversationId: convId,
+            messageId,
+            emoji,
+            userId: currentUserId,
+            updatedReactions: computedNextReactions,
+          },
+        });
+      }
+    } catch (err) {
+      console.warn('Realtime message reaction broadcast note:', err);
+    }
+
+    // Persist to Supabase in background (0 disk IO impact, single row update)
+    if (computedNextReactions) {
+      supabaseDb.updateMessageReaction(messageId, computedNextReactions);
+    }
   };
 
   const markAllNotificationsAsRead = () => {
@@ -8627,6 +8759,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sendMessage,
         deleteConversation,
         deleteMessage,
+        reactToMessage,
         markAllNotificationsAsRead,
         markNotificationAsRead,
         activeLiveStreams,

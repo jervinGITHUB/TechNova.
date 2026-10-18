@@ -1352,6 +1352,7 @@ export const HomeFeed: React.FC = () => {
     >
       {/* Share Video Modal */}
       <ShareVideoModal
+        key={shareModalVideo ? `share-feed-${shareModalVideo.id}` : 'share-feed-closed'}
         video={shareModalVideo}
         isOpen={!!shareModalVideo}
         onClose={() => setShareModalVideo(null)}

@@ -20,8 +20,11 @@ import {
   X,
   MessageSquare,
   Plus,
-  Lock
+  Lock,
+  Smile,
 } from 'lucide-react';
+
+const QUICK_REACTIONS = ['❤️', '😂', '🔥', '👍', '😮', '😢', '🎉', '👏'];
 
 export const resolveConversationClearTime = (
   conv: Conversation | null | undefined,
@@ -219,6 +222,7 @@ export const MessagesView: React.FC = () => {
     sendMessage,
     deleteConversation,
     deleteMessage,
+    reactToMessage,
     messagesMobileView,
     setMessagesMobileView,
     navigateToUserProfile,
@@ -237,6 +241,7 @@ export const MessagesView: React.FC = () => {
   const [toastMessage, setToastMessage] = useState('');
   const [replyingTo, setReplyingTo] = useState<MessageReplyInfo | null>(null);
   const [newChatModalOpen, setNewChatModalOpen] = useState(false);
+  const [activeReactionPickerMsgId, setActiveReactionPickerMsgId] = useState<string | null>(null);
 
   // Live 30-second interval ticker for live relative timestamps ("Just now" -> "1m ago" -> "1h ago")
   const [, setTimeTick] = useState<number>(Date.now());
@@ -573,33 +578,19 @@ export const MessagesView: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Right side: Timestamp, Unread Badge, and Delete Conversation */}
+                  {/* Right side: Timestamp and Unread Badge */}
                   <div className="flex flex-col items-end shrink-0 ml-2">
                     <div className="text-[10px] text-neutral-500 font-medium" title={convTimeTooltip}>
                       {displayLastTime}
                     </div>
 
-                    <div className="mt-1 flex items-center gap-1.5">
-                      {unread > 0 ? (
+                    {unread > 0 && (
+                      <div className="mt-1 flex items-center">
                         <span className="w-5 h-5 rounded-full bg-[#ff0033] text-white text-[10px] font-bold flex items-center justify-center shadow-[0_0_8px_rgba(255,0,51,0.6)] animate-pulse">
                           {unread}
                         </span>
-                      ) : (
-                        <CheckCheck className="w-3.5 h-3.5 text-pink-500" />
-                      )}
-
-                      {/* Quick delete icon on list item */}
-                      <button
-                        onClick={e => {
-                          e.stopPropagation();
-                          deleteConversation(conv.id);
-                        }}
-                        className="p-1 text-neutral-500 hover:text-red-400 rounded-lg hover:bg-neutral-800 transition-colors opacity-0 group-hover/conv:opacity-100"
-                        title="Delete conversation"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -859,6 +850,47 @@ export const MessagesView: React.FC = () => {
                       key={msg.id}
                       className={`flex flex-col group/msg ${isMe ? 'items-end' : 'items-start'}`}
                     >
+                      {/* Floating Quick Reaction Picker */}
+                      {activeReactionPickerMsgId === msg.id && (
+                        <div
+                          className={`flex items-center gap-1 p-1 bg-[#181824] border border-neutral-700/90 rounded-2xl shadow-2xl mb-1.5 z-20 animate-fadeIn ${
+                            isMe ? 'self-end' : 'self-start'
+                          }`}
+                        >
+                          {QUICK_REACTIONS.map(emoji => {
+                            const hasMyReaction =
+                              currentUser &&
+                              (msg.reactions?.[emoji] || []).some(uid => isSameUser(uid, currentUser.id));
+                            return (
+                              <button
+                                key={emoji}
+                                type="button"
+                                onClick={() => {
+                                  reactToMessage(activeConv.id, msg.id, emoji);
+                                  setActiveReactionPickerMsgId(null);
+                                }}
+                                className={`w-8 h-8 flex items-center justify-center rounded-xl text-base hover:scale-125 transition-all cursor-pointer ${
+                                  hasMyReaction
+                                    ? 'bg-[#ff007a]/25 border border-[#ff007a]/50 scale-110 shadow-sm'
+                                    : 'hover:bg-neutral-800'
+                                }`}
+                                title={hasMyReaction ? `Remove ${emoji}` : `React with ${emoji}`}
+                              >
+                                {emoji}
+                              </button>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            onClick={() => setActiveReactionPickerMsgId(null)}
+                            className="p-1 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 ml-0.5 cursor-pointer"
+                            title="Close"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+
                       {/* Bubble */}
                       <div
                         className={`${
@@ -921,7 +953,45 @@ export const MessagesView: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Timestamp, Status & Action Buttons (Reply / Delete on every message) */}
+                      {/* Active Reaction Badges */}
+                      {msg.reactions && Object.entries(msg.reactions).some(([_, uids]) => Array.isArray(uids) && uids.length > 0) && (
+                        <div
+                          className={`flex flex-wrap items-center gap-1 mt-1 max-w-[85%] sm:max-w-md ${
+                            isMe ? 'justify-end' : 'justify-start'
+                          }`}
+                        >
+                          {Object.entries(msg.reactions).map(([emoji, uids]) => {
+                            if (!Array.isArray(uids) || uids.length === 0) return null;
+                            const hasMyReaction = currentUser && uids.some(uid => isSameUser(uid, currentUser.id));
+                            const reactorNames = uids
+                              .map(uid => {
+                                if (currentUser && isSameUser(uid, currentUser.id)) return 'You';
+                                const u = users.find(usr => isSameUser(usr.id, uid));
+                                return u?.displayName || (u?.username ? `@${u.username}` : 'User');
+                              })
+                              .join(', ');
+
+                            return (
+                              <button
+                                key={emoji}
+                                type="button"
+                                onClick={() => reactToMessage(activeConv.id, msg.id, emoji)}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold border transition-all cursor-pointer shadow-sm active:scale-90 ${
+                                  hasMyReaction
+                                    ? 'bg-[#ff007a]/25 border-[#ff007a]/60 text-white shadow-[0_0_8px_rgba(255,0,122,0.3)]'
+                                    : 'bg-[#1e1e2b] hover:bg-[#252536] border-neutral-700/70 text-neutral-300'
+                                }`}
+                                title={`${reactorNames} reacted with ${emoji}`}
+                              >
+                                <span className="text-sm leading-none">{emoji}</span>
+                                <span className="text-[10px] font-bold opacity-90">{uids.length}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Timestamp, Status & Action Buttons (React / Reply / Delete on every message) */}
                       <div
                         className={`flex items-center gap-2 mt-1 px-1 ${
                           isMe ? 'flex-row' : 'flex-row'
@@ -939,8 +1009,24 @@ export const MessagesView: React.FC = () => {
                         })()}
                         {isMe && <CheckCheck className="w-3 h-3 text-pink-400" />}
 
-                        {/* Reply and Delete Buttons on every message */}
+                        {/* React, Reply and Delete Buttons on every message */}
                         <div className="flex items-center gap-1 opacity-90 transition-opacity">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveReactionPickerMsgId(prev => (prev === msg.id ? null : msg.id));
+                            }}
+                            className={`text-[10px] font-semibold px-1.5 py-0.5 rounded hover:bg-neutral-800/80 flex items-center gap-1 transition-colors cursor-pointer ${
+                              activeReactionPickerMsgId === msg.id
+                                ? 'text-amber-400 bg-neutral-800/80'
+                                : 'text-neutral-400 hover:text-amber-400'
+                            }`}
+                            title="React to this message"
+                          >
+                            <Smile className="w-3 h-3" />
+                            <span>React</span>
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => {

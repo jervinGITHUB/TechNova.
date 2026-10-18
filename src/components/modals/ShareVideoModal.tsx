@@ -37,19 +37,27 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
 
   const [copied, setCopied] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sentUserIds, setSentUserIds] = useState<string[]>([]);
+  // Map of userId -> videoId sent, so sending another video always starts with "Send"
+  const [sentVideoMap, setSentVideoMap] = useState<Record<string, string>>({});
   const [personalNote, setPersonalNote] = useState('');
 
   // Lock body scroll while modal is open to prevent background scrolling
+  // and reset sent state whenever the modal opens, closes, or the video changes
   useEffect(() => {
     if (isOpen) {
+      setSentVideoMap({});
+      setSearchQuery('');
+      setPersonalNote('');
       const originalOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
       return () => {
         document.body.style.overflow = originalOverflow;
       };
+    } else {
+      setSentVideoMap({});
+      setPersonalNote('');
     }
-  }, [isOpen]);
+  }, [isOpen, video?.id]);
 
   if (!isOpen || !video) return null;
 
@@ -68,9 +76,21 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
   };
 
   const handleSendToUser = (targetUser: User) => {
-    if (sentUserIds.includes(targetUser.id)) return;
-    setSentUserIds(prev => [...prev, targetUser.id]);
+    // Only block if already sent THIS specific video
+    if (sentVideoMap[targetUser.id] === liveVideo.id) return;
+
+    setSentVideoMap(prev => ({ ...prev, [targetUser.id]: liveVideo.id }));
     shareVideoToUser(liveVideo, targetUser.id, personalNote);
+
+    // After 2.0s of visual "Sent" confirmation, revert button back to "Send"
+    // so the user can easily share again
+    setTimeout(() => {
+      setSentVideoMap(prev => {
+        const next = { ...prev };
+        delete next[targetUser.id];
+        return next;
+      });
+    }, 2000);
   };
 
   // Eligible users: not currentUser, not banned, and either public OR mutual friends
@@ -246,7 +266,7 @@ export const ShareVideoModal: React.FC<ShareVideoModalProps> = ({
             className="max-h-56 overflow-y-auto space-y-1.5 pr-1 mt-2 overscroll-contain"
           >
             {filteredUsers.map(u => {
-              const isSent = sentUserIds.includes(u.id);
+              const isSent = sentVideoMap[u.id] === liveVideo.id;
               const followStatus = getFollowStatus(u.id);
               const isFriend = followStatus === 'friends';
 

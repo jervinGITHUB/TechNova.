@@ -33,26 +33,39 @@ export const ShareLiveModal: React.FC<ShareLiveModalProps> = ({
   } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [sentUserIds, setSentUserIds] = useState<string[]>([]);
+  const [sentStreamMap, setSentStreamMap] = useState<Record<string, string>>({});
   const [personalNote, setPersonalNote] = useState('');
 
-  // Lock body scroll while modal is open
+  // Lock body scroll while modal is open and reset sent state
   useEffect(() => {
     if (isOpen) {
+      setSentStreamMap({});
+      setSearchQuery('');
+      setPersonalNote('');
       const originalOverflow = document.body.style.overflow;
       document.body.style.overflow = 'hidden';
       return () => {
         document.body.style.overflow = originalOverflow;
       };
+    } else {
+      setSentStreamMap({});
     }
-  }, [isOpen]);
+  }, [isOpen, stream?.id]);
 
   if (!isOpen || !stream) return null;
 
   const handleSendToUser = (targetUser: User) => {
-    if (sentUserIds.includes(targetUser.id)) return;
-    setSentUserIds(prev => [...prev, targetUser.id]);
+    if (sentStreamMap[targetUser.id] === stream.id) return;
+    setSentStreamMap(prev => ({ ...prev, [targetUser.id]: stream.id }));
     shareLiveStreamToUser(stream, targetUser.id, personalNote);
+
+    setTimeout(() => {
+      setSentStreamMap(prev => {
+        const next = { ...prev };
+        delete next[targetUser.id];
+        return next;
+      });
+    }, 2000);
   };
 
   // Eligible users: not currentUser, not banned, and either public OR mutual friends
@@ -208,7 +221,7 @@ export const ShareLiveModal: React.FC<ShareLiveModalProps> = ({
             className="max-h-56 overflow-y-auto space-y-1.5 pr-1 mt-2 overscroll-contain"
           >
             {filteredUsers.map(u => {
-              const isSent = sentUserIds.includes(u.id);
+              const isSent = sentStreamMap[u.id] === stream.id;
               const followStatus = getFollowStatus(u.id);
 
               return (

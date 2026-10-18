@@ -4443,6 +4443,30 @@ export const supabaseDb = {
     }
   },
 
+  async updateMessageReaction(
+    messageId: string,
+    reactions: Record<string, string[]>
+  ): Promise<boolean> {
+    const client = getSupabaseClient();
+    if (!client || !messageId) return false;
+
+    try {
+      const isMsgUuid = isUuid(messageId);
+      const msgUuid = toUuid(messageId);
+      const targetId = isMsgUuid ? messageId : (msgUuid && isUuid(msgUuid) ? msgUuid : messageId);
+
+      const { error } = await client
+        .from('Message')
+        .update({ Reactions: reactions })
+        .eq('MessageID', targetId);
+
+      return !error;
+    } catch (e) {
+      // Non-blocking fallback if column doesn't exist yet
+      return false;
+    }
+  },
+
   async deleteConversationMessages(
     conversationId: string,
     upToIso?: string,
@@ -6540,6 +6564,7 @@ ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "LikedBy" TEXT[]
 ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "LikesCount" INTEGER DEFAULT 0;
 ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "CreatedAt" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now());
 ALTER TABLE IF EXISTS public."Comment" ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now());
+ALTER TABLE IF EXISTS public."Message" ADD COLUMN IF NOT EXISTS "Reactions" JSONB DEFAULT '{}'::jsonb;
 
 -- 6. INDEXES (Guarantees sub-millisecond lookups & protects Supabase Disk IO!)
 CREATE INDEX IF NOT EXISTS "idx_comment_videoid_createdat" ON public."Comment"("VideoID", "CreatedAt");
