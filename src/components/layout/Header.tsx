@@ -2,8 +2,30 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
 import { ViralHubLogo } from '../common/ViralHubLogo';
-import { Search, Bell, Plus, Menu, User as UserIcon, Film, X, ChevronRight, ArrowLeft, Clock, Radio } from 'lucide-react';
-import { checkIsUserBanned } from '../../lib/supabase';
+import {
+  Search,
+  Bell,
+  Plus,
+  Menu,
+  User as UserIcon,
+  Film,
+  X,
+  ChevronRight,
+  ArrowLeft,
+  Clock,
+  Radio,
+  Settings,
+  ArrowRightLeft,
+  ShieldAlert,
+  Ban,
+  LogOut,
+} from 'lucide-react';
+import {
+  checkIsUserBanned,
+  isSameUser,
+  isAccountLoggedInOnDevice,
+  isGoogleAccount,
+} from '../../lib/supabase';
 
 interface HeaderProps {
   onToggleMobileNav?: () => void;
@@ -26,7 +48,18 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
     removeRecentSearch,
     clearRecentSearches,
     refreshFeed,
+    currentUser,
+    selectedUserId,
+    savedAccounts,
+    quickLoginAs,
+    loginWithGoogle,
+    logout,
+    setAuthView,
+    setSwitchAccountModalOpen,
+    setBlockedUsersModalOpen,
   } = useApp();
+
+  const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false);
 
   const isLiveStudio = activeTab === 'live_host_setup' || activeTab === 'live_host_active';
 
@@ -208,9 +241,11 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
   const isFeedTab = activeTab === 'home' || activeTab === 'following' || activeTab === 'friends';
   const isExploreOrProfile = activeTab === 'explore' || activeTab === 'profile' || activeTab === 'edit_profile';
   const showMobileLive = !isExploreOrProfile && (isFeedTab || activeTab === 'live' || activeTab === 'live_viewer');
+  const isMyProfilePage = (activeTab === 'profile' || activeTab === 'edit_profile') && (!selectedUserId || (currentUser && isSameUser(selectedUserId, currentUser.id)));
 
   return (
-    <header
+    <>
+      <header
       className={`h-14 sm:h-16 px-3 sm:px-6 flex items-center justify-between gap-3 select-none transition-all ${
         mobileSearchOpen
           ? 'bg-[#0d0d12] sticky top-0 z-[70] border-b border-neutral-800 shadow-md'
@@ -796,6 +831,23 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
               )}
             </button>
 
+            {/* Mobile Settings Icon Button (at the right side of the notification icon on My Profile page) */}
+            {isMyProfilePage && (
+              <button
+                type="button"
+                onClick={() => setMobileSettingsOpen(true)}
+                className={`md:hidden p-2 rounded-full transition-colors cursor-pointer drop-shadow ${
+                  mobileSettingsOpen
+                    ? 'bg-[#ff007a]/20 text-[#ff007a]'
+                    : 'text-white hover:text-white hover:bg-white/10'
+                }`}
+                aria-label="Settings"
+                title="Settings & Accounts"
+              >
+                <Settings className="w-5 h-5 text-white drop-shadow" />
+              </button>
+            )}
+
             {/* Mobile Options Drawer (3 lines) Button: Hidden per user request */}
             <button
               type="button"
@@ -819,5 +871,169 @@ export const Header: React.FC<HeaderProps> = ({ onToggleMobileNav }) => {
         </>
       )}
     </header>
+
+    {/* Mobile Profile Settings Bottom Sheet Drawer */}
+    {mobileSettingsOpen && (
+      <div className="fixed inset-0 z-[100] md:hidden flex flex-col justify-end">
+        {/* Backdrop */}
+        <div
+          className="fixed inset-0 bg-black/75 backdrop-blur-sm transition-opacity animate-fadeIn"
+          onClick={() => setMobileSettingsOpen(false)}
+        />
+
+        {/* Bottom Drawer Card */}
+        <div className="relative w-full max-w-lg mx-auto bg-[#14141e] border-t border-neutral-700/80 rounded-t-3xl shadow-2xl z-10 flex flex-col max-h-[85vh] animate-slideUp overflow-hidden">
+          {/* Grab Handle */}
+          <div className="pt-3 pb-1 flex justify-center shrink-0">
+            <div className="w-12 h-1.5 rounded-full bg-neutral-600" />
+          </div>
+
+          {/* Header */}
+          <div className="flex items-center justify-between px-5 py-3 border-b border-neutral-800 shrink-0">
+            <div className="flex items-center gap-2">
+              <Settings className="w-4 h-4 text-[#ff007a]" />
+              <h3 className="text-sm font-bold font-brand text-white tracking-wide">
+                Settings & Accounts
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setMobileSettingsOpen(false)}
+              className="p-1.5 text-neutral-400 hover:text-white rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer"
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="p-3 overflow-y-auto space-y-1">
+            {/* 1. Switch Account Modal trigger */}
+            <button
+              type="button"
+              onClick={() => {
+                setMobileSettingsOpen(false);
+                setSwitchAccountModalOpen(true);
+              }}
+              className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl hover:bg-[#1d1d2b] transition-colors cursor-pointer text-left"
+            >
+              <ArrowRightLeft className="w-5 h-5 text-[#ff007a] shrink-0" />
+              <span className="text-sm font-semibold text-white">Switch Account</span>
+            </button>
+
+            {/* 2. Report History */}
+            <button
+              type="button"
+              onClick={() => {
+                setMobileSettingsOpen(false);
+                setActiveTab('report_history');
+              }}
+              className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl hover:bg-[#1d1d2b] transition-colors cursor-pointer text-left"
+            >
+              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
+              <span className="text-sm font-semibold text-white">Report History</span>
+            </button>
+
+            {/* 3. Blocked Accounts */}
+            <button
+              type="button"
+              onClick={() => {
+                setMobileSettingsOpen(false);
+                setBlockedUsersModalOpen(true);
+              }}
+              className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl hover:bg-[#1d1d2b] transition-colors cursor-pointer text-left"
+            >
+              <Ban className="w-5 h-5 text-rose-400 shrink-0" />
+              <span className="text-sm font-semibold text-white">Blocked Accounts</span>
+            </button>
+
+            {/* Divider */}
+            <div className="h-px bg-neutral-800 my-2" />
+
+            {/* 4. Quick Account Switcher List */}
+            {(() => {
+              const accountsToShow = savedAccounts.length > 0 ? savedAccounts : users.slice(0, 5);
+              return accountsToShow.length > 0 ? (
+                <div className="space-y-1">
+                  {accountsToShow.slice(0, 5).map(u => {
+                    const isCurrent = currentUser && isSameUser(currentUser.id, u.id);
+                    const isAdminAccount = String(u.role || '').toLowerCase() === 'admin' || String(u.role || '').toLowerCase() === 'super admin';
+                    return (
+                      <button
+                        key={u.id}
+                        type="button"
+                        onClick={async () => {
+                          setMobileSettingsOpen(false);
+                          if (isCurrent) return;
+                          if (isAccountLoggedInOnDevice(u.id, u.email)) {
+                            quickLoginAs(u.id);
+                            return;
+                          }
+                          if (isGoogleAccount(u)) {
+                            await loginWithGoogle({ prompt: 'select_account' });
+                          } else {
+                            logout();
+                            if (typeof window !== 'undefined') {
+                              sessionStorage.setItem('viralhub_prefill_login', u.email || u.username);
+                            }
+                            setAuthView('login');
+                          }
+                        }}
+                        className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-2xl transition-all cursor-pointer ${
+                          isCurrent
+                            ? 'bg-[#ff007a]/20 text-[#ff007a] font-bold shadow-sm'
+                            : 'text-neutral-300 hover:bg-[#1d1d2b] hover:text-white'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar
+                            src={u.avatar}
+                            alt={u.displayName || 'User'}
+                            size="sm"
+                          />
+                          <div className="min-w-0 text-left">
+                            <div className={`text-xs font-bold truncate ${isCurrent ? 'text-[#ff007a]' : 'text-white'}`}>
+                              {u.displayName || u.username || 'User'}
+                            </div>
+                            <div className="text-[11px] text-neutral-400 truncate">
+                              @{u.username || 'user'}
+                            </div>
+                          </div>
+                          {isAdminAccount && (
+                            <span className="text-[9px] uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold shrink-0">
+                              ADMIN
+                            </span>
+                          )}
+                        </div>
+                        {isCurrent && (
+                          <span className="w-2.5 h-2.5 rounded-full bg-[#ff007a] shadow-[0_0_8px_rgba(255,0,122,0.8)] shrink-0" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null;
+            })()}
+
+            {/* Divider */}
+            <div className="h-px bg-neutral-800 my-2" />
+
+            {/* 5. Log Out */}
+            <button
+              type="button"
+              onClick={() => {
+                setMobileSettingsOpen(false);
+                logout();
+              }}
+              className="w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl hover:bg-rose-500/10 text-rose-400 hover:text-rose-300 transition-colors cursor-pointer text-left"
+            >
+              <LogOut className="w-5 h-5 text-rose-400 shrink-0" />
+              <span className="text-sm font-semibold">Log Out</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
