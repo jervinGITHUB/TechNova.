@@ -387,13 +387,6 @@ const VideoFeedCard: React.FC<VideoFeedCardProps> = ({
         </div>
       )}
 
-      {/* Pinned Badge */}
-      {video.isPinned && (
-        <div className="absolute top-4 left-4 z-20 flex items-center gap-1 px-2.5 py-1 rounded-full bg-[#ff007a] text-white text-[10px] font-bold shadow-[0_0_10px_rgba(255,0,122,0.6)] backdrop-blur-md">
-          <Pin className="w-3 h-3 fill-white rotate-45" />
-          <span>Pinned</span>
-        </div>
-      )}
 
       {/* Pin Action Feedback Toast */}
       {pinToast && (

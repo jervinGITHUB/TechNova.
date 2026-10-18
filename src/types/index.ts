@@ -320,6 +320,7 @@ export interface LiveStream {
   viewersCount: number;
   viewers: LiveViewer[];
   isLive: boolean;
+  status?: 'active' | 'ended';
   timerSeconds: number;
   followerGoal: {
     current: number;

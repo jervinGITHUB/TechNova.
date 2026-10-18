@@ -42,8 +42,16 @@ export const LiveStreamViewer: React.FC = () => {
   } = useApp();
 
   const [chatInput, setChatInput] = useState('');
-  const [isLiveEnded, setIsLiveEnded] = useState(false);
+  const [isLiveEnded, setIsLiveEnded] = useState(
+    () => currentLiveStream.isLive === false || currentLiveStream.status === 'ended'
+  );
   const [likeFloatingHearts, setLikeFloatingHearts] = useState<FloatingHeartItem[]>([]);
+
+  useEffect(() => {
+    if (currentLiveStream.isLive === false || currentLiveStream.status === 'ended') {
+      setIsLiveEnded(true);
+    }
+  }, [currentLiveStream.isLive, currentLiveStream.status]);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<string>('connecting');
@@ -276,22 +284,46 @@ export const LiveStreamViewer: React.FC = () => {
         /* ----------------------------------------------------------------------- */
         /* MOBILE VIEWER + WIDE 16:9 DESKTOP STREAM: NOT STRETCHED, MAKES IT FLEX! */
         /* ----------------------------------------------------------------------- */
-        <div className="flex-1 flex flex-col min-h-0 gap-3">
-          {/* Top Section: Natural 16:9 Widescreen Player (No stretch, object-contain) */}
-          <div className="w-full aspect-video max-h-[42vh] rounded-2xl overflow-hidden bg-black border border-neutral-800 shadow-xl shrink-0 relative flex items-center justify-center">
-            {isLiveEnded ? (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#0d0d12] p-4 text-center">
-                <Avatar src={hostUser.avatar} alt={hostUser.displayName || 'Host'} size="lg" className="mb-2 shadow-lg" />
-                <h3 className="text-base font-bold text-white font-brand">{hostUser.displayName || 'Host'}</h3>
-                <p className="text-xs text-neutral-400 mt-0.5">Live Ended</p>
-                <button
-                  onClick={() => setActiveTab('live')}
-                  className="mt-3 px-4 py-1.5 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all shadow-md cursor-pointer"
-                >
-                  Return to Live
-                </button>
-              </div>
-            ) : (
+        isLiveEnded ? (
+          <div className="flex-1 flex flex-col items-center justify-center bg-[#0d0d12] rounded-3xl border border-neutral-800 p-6 text-center animate-fadeIn min-h-0">
+            <button
+              onClick={() => toggleFollowUser(hostUser.id)}
+              className="mb-4 flex items-center gap-1.5 py-1.5 px-4 rounded-full bg-[#ff007a] hover:bg-[#ff1a8c] text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+            >
+              {isFollowingHost ? (
+                <>
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Following</span>
+                </>
+              ) : (
+                <>
+                  <UserPlus className="w-3.5 h-3.5" />
+                  <span>+Follow</span>
+                </>
+              )}
+            </button>
+
+            <Avatar
+              src={hostUser.avatar}
+              alt={hostUser.displayName || 'Host'}
+              size="xl"
+              className="mb-4 shadow-xl"
+            />
+
+            <h3 className="text-xl font-bold text-white font-brand">{hostUser.displayName || 'Host'}</h3>
+            <p className="text-sm text-neutral-400 mt-1 font-semibold">Live Ended</p>
+
+            <button
+              onClick={() => setActiveTab('live')}
+              className="mt-6 px-5 py-2 rounded-xl bg-[#ff007a] hover:bg-[#ff1a8c] text-white text-xs font-bold transition-all shadow-lg cursor-pointer"
+            >
+              Return to Live Streams
+            </button>
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col min-h-0 gap-3">
+            {/* Top Section: Natural 16:9 Widescreen Player (No stretch, object-contain) */}
+            <div className="w-full aspect-video max-h-[42vh] rounded-2xl overflow-hidden bg-black border border-neutral-800 shadow-xl shrink-0 relative flex items-center justify-center">
               <div className="w-full h-full relative overflow-hidden bg-black flex items-center justify-center">
                 <LiveStreamCanvas
                   compositeStream={remoteStream}
@@ -353,8 +385,7 @@ export const LiveStreamViewer: React.FC = () => {
                   ))}
                 </div>
               </div>
-            )}
-          </div>
+            </div>
 
           {/* Bottom Section: Flexing Interactive Chat & Stream Details */}
           <div className="flex-1 min-h-0 flex flex-col bg-[#13131a] rounded-2xl border border-neutral-800 overflow-hidden shadow-xl p-3">
@@ -471,6 +502,7 @@ export const LiveStreamViewer: React.FC = () => {
             </form>
           </div>
         </div>
+        )
       ) : (
         /* ----------------------------------------------------------------------- */
         /* STANDARD VIEW: DESKTOP VIEWER (WIDE OR PORTRAIT) OR MOBILE PORTRAIT     */
@@ -794,10 +826,11 @@ export const LiveStreamViewer: React.FC = () => {
             )}
           </div>
 
-          {/* Right Chat Panel: Desktop Only (Always clean on desktop) */}
-          <div className="hidden lg:flex w-80 lg:w-88 xl:w-96 shrink-0 bg-[#13131a] rounded-3xl border border-neutral-800 p-4 flex-col justify-between shadow-xl">
-            {/* Chat Header with Viewers and Likes */}
-            <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
+          {/* Right Chat Panel: Desktop Only (Hidden when live stream has ended) */}
+          {!isLiveEnded && (
+            <div className="hidden lg:flex w-80 lg:w-88 xl:w-96 shrink-0 bg-[#13131a] rounded-3xl border border-neutral-800 p-4 flex-col justify-between shadow-xl">
+              {/* Chat Header with Viewers and Likes */}
+              <div className="flex items-center justify-between pb-3 border-b border-neutral-800">
               <div className="flex items-center gap-2">
                 <Radio className="w-4 h-4 text-[#ff007a] animate-pulse" />
                 <span className="text-sm font-bold text-white font-brand">
@@ -923,6 +956,7 @@ export const LiveStreamViewer: React.FC = () => {
               </div>
             </form>
           </div>
+          )}
         </div>
       )}
       {/* Share Live Stream Modal */}

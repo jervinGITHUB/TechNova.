@@ -65,6 +65,8 @@ export const ProfileView: React.FC = () => {
     togglePinVideo,
     isUserBlockedByMe,
     isUserBlockedMe,
+    isBlockedEitherWay,
+    followRelations,
     blockUser,
     unblockUser,
   } = useApp();
@@ -230,8 +232,47 @@ export const ProfileView: React.FC = () => {
       })
     : [];
 
-  // User's liked videos are strictly isolated to targetUser!
-  const likedVideos = getUserLikedVideos(targetUser.id);
+  // User's liked videos are strictly filtered by audience settings
+  // - "Only me" videos are strictly hidden from anyone who is not the creator
+  // - "Friends" videos are visible ONLY if currentUser and the creator are mutual friends (or currentUser is creator)
+  // - "Public" videos are visible to everyone (unless blocked or rejected)
+  // When owner changes audience back to Public or Friends (if mutuals), it automatically reappears!
+  const likedVideos = useMemo(() => {
+    const rawList = getUserLikedVideos(targetUser.id);
+    return rawList.filter(v => {
+      const creatorId = v.creatorId || v.creator?.id;
+      const isCreator = Boolean(currentUser && isSameUser(creatorId, currentUser.id));
+
+      // Creator of the video can always see their own video
+      if (isCreator) return true;
+
+      // Status check
+      if (v.status === 'rejected') return false;
+
+      // Check banned creator
+      if (v.creator?.isBanned) return false;
+      if (checkIsUserBanned(creatorId, v.creator?.email, v.creator).isBanned) return false;
+      const creatorUser = users.find(u => isSameUser(u.id, creatorId));
+      if (creatorUser?.isBanned || (creatorUser && checkIsUserBanned(creatorUser.id, creatorUser.email, creatorUser).isBanned)) return false;
+
+      // Blocked check
+      if (currentUser && creatorId && isBlockedEitherWay(creatorId)) return false;
+
+      // "Only me" videos: strictly hidden from anyone other than the creator
+      if (v.audience === 'only_me' || v.privacy === 'private') {
+        return false;
+      }
+
+      // "Friends" videos: only visible if viewer and creator are mutual friends
+      if (v.audience === 'friends' || v.privacy === 'friends') {
+        if (!currentUser || !creatorId) return false;
+        const status = getFollowStatus(creatorId);
+        return status === 'friends';
+      }
+
+      return true;
+    });
+  }, [getUserLikedVideos, targetUser.id, currentUser, users, isBlockedEitherWay, getFollowStatus, followRelations]);
 
   // Dynamic likes count for user's profile
   const totalVideoLikes = userVideos.reduce((sum, v) => sum + (v.likesCount || 0), 0);

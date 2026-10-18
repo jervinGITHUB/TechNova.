@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '../../context/AppContext';
 import { Avatar } from '../common/Avatar';
-import { Radio, Users, Sparkles, RefreshCw, X, Plus, Heart } from 'lucide-react';
+import { Radio, Users, Sparkles, RefreshCw, X, Plus } from 'lucide-react';
 import { liveBroadcastService } from '../../services/liveBroadcastService';
 import { supabaseDb, toUuid, isSameUser } from '../../lib/supabase';
 
@@ -165,14 +165,8 @@ export const LiveBrowse: React.FC = () => {
                   <span>Live</span>
                 </div>
 
-                {/* Top-Right: Likes Counter, Viewers Counter & Dismiss/End Stream Action */}
+                {/* Top-Right: Viewers Counter & Dismiss/End Stream Action */}
                 <div className="absolute top-4 right-4 flex items-center gap-2">
-                  {/* Like Counter Badge */}
-                  <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-white text-xs font-semibold border border-pink-500/30 shadow-md">
-                    <Heart className="w-3.5 h-3.5 text-[#ff007a] fill-[#ff007a]" />
-                    <span>{stream.likesCount || 0}</span>
-                  </div>
-
                   {/* Viewers Counter */}
                   <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/60 backdrop-blur-md text-white text-xs font-medium border border-white/10 shadow-md">
                     <Users className="w-3.5 h-3.5 text-[#ff007a]" />
