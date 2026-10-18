@@ -360,7 +360,7 @@ export const MessageVideoCard: React.FC<MessageVideoCardProps> = ({
                     Video Blurred For Safety
                   </p>
                   <p className="text-[10px] text-neutral-300 line-clamp-2 leading-tight">
-                    Sent by @{senderName || creatorUsername}. Tap to review and confirm playback.
+                    Sent by @{(senderName || creatorUsername || 'someone').replace(/^@+/, '')}. Tap to review and confirm playback.
                   </p>
                 </div>
 

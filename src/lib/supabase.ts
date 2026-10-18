@@ -4113,22 +4113,30 @@ export const supabaseDb = {
     const client = getSupabaseClient();
     if (!client) return false;
 
+    // Strict guard: Sender, recipient, and text must all be valid non-empty values
+    if (!senderId || !recipientId || !String(recipientId).trim() || !text) {
+      console.warn('Supabase insertMessage: missing sender or recipient ID, aborting write to protect database.');
+      return false;
+    }
+
     try {
       const senderUuid = toUuid(senderId);
       const recipientUuid = toUuid(recipientId);
       const msgUuid = toUuid(messageId || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
 
-      // Determine canonical conversation ID
-      let actualConvUuid = isUuid(conversationId)
-        ? toUuid(conversationId)
-        : getDirectConversationId(senderId, recipientId);
+      // Determine deterministic canonical conversation ID
+      const canonicalConvUuid = getDirectConversationId(senderId, recipientId);
+      let actualConvUuid = isUuid(conversationId) ? toUuid(conversationId) : canonicalConvUuid;
+
+      // Always order UserIDA and UserIDB deterministically so lookups are 100% symmetric and efficient
+      const [userAUuid, userBUuid] = [senderUuid, recipientUuid].sort();
 
       // Check if a conversation record between these two users already exists in Supabase
       try {
         const { data: existingDbConv } = await client
           .from('Conversation')
           .select('ConversationID')
-          .or(`and(UserIDA.eq.${senderUuid},UserIDB.eq.${recipientUuid}),and(UserIDA.eq.${recipientUuid},UserIDB.eq.${senderUuid})`)
+          .or(`and(UserIDA.eq.${userAUuid},UserIDB.eq.${userBUuid}),and(UserIDA.eq.${userBUuid},UserIDB.eq.${userAUuid}),ConversationID.eq.${actualConvUuid}`)
           .limit(1)
           .maybeSingle();
 
@@ -4139,8 +4147,8 @@ export const supabaseDb = {
           await client.from('Conversation').upsert(
             {
               ConversationID: actualConvUuid,
-              UserIDA: senderUuid,
-              UserIDB: recipientUuid,
+              UserIDA: userAUuid,
+              UserIDB: userBUuid,
               CreatedAt: new Date().toISOString(),
             },
             { onConflict: 'ConversationID' }
@@ -4151,8 +4159,8 @@ export const supabaseDb = {
           await client.from('Conversation').upsert(
             {
               ConversationID: actualConvUuid,
-              UserIDA: senderUuid,
-              UserIDB: recipientUuid,
+              UserIDA: userAUuid,
+              UserIDB: userBUuid,
               CreatedAt: new Date().toISOString(),
             },
             { onConflict: 'ConversationID' }

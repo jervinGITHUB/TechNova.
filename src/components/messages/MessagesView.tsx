@@ -252,8 +252,7 @@ export const MessagesView: React.FC = () => {
       const isPart =
         (conv.participantIds && conv.participantIds.length > 0 && conv.participantIds.some(id => isSameUser(id, currentUser.id))) ||
         (conv.userAId && isSameUser(conv.userAId, currentUser.id)) ||
-        (conv.userBId && isSameUser(conv.userBId, currentUser.id)) ||
-        (conv.messages && conv.messages.some(m => isSameUser(m.senderId, currentUser.id)));
+        (conv.userBId && isSameUser(conv.userBId, currentUser.id));
       if (!isPart) return false;
 
       // Check if user previously marked this conversation as deleted
@@ -905,7 +904,16 @@ export const MessagesView: React.FC = () => {
                             isMe={isMe}
                             messageId={msg.id}
                             conversationId={activeConv.id}
-                            senderName={isMe ? 'You' : activeParticipant.displayName || activeParticipant.username}
+                            senderName={(() => {
+                              if (isMe) return 'You';
+                              const msgSender = users.find(u => isSameUser(u.id, msg.senderId));
+                              if (msgSender?.displayName) return msgSender.displayName;
+                              if (msgSender?.username) return `@${msgSender.username}`;
+                              if (activeParticipant && isSameUser(activeParticipant.id, msg.senderId)) {
+                                return activeParticipant.displayName || activeParticipant.username;
+                              }
+                              return 'Sender';
+                            })()}
                             onDeleteMessage={() => deleteMessage(activeConv.id, msg.id)}
                           />
                         ) : (

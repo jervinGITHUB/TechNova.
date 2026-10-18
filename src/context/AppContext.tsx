@@ -246,8 +246,7 @@ export const deduplicateConversations = (
       const isParticipant =
         (c.participantIds && c.participantIds.length > 0 && c.participantIds.some(id => isSameUser(id, currentUserId))) ||
         (c.userAId && isSameUser(c.userAId, currentUserId)) ||
-        (c.userBId && isSameUser(c.userBId, currentUserId)) ||
-        (c.messages && c.messages.some(m => isSameUser(m.senderId, currentUserId)));
+        (c.userBId && isSameUser(c.userBId, currentUserId));
 
       if (!isParticipant) {
         continue;
@@ -280,7 +279,10 @@ export const deduplicateConversations = (
       const existing = partnerMap.get(canonicalKey)!;
 
       // Merge messages from both conversations without duplicate message IDs or text/timestamp
-      const combinedMessages = deduplicateMessages([...(existing.messages || []), ...(c.messages || [])]);
+      const combinedMessages = deduplicateMessages([...(existing.messages || []), ...(c.messages || [])]).map(m => ({
+        ...m,
+        isMine: currentUserId ? isSameUser(m.senderId, currentUserId) : Boolean(m.isMine),
+      }));
 
       // Canonical conversation ID: prefer valid deterministic UUID
       const canonicalId = (currentUserId && partnerId)
@@ -288,9 +290,9 @@ export const deduplicateConversations = (
         : (isUuid(existing.id) ? existing.id : (isUuid(c.id) ? c.id : canonicalKey));
 
       const bestParticipant =
-        c.participant?.displayName && c.participant.displayName !== 'User'
+        c.participant?.displayName && c.participant.displayName !== 'User' && (!currentUserId || !isSameUser(c.participant.id, currentUserId))
           ? c.participant
-          : existing.participant;
+          : (existing.participant && (!currentUserId || !isSameUser(existing.participant.id, currentUserId)) ? existing.participant : c.participant);
 
       const latestMsg = combinedMessages[combinedMessages.length - 1];
       const lastMessage = latestMsg ? latestMsg.text : (c.lastMessage || existing.lastMessage);
@@ -336,10 +338,16 @@ export const deduplicateConversations = (
         ? getDirectConversationId(currentUserId, partnerId)
         : (isUuid(c.id) ? c.id : canonicalKey);
 
+      const fixedMessages = (c.messages || []).map(m => ({
+        ...m,
+        isMine: currentUserId ? isSameUser(m.senderId, currentUserId) : Boolean(m.isMine),
+      }));
+
       partnerMap.set(canonicalKey, {
         ...c,
         id: canonicalId,
         participantIds: [currentUserId || '', partnerId].filter(Boolean),
+        messages: fixedMessages,
       });
     }
   }
@@ -588,7 +596,8 @@ interface AppContextType {
     text: string,
     replyTo?: MessageReplyInfo,
     sharedVideo?: Video,
-    sharedLiveStream?: LiveStream
+    sharedLiveStream?: LiveStream,
+    recipientUserId?: string
   ) => void;
   deleteConversation: (convId: string) => void;
   deleteMessage: (convId: string, messageId: string) => void;
@@ -1968,8 +1977,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               const isLocalUserPart =
                 (lc.participantIds && lc.participantIds.length > 0 && lc.participantIds.some(id => isSameUser(id, activeUser.id))) ||
                 (lc.userAId && isSameUser(lc.userAId, activeUser.id)) ||
-                (lc.userBId && isSameUser(lc.userBId, activeUser.id)) ||
-                (lc.messages && lc.messages.some(m => isSameUser(m.senderId, activeUser.id)));
+                (lc.userBId && isSameUser(lc.userBId, activeUser.id));
               if (!isLocalUserPart) return false;
 
               const localPartnerId = lc.participantIds?.find(id => !isSameUser(id, activeUser.id)) || lc.participant?.id;
@@ -2651,10 +2659,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               }
             }
           } catch {}
-        } else if ((cleanKey === 'conversations' || e.key === 'conversations') && e.newValue) {
+        } else if (currentUser?.id && e.newValue && (cleanKey === `conversations_${toUuid(currentUser.id)}` || cleanKey === 'conversations' || e.key === `conversations_${toUuid(currentUser.id)}` || e.key === 'conversations')) {
           try {
             const parsedConvs = JSON.parse(e.newValue);
-            if (Array.isArray(parsedConvs)) setConversations(parsedConvs);
+            if (Array.isArray(parsedConvs)) {
+              const scoped = deduplicateConversations(parsedConvs, currentUser.id);
+              setConversations(scoped);
+            }
           } catch {}
         } else if ((cleanKey === 'follow_requests_v2' || e.key === 'follow_requests_v2') && e.newValue) {
           try {
@@ -4963,7 +4974,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const noteText = note?.trim() || '';
-    sendMessage(targetConvId, noteText, undefined, video);
+    sendMessage(targetConvId, noteText, undefined, video, undefined, targetUserId);
     return true;
   };
 
@@ -5005,7 +5016,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const noteText = note?.trim() || '';
-    sendMessage(targetConvId, noteText, undefined, undefined, stream);
+    sendMessage(targetConvId, noteText, undefined, undefined, stream, targetUserId);
     return true;
   };
 
@@ -5320,7 +5331,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     text: string,
     replyTo?: MessageReplyInfo,
     sharedVideo?: Video,
-    sharedLiveStream?: LiveStream
+    sharedLiveStream?: LiveStream,
+    recipientUserId?: string
   ) => {
     if (!currentUser && !sharedVideo && !sharedLiveStream) return;
     const cleanText = text.trim().slice(0, 200);
@@ -5328,6 +5340,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const conv = conversations.find(c => c.id === convId || toUuid(c.id) === toUuid(convId));
     const recipientId =
+      recipientUserId ||
       conv?.participantIds?.find(id => !isSameUser(id, currentUser?.id)) ||
       (conv?.participant && !isSameUser(conv.participant.id, currentUser?.id) ? conv.participant.id : '') ||
       '';
@@ -5371,7 +5384,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedConv: Conversation = {
         ...(targetConv || {
           id: canonicalConvId,
-          participantIds: [currentUser ? currentUser.id : '', recipientId],
+          participantIds: [currentUser ? currentUser.id : '', recipientId].filter(Boolean),
           participant: recipientUser || {
             id: recipientId,
             username: 'user',
@@ -5389,6 +5402,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           messages: [],
         }),
         id: canonicalConvId,
+        participantIds: [currentUser ? currentUser.id : '', recipientId].filter(Boolean),
+        participant: recipientUser || targetConv?.participant || {
+          id: recipientId,
+          username: 'user',
+          displayName: 'User',
+          email: '',
+          avatar: '',
+          bio: '',
+          followingCount: 0,
+          followersCount: 0,
+          likesCount: '0',
+          isPrivate: false,
+          role: 'creator' as const,
+        },
         lastMessage: sharedVideo ? `🎥 Shared a video: "${sharedVideo.caption.slice(0, 25)}"` : sharedLiveStream ? `🔴 Shared live stream: "${sharedLiveStream.title.slice(0, 25)}"` : cleanText,
         lastMessageTime: 'Just now',
         messages: deduplicateMessages([...(targetConv ? targetConv.messages : []), newMsg]),
@@ -5405,6 +5432,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Put the updated conversation at the top, and sort
       const combined = [updatedConv, ...others];
       const deduped = deduplicateConversations(combined, currentUser?.id);
+      if (currentUser?.id) {
+        storage.set(`conversations_${toUuid(currentUser.id)}`, deduped);
+      }
       storage.set('conversations', deduped);
       return deduped;
     });
@@ -5417,7 +5447,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ? `[VIDEO_SHARE:${sharedVideo.id}] ${cleanText}`
       : cleanText;
 
-    if (currentUser) {
+    if (currentUser && recipientId) {
       supabaseDb.insertMessage(canonicalConvId, currentUser.id, recipientId, remotePayload);
 
       // Instant WebSocket broadcast directly to other device (<50ms, 0 Disk IO)
